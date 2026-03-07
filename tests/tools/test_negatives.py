@@ -33,6 +33,7 @@ def mock_ads_client():
   with mock.patch("ads_mcp.tools.negatives.get_ads_client") as mock_get:
     client = mock.Mock()
     mock_get.return_value = client
+    client._mock_get = mock_get
     yield client
 
 
@@ -66,7 +67,7 @@ class TestListSharedSets:
     mock_ads_service.search_stream.return_value = []
 
     negatives.list_shared_sets(CUSTOMER_ID, login_customer_id="999")
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")
 
   def test_raises_tool_error_on_api_error(self, mock_ads_client):
     mock_ads_service = mock_ads_client.get_service.return_value

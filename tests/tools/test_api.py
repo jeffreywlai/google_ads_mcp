@@ -43,7 +43,7 @@ def reset_ads_client():
             "SELECT campaign.id FROM campaign PARAMETERS include_drafts=true",
             (
                 "SELECT campaign.id FROM campaign PARAMETERS"
-                " include_drafts=true omit_unselected_resource_names=true"
+                " include_drafts=true, omit_unselected_resource_names=true"
             ),
         ),
         (

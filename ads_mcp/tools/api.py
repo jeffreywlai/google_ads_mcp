@@ -34,13 +34,21 @@ from ads_mcp.utils import ROOT_DIR
 
 
 _ADS_CLIENT: GoogleAdsClient | None = None
+_DEFAULT_LOGIN_CUSTOMER_ID: str | None = None
 
 
-def get_ads_client() -> GoogleAdsClient:
+def get_ads_client(
+    login_customer_id: str | None = None,
+) -> GoogleAdsClient:
   """Gets a GoogleAdsClient instance.
 
   Looks for an access token from the environment or loads credentials from
-  a YAML file.
+  a YAML file. Resets login_customer_id to the YAML-configured default
+  before each call to prevent state pollution between tool invocations.
+
+  Args:
+      login_customer_id: Optional manager account ID to use for this
+          request. Resets to the YAML default when not provided.
 
   Returns:
       A GoogleAdsClient instance.
@@ -48,7 +56,7 @@ def get_ads_client() -> GoogleAdsClient:
   Raises:
       FileNotFoundError: If the credentials YAML file is not found.
   """
-  global _ADS_CLIENT
+  global _ADS_CLIENT, _DEFAULT_LOGIN_CUSTOMER_ID
 
   access_token = get_access_token()
   if access_token:
@@ -66,12 +74,23 @@ def get_ads_client() -> GoogleAdsClient:
     credentials = Credentials(access_token)
     with open(credentials_path, "r", encoding="utf-8") as f:
       ads_config = yaml.safe_load(f.read())
-    return GoogleAdsClient(
+    client = GoogleAdsClient(
         credentials, developer_token=ads_config.get("developer_token")
     )
+    if login_customer_id:
+      client.login_customer_id = login_customer_id
+    return client
 
   if not _ADS_CLIENT:
     _ADS_CLIENT = GoogleAdsClient.load_from_storage(credentials_path)
+    _DEFAULT_LOGIN_CUSTOMER_ID = getattr(
+        _ADS_CLIENT, "login_customer_id", None
+    )
+
+  # Always reset to prevent state pollution from previous calls.
+  _ADS_CLIENT.login_customer_id = (
+      login_customer_id or _DEFAULT_LOGIN_CUSTOMER_ID
+  )
 
   return _ADS_CLIENT
 
@@ -94,7 +113,7 @@ def preprocess_gaql(query: str) -> str:
   """Preprocesses a GAQL query to add omit_unselected_resource_names=true."""
   if "omit_unselected_resource_names" not in query:
     if "PARAMETERS" in query and "include_drafts" in query:
-      return query + " omit_unselected_resource_names=true"
+      return query + ", omit_unselected_resource_names=true"
     return query + " PARAMETERS omit_unselected_resource_names=true"
   return query
 
@@ -132,23 +151,12 @@ def execute_gaql(
     customer_id: str,
     login_customer_id: str | None = None,
 ) -> list[dict[str, Any]]:
-  """Executes a Google Ads Query Language (GAQL) query to get reporting data.
+  """Executes a GAQL query to get reporting data.
 
-  Args:
-      query: The GAQL query to execute.
-      customer_id: The ID of the customer being queried. It is only digits.
-      login_customer_id: (Optional) The ID of the customer being logged in.
-          Usually, it is the MCC on top of the target customer account.
-          It is only digits.
-          In most cases, a default account is set, it could be optional.
-
-  Returns:
-      An array of object, each object representing a row of the query results.
+  Use get_gaql_doc and get_reporting_view_doc to build queries.
   """
   query = preprocess_gaql(query)
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  ads_client = get_ads_client(login_customer_id)
   ads_service: GoogleAdsServiceClient = ads_client.get_service(
       "GoogleAdsService"
   )

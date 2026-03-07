@@ -34,6 +34,7 @@ def mock_ads_client():
   with mock.patch("ads_mcp.tools.labels.get_ads_client") as mock_get:
     client = mock.Mock()
     mock_get.return_value = client
+    client._mock_get = mock_get
     yield client
 
 
@@ -68,7 +69,7 @@ class TestCreateLabel:
     mock_response.results = [mock.Mock(resource_name="x")]
 
     labels.create_label(CUSTOMER_ID, "Test", login_customer_id="999")
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")
 
   def test_raises_tool_error_on_api_error(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -100,7 +101,7 @@ class TestDeleteLabel:
     assert result == {"resource_name": "customers/123/labels/111"}
 
 
-class TestApplyLabelToCampaigns:
+class TestManageCampaignLabels:
 
   def test_applies_to_campaigns(self, mock_ads_client):
     mock_campaign_label_service = mock.Mock()
@@ -126,15 +127,12 @@ class TestApplyLabelToCampaigns:
         mock.Mock(resource_name="customers/123/campaignLabels/222~111")
     ]
 
-    result = labels.apply_label_to_campaigns(
-        CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID]
+    result = labels.manage_campaign_labels(
+        CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID], "APPLY"
     )
     assert result == {
         "resource_names": ["customers/123/campaignLabels/222~111"]
     }
-
-
-class TestRemoveLabelFromCampaigns:
 
   def test_removes_from_campaigns(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -146,15 +144,21 @@ class TestRemoveLabelFromCampaigns:
         mock.Mock(resource_name="customers/123/campaignLabels/222~111")
     ]
 
-    result = labels.remove_label_from_campaigns(
-        CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID]
+    result = labels.manage_campaign_labels(
+        CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID], "REMOVE"
     )
     assert result == {
         "resource_names": ["customers/123/campaignLabels/222~111"]
     }
 
+  def test_invalid_action_raises_error(self, mock_ads_client):
+    with pytest.raises(ToolError, match="Invalid action"):
+      labels.manage_campaign_labels(
+          CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID], "INVALID"
+      )
 
-class TestApplyLabelToAdGroups:
+
+class TestManageAdGroupLabels:
 
   def test_applies_to_ad_groups(self, mock_ads_client):
     mock_ad_group_label_service = mock.Mock()
@@ -180,15 +184,12 @@ class TestApplyLabelToAdGroups:
         mock.Mock(resource_name="customers/123/adGroupLabels/333~111")
     ]
 
-    result = labels.apply_label_to_ad_groups(
-        CUSTOMER_ID, LABEL_ID, [AD_GROUP_ID]
+    result = labels.manage_ad_group_labels(
+        CUSTOMER_ID, LABEL_ID, [AD_GROUP_ID], "APPLY"
     )
     assert result == {
         "resource_names": ["customers/123/adGroupLabels/333~111"]
     }
-
-
-class TestRemoveLabelFromAdGroups:
 
   def test_removes_from_ad_groups(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -200,8 +201,8 @@ class TestRemoveLabelFromAdGroups:
         mock.Mock(resource_name="customers/123/adGroupLabels/333~111")
     ]
 
-    result = labels.remove_label_from_ad_groups(
-        CUSTOMER_ID, LABEL_ID, [AD_GROUP_ID]
+    result = labels.manage_ad_group_labels(
+        CUSTOMER_ID, LABEL_ID, [AD_GROUP_ID], "REMOVE"
     )
     assert result == {
         "resource_names": ["customers/123/adGroupLabels/333~111"]

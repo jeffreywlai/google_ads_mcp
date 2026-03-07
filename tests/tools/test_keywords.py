@@ -31,10 +31,11 @@ def mock_ads_client():
   with mock.patch("ads_mcp.tools.keywords.get_ads_client") as mock_get:
     client = mock.Mock()
     mock_get.return_value = client
+    client._mock_get = mock_get
     yield client
 
 
-class TestPauseKeyword:
+class TestSetKeywordStatus:
 
   def test_pauses_keyword(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -46,11 +47,10 @@ class TestPauseKeyword:
         mock.Mock(resource_name="customers/123/adGroupCriteria/111~222")
     ]
 
-    result = keywords.pause_keyword(CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID)
+    result = keywords.set_keyword_status(
+        CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID, "PAUSED"
+    )
     assert result == {"resource_name": "customers/123/adGroupCriteria/111~222"}
-
-
-class TestEnableKeyword:
 
   def test_enables_keyword(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -62,7 +62,9 @@ class TestEnableKeyword:
         mock.Mock(resource_name="customers/123/adGroupCriteria/111~222")
     ]
 
-    result = keywords.enable_keyword(CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID)
+    result = keywords.set_keyword_status(
+        CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID, "ENABLED"
+    )
     assert result == {"resource_name": "customers/123/adGroupCriteria/111~222"}
 
 
@@ -97,4 +99,4 @@ class TestUpdateKeywordBid:
         1_000_000,
         login_customer_id="999",
     )
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")

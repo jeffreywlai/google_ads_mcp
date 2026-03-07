@@ -24,8 +24,19 @@ from ads_mcp.utils import MODULE_DIR
 from fastmcp.exceptions import ToolError
 
 
+def _get_gaql_compact_content() -> str:
+  """Reads the compact GAQL documentation."""
+  with open(
+      os.path.join(MODULE_DIR, "context/GAQL_compact.md"),
+      "r",
+      encoding="utf-8",
+  ) as f:
+    data = f.read()
+  return data
+
+
 def _get_gaql_doc_content() -> str:
-  """Reads the GAQL documentation."""
+  """Reads the full GAQL documentation."""
   with open(
       os.path.join(MODULE_DIR, "context/GAQL.md"), "r", encoding="utf-8"
   ) as f:
@@ -39,6 +50,15 @@ def _get_reporting_doc_content() -> str:
       os.path.join(MODULE_DIR, "context/Google_Ads_API_Reporting_Views.md"),
       "r",
       encoding="utf-8",
+  ) as f:
+    data = f.read()
+  return data
+
+
+def _get_views_list() -> str:
+  """Reads the list of available view names."""
+  with open(
+      os.path.join(MODULE_DIR, "context/views.yaml"), "r", encoding="utf-8"
   ) as f:
     data = f.read()
   return data
@@ -68,8 +88,8 @@ def _get_view_doc_content(view: str) -> str:
 
 @mcp.tool()
 def get_gaql_doc() -> str:
-  """Get Google Ads Query Language (GAQL) guide docs in Markdown format."""
-  return _get_gaql_doc_content()
+  """Get compact GAQL syntax reference with grammar, rules, and examples."""
+  return _get_gaql_compact_content()
 
 
 @mcp.resource("resource://Google_Ads_Query_Language")
@@ -82,18 +102,12 @@ def get_gaql_doc_resource() -> str:
 def get_reporting_view_doc(view: str | None = None) -> str:
   """Get Google Ads API reporting view docs.
 
-  If a Google Ads API view resource is specific, the doc will include
-  metadata and related fields for the view.
-  If a view is not specified, a doc briefs all views will be returned.
-  All docs are in YAML format.
-
-  Args:
-      view: (Optional) The name of the view resource. If not set, a doc briefs
-      all views will be returned.
+  Without a view, returns the list of available view names.
+  With a view, returns detailed field metadata in YAML format.
   """
   if view:
     return _get_view_doc_content(view)
-  return _get_reporting_doc_content()
+  return _get_views_list()
 
 
 @mcp.resource("resource://Google_Ads_API_Reporting_Views")
@@ -104,13 +118,7 @@ def get_reporting_doc() -> str:
 
 @mcp.resource("resource://views/{view}")
 def get_view_doc(view: str) -> str:
-  """Get resource view docs for a given Google Ads API view resource.
-
-  Include fields metadata for each the view.
-
-  Args:
-      view: The name of the view resource.
-  """
+  """Get resource view docs for a given Google Ads API view resource."""
   return _get_view_doc_content(view)
 
 
@@ -119,15 +127,7 @@ _CACHED_FIELDS: dict[str, Any] = {}
 
 @mcp.tool()
 def get_reporting_fields_doc(fields: list[str]) -> str:
-  """Get Google Ads API reporting query fields detailed docs.
-
-  For each a Google Ads API view fields is specific, the detailed
-  docs of the fields metadata will be return. Includes
-  All docs are in YAML format.
-
-  Args:
-      fields: A list of field names.
-  """
+  """Get detailed docs for specific Google Ads API reporting query fields."""
   global _CACHED_FIELDS
   if not _CACHED_FIELDS:
     with open(

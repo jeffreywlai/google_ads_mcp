@@ -31,10 +31,11 @@ def mock_ads_client():
   with mock.patch("ads_mcp.tools.ads.get_ads_client") as mock_get:
     client = mock.Mock()
     mock_get.return_value = client
+    client._mock_get = mock_get
     yield client
 
 
-class TestPauseAd:
+class TestSetAdStatus:
 
   def test_pauses_ad(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -46,19 +47,8 @@ class TestPauseAd:
         mock.Mock(resource_name="customers/123/adGroupAds/111~222")
     ]
 
-    result = ads.pause_ad(CUSTOMER_ID, AD_GROUP_ID, AD_ID)
+    result = ads.set_ad_status(CUSTOMER_ID, AD_GROUP_ID, AD_ID, "PAUSED")
     assert result == {"resource_name": "customers/123/adGroupAds/111~222"}
-
-  def test_sets_login_customer_id(self, mock_ads_client):
-    mock_service = mock_ads_client.get_service.return_value
-    mock_response = mock_service.mutate_ad_group_ads.return_value
-    mock_response.results = [mock.Mock(resource_name="x")]
-
-    ads.pause_ad(CUSTOMER_ID, AD_GROUP_ID, AD_ID, login_customer_id="999")
-    assert mock_ads_client.login_customer_id == "999"
-
-
-class TestEnableAd:
 
   def test_enables_ad(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -70,5 +60,19 @@ class TestEnableAd:
         mock.Mock(resource_name="customers/123/adGroupAds/111~222")
     ]
 
-    result = ads.enable_ad(CUSTOMER_ID, AD_GROUP_ID, AD_ID)
+    result = ads.set_ad_status(CUSTOMER_ID, AD_GROUP_ID, AD_ID, "ENABLED")
     assert result == {"resource_name": "customers/123/adGroupAds/111~222"}
+
+  def test_sets_login_customer_id(self, mock_ads_client):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_response = mock_service.mutate_ad_group_ads.return_value
+    mock_response.results = [mock.Mock(resource_name="x")]
+
+    ads.set_ad_status(
+        CUSTOMER_ID,
+        AD_GROUP_ID,
+        AD_ID,
+        "PAUSED",
+        login_customer_id="999",
+    )
+    mock_ads_client._mock_get.assert_any_call("999")

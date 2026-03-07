@@ -29,7 +29,9 @@ def test_get_gaql_doc(mock_file):
   """Tests get_gaql_doc function."""
   assert docs.get_gaql_doc() == "doc content"
   mock_file.assert_called_with(
-      os.path.join(docs.MODULE_DIR, "context/GAQL.md"), "r", encoding="utf-8"
+      os.path.join(docs.MODULE_DIR, "context/GAQL_compact.md"),
+      "r",
+      encoding="utf-8",
   )
 
 
@@ -37,12 +39,10 @@ def test_get_gaql_doc(mock_file):
     "builtins.open", new_callable=mock.mock_open, read_data="doc content"
 )
 def test_get_reporting_doc(mock_file):
-  """Tests get_reporting_doc resource."""
+  """Tests get_reporting_view_doc without a view returns views list."""
   assert docs.get_reporting_view_doc(None) == "doc content"
   mock_file.assert_called_with(
-      os.path.join(
-          docs.MODULE_DIR, "context/Google_Ads_API_Reporting_Views.md"
-      ),
+      os.path.join(docs.MODULE_DIR, "context/views.yaml"),
       "r",
       encoding="utf-8",
   )

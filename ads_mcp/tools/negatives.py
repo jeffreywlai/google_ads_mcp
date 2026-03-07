@@ -33,20 +33,8 @@ def list_shared_sets(
     customer_id: str,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists all shared negative keyword lists for a customer.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'shared_sets' key containing a list of shared sets,
-      each with id, name, and member_count.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Lists all shared negative keyword lists for a customer."""
+  ads_client = get_ads_client(login_customer_id)
   ads_service = ads_client.get_service("GoogleAdsService")
 
   query = """
@@ -83,20 +71,8 @@ def create_shared_set(
     name: str,
     login_customer_id: str | None = None,
 ) -> dict[str, str]:
-  """Creates a new shared negative keyword list.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      name: The name for the new shared negative keyword list.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with the resource_name of the created shared set.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Creates a new shared negative keyword list."""
+  ads_client = get_ads_client(login_customer_id)
   shared_set_service = ads_client.get_service("SharedSetService")
 
   operation = ads_client.get_type("SharedSetOperation")
@@ -120,20 +96,8 @@ def delete_shared_set(
     shared_set_id: str,
     login_customer_id: str | None = None,
 ) -> dict[str, str]:
-  """Deletes a shared negative keyword list.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      shared_set_id: The ID of the shared set to delete.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with the resource_name of the removed shared set.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Deletes a shared negative keyword list."""
+  ads_client = get_ads_client(login_customer_id)
   shared_set_service = ads_client.get_service("SharedSetService")
 
   resource_name = shared_set_service.shared_set_path(
@@ -163,21 +127,8 @@ def list_shared_set_keywords(
     shared_set_id: str,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists all keywords in a shared negative keyword list.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      shared_set_id: The ID of the shared set to list keywords from.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'keywords' key containing a list of keywords, each
-      with criterion_id, text, and match_type.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Lists all keywords in a shared negative keyword list."""
+  ads_client = get_ads_client(login_customer_id)
   ads_service = ads_client.get_service("GoogleAdsService")
 
   query = f"""
@@ -216,21 +167,9 @@ def add_shared_set_keywords(
 ) -> dict[str, Any]:
   """Adds negative keywords to a shared negative keyword list.
 
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      shared_set_id: The ID of the shared set to add keywords to.
-      keywords: A list of keyword dicts, each with 'text' (the keyword
-          string) and 'match_type' ('BROAD', 'PHRASE', or 'EXACT').
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'resource_names' key containing a list of created
-      shared criterion resource names.
+  keywords: list of dicts with 'text' and 'match_type' (BROAD/PHRASE/EXACT).
   """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  ads_client = get_ads_client(login_customer_id)
   shared_criterion_service = ads_client.get_service("SharedCriterionService")
   shared_set_service = ads_client.get_service("SharedSetService")
 
@@ -269,22 +208,8 @@ def remove_shared_set_keywords(
     criterion_ids: list[str],
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Removes keywords from a shared negative keyword list by criterion ID.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      shared_set_id: The ID of the shared set containing the keywords.
-      criterion_ids: A list of criterion IDs to remove.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'resource_names' key containing a list of removed
-      shared criterion resource names.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Removes keywords from a shared negative keyword list by criterion ID."""
+  ads_client = get_ads_client(login_customer_id)
   shared_criterion_service = ads_client.get_service("SharedCriterionService")
 
   operations = []
@@ -321,23 +246,8 @@ def list_campaign_shared_sets(
     shared_set_id: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists campaign-to-shared-set links for negative keyword lists.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      campaign_id: Optional campaign ID to filter by.
-      shared_set_id: Optional shared set ID to filter by.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'campaign_shared_sets' key containing a list of links,
-      each with campaign_id, campaign_name, shared_set_id, and
-      shared_set_name.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Lists campaign-to-shared-set links for negative keyword lists."""
+  ads_client = get_ads_client(login_customer_id)
   ads_service = ads_client.get_service("GoogleAdsService")
 
   query = """
@@ -381,21 +291,8 @@ def attach_shared_set_to_campaign(
     shared_set_id: str,
     login_customer_id: str | None = None,
 ) -> dict[str, str]:
-  """Attaches a shared negative keyword list to a campaign.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      campaign_id: The campaign ID to attach the shared set to.
-      shared_set_id: The shared set ID to attach.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with the resource_name of the created campaign shared set.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Attaches a shared negative keyword list to a campaign."""
+  ads_client = get_ads_client(login_customer_id)
   campaign_shared_set_service = ads_client.get_service(
       "CampaignSharedSetService"
   )
@@ -426,21 +323,8 @@ def detach_shared_set_from_campaign(
     shared_set_id: str,
     login_customer_id: str | None = None,
 ) -> dict[str, str]:
-  """Detaches a shared negative keyword list from a campaign.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      campaign_id: The campaign ID to detach the shared set from.
-      shared_set_id: The shared set ID to detach.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with the resource_name of the removed campaign shared set.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Detaches a shared negative keyword list from a campaign."""
+  ads_client = get_ads_client(login_customer_id)
   campaign_shared_set_service = ads_client.get_service(
       "CampaignSharedSetService"
   )
@@ -475,22 +359,9 @@ def list_campaign_negative_keywords(
 ) -> dict[str, Any]:
   """Lists negative keywords applied directly to a campaign.
 
-  This does not include negatives inherited from shared negative keyword
-  lists.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      campaign_id: The campaign ID to list negative keywords for.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'keywords' key containing a list of negative keywords,
-      each with criterion_id, text, and match_type.
+  Does not include negatives inherited from shared keyword lists.
   """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  ads_client = get_ads_client(login_customer_id)
   ads_service = ads_client.get_service("GoogleAdsService")
 
   query = f"""
@@ -531,21 +402,9 @@ def add_campaign_negative_keywords(
 ) -> dict[str, Any]:
   """Adds negative keywords directly to a campaign.
 
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      campaign_id: The campaign ID to add negative keywords to.
-      keywords: A list of keyword dicts, each with 'text' (the keyword
-          string) and 'match_type' ('BROAD', 'PHRASE', or 'EXACT').
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'resource_names' key containing a list of created
-      campaign criterion resource names.
+  keywords: list of dicts with 'text' and 'match_type' (BROAD/PHRASE/EXACT).
   """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  ads_client = get_ads_client(login_customer_id)
   campaign_criterion_service = ads_client.get_service(
       "CampaignCriterionService"
   )
@@ -585,22 +444,8 @@ def remove_campaign_negative_keywords(
     criterion_ids: list[str],
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Removes negative keywords from a campaign by criterion ID.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      campaign_id: The campaign ID to remove negative keywords from.
-      criterion_ids: A list of criterion IDs to remove.
-      login_customer_id: Optional manager account ID used to access the
-          customer account.
-
-  Returns:
-      A dict with a 'resource_names' key containing a list of removed
-      campaign criterion resource names.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Removes negative keywords from a campaign by criterion ID."""
+  ads_client = get_ads_client(login_customer_id)
   campaign_criterion_service = ads_client.get_service(
       "CampaignCriterionService"
   )

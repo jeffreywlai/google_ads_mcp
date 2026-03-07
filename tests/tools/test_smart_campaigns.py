@@ -32,6 +32,7 @@ def mock_ads_client():
   with mock.patch("ads_mcp.tools.smart_campaigns.get_ads_client") as mock_get:
     client = mock.Mock()
     mock_get.return_value = client
+    client._mock_get = mock_get
     yield client
 
 
@@ -72,7 +73,7 @@ class TestSuggestKeywordThemes:
         "https://example.com",
         login_customer_id="999",
     )
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")
 
   def test_raises_tool_error_on_api_error(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -145,7 +146,7 @@ class TestSuggestSmartCampaignAd:
         "https://example.com",
         login_customer_id="999",
     )
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")
 
 
 class TestSuggestSmartCampaignBudget:
@@ -187,4 +188,4 @@ class TestSuggestSmartCampaignBudget:
         "https://example.com",
         login_customer_id="999",
     )
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")

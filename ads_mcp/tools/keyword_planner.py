@@ -37,41 +37,16 @@ def generate_keyword_ideas(
 ) -> dict[str, Any]:
   """Generates keyword ideas using the Google Ads Keyword Planner.
 
-  Provide seed keywords and/or a page URL to discover new keyword
-  opportunities with search volume, competition, and bid estimates.
-
-  At least one of ``keywords`` or ``page_url`` must be provided.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      keywords: Seed keywords to generate ideas from.
-      page_url: A page URL related to your business to generate ideas
-          from.
-      language_id: Language constant ID (default "1000" for English).
-          Common values: 1000=English, 1001=French, 1003=Spanish,
-          1004=Italian, 1005=German, 1009=Portuguese, 1010=Korean,
-          1011=Japanese, 1017=Chinese (Simplified).
-      geo_target_ids: Geo target constant IDs for location targeting.
-          Defaults to ["2840"] (United States). Examples: 2840=US,
-          2826=UK, 2124=Canada, 2036=Australia.
-      include_adult_keywords: Whether to include adult keywords.
-      page_size: Maximum number of keyword ideas to return (default 25).
-      login_customer_id: Optional manager account ID used to access
-          the customer account.
-
-  Returns:
-      A dict with keyword_ideas (list of keyword idea dicts with
-      keyword text, avg_monthly_searches, competition, and bid
-      estimates) and total_ideas count.
+  At least one of keywords or page_url must be provided.
+  language_id: default '1000' (English). Common: 1003=ES, 1005=DE.
+  geo_target_ids: default ['2840'] (US). Common: 2826=UK, 2124=CA.
   """
   if not keywords and not page_url:
     raise ToolError(
         "At least one of 'keywords' or 'page_url' must be provided."
     )
 
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  ads_client = get_ads_client(login_customer_id)
 
   keyword_plan_idea_service = ads_client.get_service("KeywordPlanIdeaService")
 

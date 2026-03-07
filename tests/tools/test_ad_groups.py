@@ -30,10 +30,11 @@ def mock_ads_client():
   with mock.patch("ads_mcp.tools.ad_groups.get_ads_client") as mock_get:
     client = mock.Mock()
     mock_get.return_value = client
+    client._mock_get = mock_get
     yield client
 
 
-class TestPauseAdGroup:
+class TestSetAdGroupStatus:
 
   def test_pauses_ad_group(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -43,19 +44,8 @@ class TestPauseAdGroup:
         mock.Mock(resource_name="customers/123/adGroups/111")
     ]
 
-    result = ad_groups.pause_ad_group(CUSTOMER_ID, AD_GROUP_ID)
+    result = ad_groups.set_ad_group_status(CUSTOMER_ID, AD_GROUP_ID, "PAUSED")
     assert result == {"resource_name": "customers/123/adGroups/111"}
-
-  def test_sets_login_customer_id(self, mock_ads_client):
-    mock_service = mock_ads_client.get_service.return_value
-    mock_response = mock_service.mutate_ad_groups.return_value
-    mock_response.results = [mock.Mock(resource_name="x")]
-
-    ad_groups.pause_ad_group(CUSTOMER_ID, AD_GROUP_ID, login_customer_id="999")
-    assert mock_ads_client.login_customer_id == "999"
-
-
-class TestEnableAdGroup:
 
   def test_enables_ad_group(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -65,8 +55,18 @@ class TestEnableAdGroup:
         mock.Mock(resource_name="customers/123/adGroups/111")
     ]
 
-    result = ad_groups.enable_ad_group(CUSTOMER_ID, AD_GROUP_ID)
+    result = ad_groups.set_ad_group_status(CUSTOMER_ID, AD_GROUP_ID, "ENABLED")
     assert result == {"resource_name": "customers/123/adGroups/111"}
+
+  def test_sets_login_customer_id(self, mock_ads_client):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_response = mock_service.mutate_ad_groups.return_value
+    mock_response.results = [mock.Mock(resource_name="x")]
+
+    ad_groups.set_ad_group_status(
+        CUSTOMER_ID, AD_GROUP_ID, "PAUSED", login_customer_id="999"
+    )
+    mock_ads_client._mock_get.assert_any_call("999")
 
 
 class TestUpdateAdGroupBid:
@@ -95,4 +95,4 @@ class TestUpdateAdGroupBid:
         1_000_000,
         login_customer_id="999",
     )
-    assert mock_ads_client.login_customer_id == "999"
+    mock_ads_client._mock_get.assert_any_call("999")

@@ -62,27 +62,8 @@ def suggest_keyword_themes(
     language_code: str = "en",
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Suggests keyword themes for a Smart Campaign.
-
-  Given a business name and optional landing page, returns keyword
-  theme suggestions that can be used for campaign targeting.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      business_name: The name of the business.
-      final_url: The landing page URL for the business.
-      geo_target_id: Geo target constant ID (default "2840" for US).
-      language_code: Language code (default "en" for English).
-      login_customer_id: Optional manager account ID used to access
-          the customer account.
-
-  Returns:
-      A dict with keyword_themes (list of theme dicts with
-      display_name and sample_keywords).
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Suggests keyword themes for a Smart Campaign."""
+  ads_client = get_ads_client(login_customer_id)
 
   suggest_service = ads_client.get_service("SmartCampaignSuggestService")
 
@@ -127,25 +108,8 @@ def suggest_smart_campaign_ad(
     language_code: str = "en",
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Suggests ad creative (headlines and descriptions) for a Smart Campaign.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      business_name: The name of the business.
-      final_url: The landing page URL for the ad.
-      keyword_themes: Optional list of keyword theme strings for
-          context (e.g. ["plumbing", "emergency plumber"]).
-      geo_target_id: Geo target constant ID (default "2840" for US).
-      language_code: Language code (default "en" for English).
-      login_customer_id: Optional manager account ID used to access
-          the customer account.
-
-  Returns:
-      A dict with suggested headlines and descriptions lists.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Suggests ad creative (headlines and descriptions) for a Smart Campaign."""
+  ads_client = get_ads_client(login_customer_id)
 
   suggest_service = ads_client.get_service("SmartCampaignSuggestService")
 
@@ -185,26 +149,8 @@ def suggest_smart_campaign_budget(
     language_code: str = "en",
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Suggests budget options (low, recommended, high) for a Smart Campaign.
-
-  Args:
-      customer_id: The Google Ads customer ID (digits only).
-      business_name: The name of the business.
-      final_url: The landing page URL for the campaign.
-      keyword_themes: Optional list of keyword theme strings for
-          context (e.g. ["plumbing", "emergency plumber"]).
-      geo_target_id: Geo target constant ID (default "2840" for US).
-      language_code: Language code (default "en" for English).
-      login_customer_id: Optional manager account ID used to access
-          the customer account.
-
-  Returns:
-      A dict with low, recommended, and high budget options, each
-      containing daily_amount_micros.
-  """
-  ads_client = get_ads_client()
-  if login_customer_id:
-    ads_client.login_customer_id = login_customer_id
+  """Suggests budget options (low, recommended, high) for a Smart Campaign."""
+  ads_client = get_ads_client(login_customer_id)
 
   suggest_service = ads_client.get_service("SmartCampaignSuggestService")
 

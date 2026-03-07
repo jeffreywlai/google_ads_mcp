@@ -5,7 +5,7 @@
 [![FastMCP 3.0+](https://img.shields.io/badge/FastMCP-3.0+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 38 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 32 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **38 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 🔧 **32 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
 - 📖 **Built-in Docs** — GAQL syntax reference and reporting field docs available as tools (the LLM teaches itself)
 - 🔑 **Keyword Research** — Generate keyword ideas with search volume and competition data
 - 🏷️ **Label Management** — Create, apply, and remove labels across campaigns and ad groups
@@ -22,7 +22,7 @@
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (38)
+## 📋 Available Tools (32)
 
 ### 🔍 Query & Discovery
 
@@ -30,7 +30,7 @@
 |------|-------------|
 | `execute_gaql` | Run any GAQL query with formatted results |
 | `list_accessible_accounts` | List all Google Ads accounts you can access |
-| `get_gaql_doc` | Get GAQL syntax reference |
+| `get_gaql_doc` | Get compact GAQL syntax reference |
 | `get_reporting_view_doc` | Get available reporting views and their fields |
 | `get_reporting_fields_doc` | Get detailed field documentation |
 
@@ -38,31 +38,27 @@
 
 | Tool | Description |
 |------|-------------|
-| `pause_campaign` | Pause a campaign |
-| `resume_campaign` | Resume a paused campaign |
+| `set_campaign_status` | Set a campaign to PAUSED or ENABLED |
 | `update_campaign_budget` | Change a campaign's daily budget |
 
 ### 👥 Ad Group Management
 
 | Tool | Description |
 |------|-------------|
-| `pause_ad_group` | Pause an ad group |
-| `enable_ad_group` | Enable a paused ad group |
+| `set_ad_group_status` | Set an ad group to PAUSED or ENABLED |
 | `update_ad_group_bid` | Update an ad group's CPC bid |
 
 ### 📝 Ad Management
 
 | Tool | Description |
 |------|-------------|
-| `pause_ad` | Pause an ad |
-| `enable_ad` | Enable a paused ad |
+| `set_ad_status` | Set an ad to PAUSED or ENABLED |
 
 ### 🔑 Keyword Management
 
 | Tool | Description |
 |------|-------------|
-| `pause_keyword` | Pause a keyword |
-| `enable_keyword` | Enable a paused keyword |
+| `set_keyword_status` | Set a keyword to PAUSED or ENABLED |
 | `update_keyword_bid` | Update a keyword's CPC bid |
 | `generate_keyword_ideas` | Research new keywords with volume & competition data |
 
@@ -89,10 +85,8 @@
 |------|-------------|
 | `create_label` | Create a new label |
 | `delete_label` | Delete a label |
-| `apply_label_to_campaigns` | Apply a label to one or more campaigns |
-| `remove_label_from_campaigns` | Remove a label from campaigns |
-| `apply_label_to_ad_groups` | Apply a label to one or more ad groups |
-| `remove_label_from_ad_groups` | Remove a label from ad groups |
+| `manage_campaign_labels` | Apply or remove a label to/from campaigns |
+| `manage_ad_group_labels` | Apply or remove a label to/from ad groups |
 
 ### 💡 Smart Campaign Suggestions
 
