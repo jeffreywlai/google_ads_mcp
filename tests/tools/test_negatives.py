@@ -159,8 +159,8 @@ class TestAddSharedSetKeywords:
 
     mock_ads_client.get_service.side_effect = get_service
     mock_enum_value = mock.Mock(value=1)
-    mock_ads_client.enums.KeywordMatchTypeEnum.__getitem__ = (
-        mock.Mock(return_value=mock_enum_value)
+    mock_ads_client.enums.KeywordMatchTypeEnum.__getitem__ = mock.Mock(
+        return_value=mock_enum_value
     )
     mock_response = mock_service.mutate_shared_criteria.return_value
     mock_response.results = [
@@ -330,8 +330,8 @@ class TestAddCampaignNegativeKeywords:
 
     mock_ads_client.get_service.side_effect = get_service
     mock_enum_value = mock.Mock(value=1)
-    mock_ads_client.enums.KeywordMatchTypeEnum.__getitem__ = (
-        mock.Mock(return_value=mock_enum_value)
+    mock_ads_client.enums.KeywordMatchTypeEnum.__getitem__ = mock.Mock(
+        return_value=mock_enum_value
     )
     mock_response = mock_service.mutate_campaign_criteria.return_value
     mock_response.results = [
