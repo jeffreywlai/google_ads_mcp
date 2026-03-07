@@ -24,17 +24,16 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tools.api import get_ads_client
 
 
-def _build_suggestion_info(
+def _populate_suggestion_info(
     ads_client,
+    suggestion_info,
     business_name: str,
     final_url: str | None = None,
     keyword_themes: list[str] | None = None,
     geo_target_id: str = "2840",
     language_code: str = "en",
 ):
-  """Builds a SmartCampaignSuggestionInfo message."""
-  suggestion_info = ads_client.get_type("SmartCampaignSuggestionInfo")
-  suggestion_info.business_profile_location = ""
+  """Populates a suggestion_info field on a request message."""
   suggestion_info.language_code = language_code
 
   if final_url:
@@ -53,14 +52,12 @@ def _build_suggestion_info(
       theme.free_form_keyword_theme = theme_text
       suggestion_info.keyword_themes.append(theme)
 
-  return suggestion_info
-
 
 @mcp.tool()
 def suggest_keyword_themes(
     customer_id: str,
     business_name: str,
-    final_url: str | None = None,
+    final_url: str,
     geo_target_id: str = "2840",
     language_code: str = "en",
     login_customer_id: str | None = None,
@@ -73,7 +70,7 @@ def suggest_keyword_themes(
   Args:
       customer_id: The Google Ads customer ID (digits only).
       business_name: The name of the business.
-      final_url: Optional landing page URL for the business.
+      final_url: The landing page URL for the business.
       geo_target_id: Geo target constant ID (default "2840" for US).
       language_code: Language code (default "en" for English).
       login_customer_id: Optional manager account ID used to access
@@ -91,14 +88,13 @@ def suggest_keyword_themes(
 
   request = ads_client.get_type("SuggestKeywordThemesRequest")
   request.customer_id = customer_id
-  request.suggestion_info.CopyFrom(
-      _build_suggestion_info(
-          ads_client,
-          business_name,
-          final_url,
-          geo_target_id=geo_target_id,
-          language_code=language_code,
-      )
+  _populate_suggestion_info(
+      ads_client,
+      request.suggestion_info,
+      business_name,
+      final_url,
+      geo_target_id=geo_target_id,
+      language_code=language_code,
   )
 
   try:
@@ -109,20 +105,14 @@ def suggest_keyword_themes(
     raise ToolError(str(e)) from e
 
   themes = []
-  for result in response.keyword_themes:
-    theme_info = result.keyword_theme_info
-    display_name = ""
-    if theme_info.free_form_keyword_theme:
-      display_name = theme_info.free_form_keyword_theme
-    elif theme_info.keyword_theme_constant:
-      display_name = theme_info.keyword_theme_constant
-
-    themes.append(
-        {
-            "display_name": display_name,
-            "sample_keywords": list(result.sample_keywords),
-        }
-    )
+  for theme in response.keyword_themes:
+    if theme.free_form_keyword_theme:
+      display_name = theme.free_form_keyword_theme
+    elif theme.keyword_theme_constant:
+      display_name = theme.keyword_theme_constant.display_name
+    else:
+      display_name = ""
+    themes.append({"display_name": display_name})
 
   return {"keyword_themes": themes}
 
@@ -161,15 +151,14 @@ def suggest_smart_campaign_ad(
 
   request = ads_client.get_type("SuggestSmartCampaignAdRequest")
   request.customer_id = customer_id
-  request.suggestion_info.CopyFrom(
-      _build_suggestion_info(
-          ads_client,
-          business_name,
-          final_url,
-          keyword_themes,
-          geo_target_id,
-          language_code,
-      )
+  _populate_suggestion_info(
+      ads_client,
+      request.suggestion_info,
+      business_name,
+      final_url,
+      keyword_themes,
+      geo_target_id,
+      language_code,
   )
 
   try:
@@ -221,15 +210,14 @@ def suggest_smart_campaign_budget(
 
   request = ads_client.get_type("SuggestSmartCampaignBudgetOptionsRequest")
   request.customer_id = customer_id
-  request.suggestion_info.CopyFrom(
-      _build_suggestion_info(
-          ads_client,
-          business_name,
-          final_url,
-          keyword_themes,
-          geo_target_id,
-          language_code,
-      )
+  _populate_suggestion_info(
+      ads_client,
+      request.suggestion_info,
+      business_name,
+      final_url,
+      keyword_themes,
+      geo_target_id,
+      language_code,
   )
 
   try:

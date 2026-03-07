@@ -60,7 +60,7 @@ class TestCreateLabel:
     ]
 
     labels.create_label(CUSTOMER_ID, "Test Label", description="A test label")
-    assert mock_op.create.description == "A test label"
+    assert mock_op.create.text_label.description == "A test label"
 
   def test_sets_login_customer_id(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value

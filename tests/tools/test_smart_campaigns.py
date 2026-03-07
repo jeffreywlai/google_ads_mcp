@@ -41,36 +41,23 @@ class TestSuggestKeywordThemes:
     mock_service = mock_ads_client.get_service.return_value
 
     theme1 = mock.Mock()
-    theme1.keyword_theme_info.free_form_keyword_theme = "plumbing"
-    theme1.keyword_theme_info.keyword_theme_constant = ""
-    theme1.sample_keywords = ["plumber", "plumbing services"]
+    theme1.free_form_keyword_theme = "plumbing"
+    theme1.keyword_theme_constant = None
 
     theme2 = mock.Mock()
-    theme2.keyword_theme_info.free_form_keyword_theme = ""
-    theme2.keyword_theme_info.keyword_theme_constant = (
-        "keywordThemeConstants/123"
-    )
-    theme2.sample_keywords = ["drain cleaning"]
+    theme2.free_form_keyword_theme = ""
+    theme2.keyword_theme_constant.display_name = "Nike Shoes"
 
     mock_response = mock_service.suggest_keyword_themes.return_value
     mock_response.keyword_themes = [theme1, theme2]
 
     result = smart_campaigns.suggest_keyword_themes(
-        CUSTOMER_ID, "Joe's Plumbing"
+        CUSTOMER_ID, "Joe's Plumbing", "https://joesplumbing.com"
     )
     assert result == {
         "keyword_themes": [
-            {
-                "display_name": "plumbing",
-                "sample_keywords": [
-                    "plumber",
-                    "plumbing services",
-                ],
-            },
-            {
-                "display_name": "keywordThemeConstants/123",
-                "sample_keywords": ["drain cleaning"],
-            },
+            {"display_name": "plumbing"},
+            {"display_name": "Nike Shoes"},
         ]
     }
 
@@ -82,6 +69,7 @@ class TestSuggestKeywordThemes:
     smart_campaigns.suggest_keyword_themes(
         CUSTOMER_ID,
         "Test Business",
+        "https://example.com",
         login_customer_id="999",
     )
     assert mock_ads_client.login_customer_id == "999"
@@ -99,7 +87,9 @@ class TestSuggestKeywordThemes:
     mock_service.suggest_keyword_themes.side_effect = exc
 
     with pytest.raises(ToolError):
-      smart_campaigns.suggest_keyword_themes(CUSTOMER_ID, "Test")
+      smart_campaigns.suggest_keyword_themes(
+          CUSTOMER_ID, "Test", "https://example.com"
+      )
 
   def test_raises_tool_error_on_google_api_error(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -108,7 +98,9 @@ class TestSuggestKeywordThemes:
     )
 
     with pytest.raises(ToolError, match="bad request"):
-      smart_campaigns.suggest_keyword_themes(CUSTOMER_ID, "Test")
+      smart_campaigns.suggest_keyword_themes(
+          CUSTOMER_ID, "Test", "https://example.com"
+      )
 
 
 class TestSuggestSmartCampaignAd:

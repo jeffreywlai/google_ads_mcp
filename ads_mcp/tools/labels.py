@@ -55,7 +55,7 @@ def create_label(
   label = operation.create
   label.name = name
   if description:
-    label.description = description
+    label.text_label.description = description
 
   try:
     response = label_service.mutate_labels(
