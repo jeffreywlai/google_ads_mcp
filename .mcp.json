@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "GoogleAds": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${GOOGLE_ADS_MCP_DIR}",
+        "-m",
+        "ads_mcp.stdio"
+      ],
+      "env": {
+        "GOOGLE_ADS_CREDENTIALS": "${GOOGLE_ADS_CREDENTIALS}"
+      }
+    }
+  }
+}

@@ -19,5 +19,12 @@ from fastmcp import FastMCP
 # Initialize FastMCP server
 mcp_server = FastMCP(
     name="Google Ads API",
+    instructions=(
+        "Google Ads API MCP server. Use these tools to manage Google"
+        " Ads campaigns, execute GAQL reporting queries, manage"
+        " negative keyword lists and shared sets, and access Google"
+        " Ads API documentation. Requires a configured google-ads.yaml"
+        " credentials file."
+    ),
     mask_error_details=True,
 )

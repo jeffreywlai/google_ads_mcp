@@ -1,6 +1,6 @@
 # Google Ads MCP Server
 
-The Google Ads MCP Server is an implementation of the Model Context Protocol (MCP) that enables Large Language Models (LLMs), such as Gemini, to interact directly with the Google Ads API.
+The Google Ads MCP Server is an implementation of the Model Context Protocol (MCP) that enables Large Language Models (LLMs), such as Claude and Gemini, to interact directly with the Google Ads API.
 
 **This is not an officially supported Google product.**
 
@@ -44,6 +44,33 @@ Make sure your `google-ads.yaml` file contains the following keys:
 - `login_customer_id` (optional, but recommended)
 
 ### 3. Launch MCP Server
+
+#### For Use with Claude Code
+
+Add the server using the Claude Code CLI:
+
+```bash
+claude mcp add --transport stdio GoogleAds \
+  --env GOOGLE_ADS_CREDENTIALS=PATH_TO_YAML \
+  -- uv run --directory /path/to/google_ads_mcp -m ads_mcp.stdio
+```
+
+Or install directly from the repo:
+
+```bash
+claude mcp add --transport stdio GoogleAds \
+  --env GOOGLE_ADS_CREDENTIALS=PATH_TO_YAML \
+  -- pipx run --spec git+https://github.com/jeffreywlai/google_ads_mcp.git run-mcp-server
+```
+
+Once configured, type `/mcp` in Claude Code to verify the `Google Ads API` server is listed.
+
+You can then ask questions like:
+
+- "list all campaigns"
+- "show me metrics for campaign `[CAMPAIGN_ID]`"
+- "list my shared negative keyword lists"
+- "add negative keywords to shared set `[SHARED_SET_ID]`"
 
 #### For Direct Use with Gemini CLI
 
