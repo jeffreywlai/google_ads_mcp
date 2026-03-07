@@ -22,6 +22,7 @@ from ads_mcp.tools import ads
 from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
 from ads_mcp.tools import docs
+from ads_mcp.tools import keyword_planner
 from ads_mcp.tools import keywords
 from ads_mcp.tools import negatives
 
@@ -33,7 +34,7 @@ from fastmcp.server.auth.providers.google import GoogleTokenVerifier
 dotenv.load_dotenv()
 
 
-tools = [ads, api, campaigns, docs, keywords, negatives]
+tools = [ads, api, campaigns, docs, keyword_planner, keywords, negatives]
 
 if os.getenv("USE_GOOGLE_OAUTH_ACCESS_TOKEN"):
   mcp_server.auth = GoogleTokenVerifier()
