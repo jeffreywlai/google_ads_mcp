@@ -58,6 +58,8 @@ if os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID") and os.getenv(
 ):
   base_url = os.getenv("FASTMCP_SERVER_BASE_URL", "http://localhost:8000")
   mcp_server.auth = GoogleProvider(
+      client_id=os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID"),
+      client_secret=os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET"),
       base_url=base_url,
       required_scopes=["https://www.googleapis.com/auth/adwords"],
   )
