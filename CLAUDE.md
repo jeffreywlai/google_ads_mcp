@@ -17,7 +17,7 @@ uv run pylint ads_mcp tests      # Lint
 
 - `ads_mcp/server.py` — Server entry point, imports tool modules
 - `ads_mcp/coordinator.py` — Shared `mcp_server` FastMCP instance
-- `ads_mcp/tools/` — Tool modules (api.py, docs.py, negatives.py)
+- `ads_mcp/tools/` — Tool modules (api.py, ads.py, campaigns.py, docs.py, keywords.py, negatives.py)
 - `ads_mcp/context/` — GAQL docs and reporting view YAMLs
 - `tests/` — Mirrors source structure; tests/tools/ for tool tests
 
@@ -43,6 +43,7 @@ uv run pylint ads_mcp tests      # Lint
 - Set `ads_client.login_customer_id = login_customer_id` when provided
 - Use GAQL via `ads_service.search_stream()` for reads
 - Use service-specific `.mutate_*()` methods for writes
+- For update operations, use `operation.update_mask.paths.append("field_name")`
 - Catch `GoogleAdsException` and raise `ToolError` with formatted messages:
   ```python
   except GoogleAdsException as e:
