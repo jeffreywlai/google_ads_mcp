@@ -16,6 +16,7 @@
 
 from unittest import mock
 
+from ads_mcp import server
 from ads_mcp import stdio
 
 
@@ -32,3 +33,10 @@ def test_main(mock_update_views, mock_api, mock_mcp_server):
   mock_mcp_server.run.assert_called_once_with(
       transport="stdio", show_banner=False
   )
+
+
+def test_stdio_and_server_register_same_tool_modules():
+  """Tests that stdio and streamable-http entrypoints stay in sync."""
+  assert {module.__name__ for module in stdio.tools} == {
+      module.__name__ for module in server.tools
+  }
