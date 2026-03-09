@@ -5,7 +5,7 @@
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 55 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 62 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,10 +14,11 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **55 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 🔧 **62 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, and a tool guide available as tools
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
+- 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, RSA ad strength, conversion actions, and audience performance
 - 📈 **Optimization** — Recommendations, optimization score, bid/budget simulations, and search term analysis
 - 🏎️ **Performance Max** — Asset diagnostics, top combinations, and placement insights
 - 🔑 **Keyword Research** — Generate keyword ideas with search volume and competition data
@@ -26,7 +27,7 @@
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (55)
+## 📋 Available Tools (62)
 
 ### 🔍 Query & Discovery
 
@@ -95,6 +96,18 @@
 | `list_asset_group_assets` | Asset links and serving diagnostics |
 | `list_asset_group_top_combinations` | Top served asset combinations |
 | `list_performance_max_placements` | Placement names and impression counts |
+
+### 📊 Reporting
+
+| Tool | Description |
+|------|-------------|
+| `list_device_performance` | Campaign performance segmented by device |
+| `list_geographic_performance` | Campaign performance segmented by geography |
+| `list_impression_share` | Campaign impression share metrics |
+| `list_keyword_quality_scores` | Keyword quality score diagnostics |
+| `list_rsa_ad_strength` | RSA ad strength diagnostics |
+| `list_conversion_actions` | Conversion action configuration |
+| `list_audience_performance` | Audience performance at campaign or ad group scope |
 
 ### 📢 Campaign Management
 
@@ -285,6 +298,18 @@ Once connected, just talk naturally:
 "Show me search term insights for campaign 123"
 ```
 
+### Reporting
+
+```
+"Show me performance by device for the last 30 days"
+"What's my impression share across campaigns?"
+"List keyword quality scores for campaign 123"
+"Show me RSA ad strength for my ad groups"
+"What conversion actions do I have set up?"
+"Show audience performance at the ad group level"
+"Break down performance by geography"
+```
+
 ### Performance Max
 
 ```
@@ -317,6 +342,9 @@ google_ads_mcp/
 │   ├── stdio.py               # Server entry point (Claude Code / stdio)
 │   ├── coordinator.py         # Shared FastMCP instance + search/visibility config
 │   ├── tooling.py             # Shared tool decorators and annotations
+│   ├── utils.py               # Shared utility constants
+│   ├── scripts/
+│   │   └── generate_views.py  # Auto-update reporting view YAMLs
 │   ├── tools/
 │   │   ├── api.py             # Core: execute_gaql, list_accessible_accounts
 │   │   ├── docs.py            # GAQL & reporting docs, tool guide, visibility controls
@@ -332,6 +360,7 @@ google_ads_mcp/
 │   │   ├── search_terms.py    # Search term insights & analysis
 │   │   ├── simulations.py     # Bid & budget simulations
 │   │   ├── changes.py         # Change history auditing
+│   │   ├── reporting.py       # Curated reporting tools (device, geo, impression share, etc.)
 │   │   ├── performance_max.py # PMax asset & placement diagnostics
 │   │   └── _gaql.py           # Shared GAQL query helpers
 │   └── context/               # GAQL docs, reporting view YAMLs, tool guide
