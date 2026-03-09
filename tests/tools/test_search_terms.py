@@ -40,6 +40,7 @@ def test_list_campaign_search_term_insights_builds_query():
   assert "metrics.clicks >= 5" in query
   assert "metrics.impressions >= 10" in query
   assert "segments.date DURING LAST_30_DAYS" in query
+  assert "metrics.cost_micros" not in query
 
 
 def test_list_campaign_search_term_insights_accepts_campaign_id_alias():
@@ -70,6 +71,7 @@ def test_list_customer_search_term_insights_uses_campaign_resources():
   assert "segments.campaign IN (" in query
   assert "'customers/1234567890/campaigns/111'" in query
   assert "'customers/1234567890/campaigns/222'" in query
+  assert "metrics.cost_micros" not in query
 
 
 def test_list_customer_search_term_insights_accepts_campaign_id_alias():

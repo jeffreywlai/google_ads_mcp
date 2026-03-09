@@ -14,8 +14,10 @@
 
 """Tests for changes.py."""
 
+import asyncio
 from unittest import mock
 
+from ads_mcp.server import mcp_server
 from ads_mcp.tools import changes
 
 
@@ -62,3 +64,48 @@ def test_list_change_events_builds_query():
   assert "'2026-03-08 23:59:59'" in query
   assert "change_event.old_resource" not in query
   assert "change_event.new_resource" not in query
+
+
+def test_change_tools_expose_named_output_schemas():
+  async def get_schemas():
+    return (
+        (await mcp_server.get_tool("list_change_statuses")).output_schema,
+        (await mcp_server.get_tool("list_change_events")).output_schema,
+    )
+
+  change_statuses_schema, change_events_schema = asyncio.run(get_schemas())
+
+  assert change_statuses_schema == {
+      "type": "object",
+      "properties": {
+          "change_statuses": {
+              "type": "array",
+              "items": {
+                  "anyOf": [
+                      {
+                          "type": "object",
+                          "additionalProperties": True,
+                      }
+                  ],
+              },
+          }
+      },
+      "required": ["change_statuses"],
+  }
+  assert change_events_schema == {
+      "type": "object",
+      "properties": {
+          "change_events": {
+              "type": "array",
+              "items": {
+                  "anyOf": [
+                      {
+                          "type": "object",
+                          "additionalProperties": True,
+                      }
+                  ],
+              },
+          }
+      },
+      "required": ["change_events"],
+  }

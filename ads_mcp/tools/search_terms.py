@@ -111,7 +111,6 @@ def list_campaign_search_term_insights(
         metrics.impressions,
         metrics.clicks,
         metrics.ctr,
-        metrics.cost_micros,
         metrics.conversions,
         metrics.conversions_value
       FROM campaign_search_term_insight
@@ -179,7 +178,6 @@ def list_customer_search_term_insights(
         metrics.impressions,
         metrics.clicks,
         metrics.ctr,
-        metrics.cost_micros,
         metrics.conversions,
         metrics.conversions_value
       FROM customer_search_term_insight

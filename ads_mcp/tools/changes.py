@@ -51,9 +51,23 @@ def _resolve_date_range(
 
 
 change_tool = ads_read_tool(mcp, tags={"changes", "audit"})
+_CHANGE_ROWS_SCHEMA = {
+    "type": "array",
+    "items": {"anyOf": [{"type": "object", "additionalProperties": True}]},
+}
+_CHANGE_STATUSES_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"change_statuses": _CHANGE_ROWS_SCHEMA},
+    "required": ["change_statuses"],
+}
+_CHANGE_EVENTS_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"change_events": _CHANGE_ROWS_SCHEMA},
+    "required": ["change_events"],
+}
 
 
-@change_tool
+@change_tool(output_schema=_CHANGE_STATUSES_OUTPUT_SCHEMA)
 def list_change_statuses(
     customer_id: str,
     resource_types: list[str] | None = None,
@@ -107,7 +121,7 @@ def list_change_statuses(
   }
 
 
-@change_tool
+@change_tool(output_schema=_CHANGE_EVENTS_OUTPUT_SCHEMA)
 def list_change_events(
     customer_id: str,
     resource_change_operations: list[str] | None = None,

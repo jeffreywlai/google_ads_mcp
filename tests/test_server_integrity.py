@@ -646,6 +646,46 @@ class TestFastMcpConfiguration:
 
     asyncio.run(_run())
 
+  def test_client_change_events_return_structured_output_directly_and_via_proxy(
+      self,
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        rows = [
+            {
+                "change_event.change_date_time": "2026-03-09 00:00:00",
+                "change_event.change_resource_type": "CAMPAIGN",
+                "change_event.resource_change_operation": "UPDATE",
+                "change_event.resource_name": "customers/123/campaigns/1",
+                "change_event.client_type": "GOOGLE_ADS_API",
+                "change_event.user_email": "a@example.com",
+                "change_event.changed_fields": {"paths": ["campaign.status"]},
+            }
+        ]
+
+        with mock.patch(
+            "ads_mcp.tools.changes.run_gaql_query",
+            return_value=rows,
+        ):
+          direct_result = await client.call_tool(
+              "list_change_events",
+              {"customer_id": "123"},
+          )
+          proxy_result = await client.call_tool(
+              "call_tool",
+              {
+                  "name": "list_change_events",
+                  "arguments": {"customer_id": "123"},
+              },
+          )
+
+        assert direct_result.structured_content == {"change_events": rows}
+        assert proxy_result.structured_content == {"change_events": rows}
+        assert direct_result.data.change_events == rows
+        assert proxy_result.data == {"change_events": rows}
+
+    asyncio.run(_run())
+
   def test_client_session_unlock_updates_public_tool_list(self):
     raw_tools = asyncio.run(mcp_server._local_provider.list_tools())
     all_registered = {tool.name for tool in raw_tools}

@@ -50,7 +50,7 @@ def list_asset_group_assets(
     campaign_ids: list[str] | None = None,
     asset_group_id: str | None = None,
     asset_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    date_range: str | None = None,
     limit: int = 50,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -62,7 +62,8 @@ def list_asset_group_assets(
       campaign_ids: Optional campaign IDs to filter to.
       asset_group_id: Optional single asset group ID filter.
       asset_group_ids: Optional asset group IDs to filter to.
-      date_range: GAQL date range used for conversion metrics.
+      date_range: Optional GAQL date range used for conversion metrics.
+          Leave unset to list linked assets regardless of recent activity.
       limit: Maximum number of rows to return.
       login_customer_id: Optional manager account ID.
 
@@ -73,7 +74,9 @@ def list_asset_group_assets(
   campaign_ids = _merge_ids(campaign_id, campaign_ids)
   asset_group_ids = _merge_ids(asset_group_id, asset_group_ids)
 
-  where_conditions = [_date_range_condition(date_range)]
+  where_conditions = ["asset_group_asset.status != REMOVED"]
+  if date_range:
+    where_conditions.append(_date_range_condition(date_range))
   if campaign_ids:
     where_conditions.append(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"
