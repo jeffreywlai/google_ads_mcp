@@ -14,9 +14,9 @@
 
 """This module contains tools for interacting with the Google Ads API."""
 
+import json
 import os
 from typing import Any
-import json
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
@@ -30,6 +30,7 @@ import proto
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.utils import ROOT_DIR
 
 
@@ -95,7 +96,7 @@ def get_ads_client(
   return _ADS_CLIENT
 
 
-@mcp.tool()
+@ads_read_tool(mcp, tags={"accounts", "discovery"})
 def list_accessible_accounts() -> list[str]:
   """Lists Google Ads customers id directly accessible by the user.
 
@@ -175,14 +176,16 @@ def run_gaql_query(
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
 
-@mcp.tool(
+@ads_read_tool(
+    mcp,
+    tags={"gaql", "reporting"},
     output_schema={
         "type": "object",
         "properties": {
             "data": {"type": "array", "items": {"type": "object"}},
         },
         "required": ["data"],
-    }
+    },
 )
 def execute_gaql(
     query: str,
@@ -191,7 +194,8 @@ def execute_gaql(
 ) -> list[dict[str, Any]]:
   """Executes a GAQL query to get reporting data.
 
-  Use get_gaql_doc and get_reporting_view_doc to build queries.
+  Prefer dedicated tools first. Use get_tool_guide to find them, then use
+  get_gaql_doc and get_reporting_view_doc when a custom GAQL query is needed.
   """
   return {
       "data": run_gaql_query(

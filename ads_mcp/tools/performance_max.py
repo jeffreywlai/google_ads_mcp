@@ -17,6 +17,7 @@
 from typing import Any
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
@@ -28,7 +29,10 @@ def _date_range_condition(date_range: str) -> str:
   return f"segments.date DURING {date_range}"
 
 
-@mcp.tool()
+performance_max_tool = ads_read_tool(mcp, tags={"performance_max"})
+
+
+@performance_max_tool
 def list_asset_group_assets(
     customer_id: str,
     campaign_ids: list[str] | None = None,
@@ -93,7 +97,7 @@ def list_asset_group_assets(
   }
 
 
-@mcp.tool()
+@performance_max_tool
 def list_asset_group_top_combinations(
     customer_id: str,
     campaign_ids: list[str] | None = None,
@@ -146,7 +150,7 @@ def list_asset_group_top_combinations(
   }
 
 
-@mcp.tool()
+@performance_max_tool
 def list_performance_max_placements(
     customer_id: str,
     campaign_ids: list[str] | None = None,

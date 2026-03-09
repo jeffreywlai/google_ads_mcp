@@ -21,10 +21,11 @@ from google.api_core import exceptions as google_exceptions
 from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools.api import get_ads_client
 
 
-@mcp.tool()
+@ads_read_tool(mcp, tags={"planning", "keywords"})
 def generate_keyword_ideas(
     customer_id: str,
     keywords: list[str] | None = None,

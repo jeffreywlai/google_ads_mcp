@@ -16,13 +16,19 @@
 and cross-tool state management.
 """
 
+import asyncio
 import inspect
 import re
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
+from fastmcp.server.transforms.search import BM25SearchTransform
+from fastmcp.server.transforms.visibility import Visibility
 import pytest
 
+from ads_mcp.coordinator import mcp_server
+from ads_mcp.tooling import MUTATE_TAG
+from ads_mcp.tooling import compact_search_result_serializer
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
@@ -90,10 +96,14 @@ TOOL_MODULES = {
         "suggest_smart_campaign_budget",
     ],
     docs: [
+        "get_tool_guide",
         "get_gaql_doc",
         "get_reporting_view_doc",
         "get_reporting_fields_doc",
         "search_google_ads_fields",
+        "get_tool_visibility_profile",
+        "unlock_mutation_tools",
+        "lock_mutation_tools",
     ],
     recommendations: [
         "list_recommendations",
@@ -127,15 +137,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 51 tools exist as callable functions
+# 1. Tool registration: all 55 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_51(self):
+  def test_total_tool_count_is_55(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 51, f"Expected 51 tools, found {total}"
+    assert total == 55, f"Expected 55 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -180,10 +190,14 @@ class TestToolSignatures:
 
   NON_CUSTOMER_TOOLS = {
       "get_gaql_doc",
+      "get_tool_guide",
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
       "search_google_ads_fields",
       "list_accessible_accounts",
+      "get_tool_visibility_profile",
+      "unlock_mutation_tools",
+      "lock_mutation_tools",
   }
 
   @pytest.mark.parametrize(
@@ -203,10 +217,14 @@ class TestToolSignatures:
       fn for fns in TOOL_MODULES.values() for fn in fns
   } - {
       "get_gaql_doc",
+      "get_tool_guide",
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
       "search_google_ads_fields",
       "list_accessible_accounts",
+      "get_tool_visibility_profile",
+      "unlock_mutation_tools",
+      "lock_mutation_tools",
   }
 
   @pytest.mark.parametrize(
@@ -218,10 +236,14 @@ class TestToolSignatures:
           if fn
           not in {
               "get_gaql_doc",
+              "get_tool_guide",
               "get_reporting_view_doc",
               "get_reporting_fields_doc",
               "search_google_ads_fields",
               "list_accessible_accounts",
+              "get_tool_visibility_profile",
+              "unlock_mutation_tools",
+              "lock_mutation_tools",
           }
       ],
   )
@@ -447,3 +469,95 @@ class TestMutationFieldIntegrity:
     keywords.update_keyword_bid("123", "456", "789", 1_500_000)
     assert op.update_mask.paths == ["cpc_bid_micros"]
     p.stop()
+
+
+# ===================================================================
+# 8. FastMCP metadata and discovery configuration
+# ===================================================================
+
+
+class TestFastMcpConfiguration:
+
+  def test_registered_tools_have_tags_and_annotations(self):
+    registered_tools = {
+        tool.name: tool
+        for tool in asyncio.run(mcp_server._local_provider.list_tools())
+    }
+
+    assert len(registered_tools) == 55
+    for tool_name in sorted(registered_tools):
+      tool = registered_tools[tool_name]
+      assert tool.tags, f"{tool_name} should have at least one tag"
+      assert (
+          tool.annotations is not None
+      ), f"{tool_name} should have FastMCP annotations"
+
+    assert registered_tools["execute_gaql"].annotations.readOnlyHint is True
+    assert MUTATE_TAG in registered_tools["apply_recommendations"].tags
+    assert registered_tools["delete_label"].annotations.destructiveHint is True
+    assert (
+        registered_tools["unlock_mutation_tools"].annotations.openWorldHint
+        is False
+    )
+
+  def test_bm25_search_and_default_visibility_transforms_configured(self):
+    transforms = mcp_server._transforms
+
+    search_transform = next(
+        transform
+        for transform in transforms
+        if isinstance(transform, BM25SearchTransform)
+    )
+    assert search_transform._max_results == 8
+    assert search_transform._always_visible == {
+        "get_tool_guide",
+        "list_accessible_accounts",
+        "execute_gaql",
+        "get_tool_visibility_profile",
+        "unlock_mutation_tools",
+        "lock_mutation_tools",
+    }
+    assert (
+        search_transform._search_result_serializer
+        is compact_search_result_serializer
+    )
+
+    visibility_transform = next(
+        transform
+        for transform in transforms
+        if isinstance(transform, Visibility)
+    )
+    assert visibility_transform._enabled is False
+    assert visibility_transform.tags == {MUTATE_TAG}
+    assert visibility_transform.components == {"tool"}
+
+  def test_compact_search_serializer_returns_minimal_shape(self):
+    tools = asyncio.run(mcp_server._local_provider.list_tools())
+    selected_tools = [
+        tool
+        for tool in tools
+        if tool.name in {"execute_gaql", "unlock_mutation_tools"}
+    ]
+
+    result = compact_search_result_serializer(selected_tools)
+
+    assert result == {
+        "tools": [
+            {
+                "name": "execute_gaql",
+                "mode": "read",
+                "summary": "Executes a GAQL query to get reporting data.",
+                "tags": ["gaql", "read", "reporting"],
+                "required_args": ["query", "customer_id"],
+                "optional_args": ["login_customer_id"],
+            },
+            {
+                "name": "unlock_mutation_tools",
+                "mode": "control",
+                "summary": (
+                    "Unlocks mutating tools for the current session only."
+                ),
+                "tags": ["control", "profiles", "visibility"],
+            },
+        ]
+    }

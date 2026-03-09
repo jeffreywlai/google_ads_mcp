@@ -21,6 +21,7 @@ from google.ads.googleads.errors import GoogleAdsException
 from google.api_core import exceptions as google_exceptions
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools.api import get_ads_client
 
 
@@ -53,7 +54,10 @@ def _populate_suggestion_info(
       suggestion_info.keyword_themes.append(theme)
 
 
-@mcp.tool()
+smart_campaign_tool = ads_read_tool(mcp, tags={"smart_campaigns"})
+
+
+@smart_campaign_tool
 def suggest_keyword_themes(
     customer_id: str,
     business_name: str,
@@ -98,7 +102,7 @@ def suggest_keyword_themes(
   return {"keyword_themes": themes}
 
 
-@mcp.tool()
+@smart_campaign_tool
 def suggest_smart_campaign_ad(
     customer_id: str,
     business_name: str,
@@ -139,7 +143,7 @@ def suggest_smart_campaign_ad(
   }
 
 
-@mcp.tool()
+@smart_campaign_tool
 def suggest_smart_campaign_budget(
     customer_id: str,
     business_name: str,

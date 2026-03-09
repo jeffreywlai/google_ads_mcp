@@ -18,10 +18,14 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import get_ads_client
 
 
-@mcp.tool()
+keyword_tool = ads_mutation_tool(mcp, tags={"keywords"})
+
+
+@keyword_tool
 def set_keyword_status(
     customer_id: str,
     ad_group_id: str,
@@ -35,9 +39,7 @@ def set_keyword_status(
   """
   status_upper = status.upper()
   if status_upper not in ("PAUSED", "ENABLED"):
-    raise ToolError(
-        f"Invalid status '{status}'. Use 'PAUSED' or 'ENABLED'."
-    )
+    raise ToolError(f"Invalid status '{status}'. Use 'PAUSED' or 'ENABLED'.")
 
   ads_client = get_ads_client(login_customer_id)
   criterion_service = ads_client.get_service("AdGroupCriterionService")
@@ -62,7 +64,7 @@ def set_keyword_status(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@keyword_tool
 def update_keyword_bid(
     customer_id: str,
     ad_group_id: str,

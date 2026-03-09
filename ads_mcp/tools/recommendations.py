@@ -23,6 +23,8 @@ from google.ads.googleads.v23.services.types.recommendation_service import (
 )
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
@@ -88,7 +90,11 @@ def _validate_apply_parameters(
     )
 
 
-@mcp.tool()
+recommendation_read_tool = ads_read_tool(mcp, tags={"optimization"})
+recommendation_tool = ads_mutation_tool(mcp, tags={"optimization"})
+
+
+@recommendation_read_tool
 def list_recommendations(
     customer_id: str,
     recommendation_types: list[str] | None = None,
@@ -148,7 +154,7 @@ def list_recommendations(
   }
 
 
-@mcp.tool()
+@recommendation_read_tool
 def get_optimization_score_summary(
     customer_id: str,
     login_customer_id: str | None = None,
@@ -228,7 +234,7 @@ def get_optimization_score_summary(
   }
 
 
-@mcp.tool()
+@recommendation_tool
 def apply_recommendations(
     customer_id: str,
     recommendation_resource_names: list[str],
@@ -318,7 +324,7 @@ def apply_recommendations(
   return result
 
 
-@mcp.tool()
+@recommendation_tool
 def dismiss_recommendations(
     customer_id: str,
     recommendation_resource_names: list[str],
@@ -365,7 +371,7 @@ def dismiss_recommendations(
   return result
 
 
-@mcp.tool()
+@recommendation_read_tool
 def list_recommendation_subscriptions(
     customer_id: str,
     recommendation_types: list[str] | None = None,
@@ -412,7 +418,7 @@ def list_recommendation_subscriptions(
   }
 
 
-@mcp.tool()
+@recommendation_tool
 def create_recommendation_subscription(
     customer_id: str,
     recommendation_type: str,
@@ -458,7 +464,7 @@ def create_recommendation_subscription(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@recommendation_tool
 def set_recommendation_subscription_status(
     customer_id: str,
     resource_name: str,

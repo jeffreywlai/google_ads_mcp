@@ -19,6 +19,7 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_string_values
@@ -44,7 +45,10 @@ def _non_negative(value: int | float, field_name: str) -> None:
     raise ToolError(f"{field_name} must be non-negative.")
 
 
-@mcp.tool()
+search_term_tool = ads_read_tool(mcp, tags={"search_terms"})
+
+
+@search_term_tool
 def list_campaign_search_term_insights(
     customer_id: str,
     campaign_ids: list[str] | None = None,
@@ -109,7 +113,7 @@ def list_campaign_search_term_insights(
   }
 
 
-@mcp.tool()
+@search_term_tool
 def list_customer_search_term_insights(
     customer_id: str,
     campaign_ids: list[str] | None = None,
@@ -174,7 +178,7 @@ def list_customer_search_term_insights(
   }
 
 
-@mcp.tool()
+@search_term_tool
 def analyze_search_terms(
     customer_id: str,
     campaign_id: str | None = None,

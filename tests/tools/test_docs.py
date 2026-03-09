@@ -14,6 +14,7 @@
 
 """Tests for docs.py."""
 
+import asyncio
 import os
 from unittest import mock
 
@@ -49,6 +50,19 @@ def test_get_reporting_doc(mock_file):
 
 
 @mock.patch(
+    "builtins.open", new_callable=mock.mock_open, read_data="tool content"
+)
+def test_get_tool_guide(mock_file):
+  """Tests get_tool_guide without a topic."""
+  assert docs.get_tool_guide() == "tool content"
+  mock_file.assert_called_with(
+      os.path.join(docs.MODULE_DIR, "context/tool_guide.yaml"),
+      "r",
+      encoding="utf-8",
+  )
+
+
+@mock.patch(
     "builtins.open", new_callable=mock.mock_open, read_data="view content"
 )
 def test_get_view_doc(mock_file):
@@ -74,6 +88,137 @@ def test_resources_exist():
   # mocking FastMCP
   # but checking the tool definitions is done via coverage
   pass
+
+
+def test_get_tool_guide_filters_topic():
+  """Tests get_tool_guide topic filtering."""
+  guide_yaml = """
+principles:
+  - Prefer dedicated tools.
+categories:
+  optimization:
+    summary: Recommendations and optimization.
+    tools:
+      list_recommendations: Open recommendations.
+      apply_recommendations: Apply recommendations.
+  docs:
+    summary: Docs.
+    tools:
+      get_gaql_doc: GAQL docs.
+"""
+  with mock.patch(
+      "builtins.open", new_callable=mock.mock_open, read_data=guide_yaml
+  ):
+    result = docs.get_tool_guide("apply")
+
+  assert "optimization:" in result
+  assert "apply_recommendations" in result
+  assert "list_recommendations" not in result
+  assert "docs:" not in result
+
+
+def test_get_tool_guide_raises_when_topic_missing():
+  """Tests get_tool_guide topic filtering with no matches."""
+  guide_yaml = """
+principles:
+  - Prefer dedicated tools.
+categories:
+  docs:
+    summary: Docs.
+    tools:
+      get_gaql_doc: GAQL docs.
+"""
+  with mock.patch(
+      "builtins.open", new_callable=mock.mock_open, read_data=guide_yaml
+  ):
+    with pytest.raises(ToolError, match="No tool guide entries matched"):
+      docs.get_tool_guide("missing")
+
+
+@mock.patch(
+    "ads_mcp.tools.docs.get_visibility_rules", new_callable=mock.AsyncMock
+)
+def test_get_tool_visibility_profile(mock_get_visibility_rules):
+  """Tests session visibility profile reporting."""
+  mock_get_visibility_rules.return_value = [
+      {
+          "enabled": True,
+          "tags": ["mutate"],
+          "components": ["tool"],
+      }
+  ]
+
+  result = asyncio.run(docs.get_tool_visibility_profile(mock.Mock()))
+
+  assert result == {
+      "mutation_tools_unlocked": True,
+      "session_rules": [
+          {
+              "enabled": True,
+              "tags": ["mutate"],
+              "components": ["tool"],
+          }
+      ],
+  }
+
+
+@mock.patch(
+    "ads_mcp.tools.docs.get_visibility_rules", new_callable=mock.AsyncMock
+)
+def test_get_tool_visibility_profile_uses_latest_matching_rule(
+    mock_get_visibility_rules,
+):
+  """Tests that the latest mutation visibility rule wins."""
+  mock_get_visibility_rules.return_value = [
+      {
+          "enabled": True,
+          "tags": ["mutate"],
+          "components": ["tool"],
+      },
+      {
+          "enabled": False,
+          "tags": ["mutate"],
+          "components": ["tool"],
+      },
+  ]
+
+  result = asyncio.run(docs.get_tool_visibility_profile(mock.Mock()))
+
+  assert result["mutation_tools_unlocked"] is False
+
+
+@mock.patch(
+    "ads_mcp.tools.docs.enable_components", new_callable=mock.AsyncMock
+)
+def test_unlock_mutation_tools(mock_enable_components):
+  """Tests per-session mutation tool unlock."""
+  ctx = mock.Mock()
+
+  result = asyncio.run(docs.unlock_mutation_tools(ctx))
+
+  assert result == {"mutation_tools_unlocked": True}
+  mock_enable_components.assert_awaited_once_with(
+      ctx,
+      tags={"mutate"},
+      components={"tool"},
+  )
+
+
+@mock.patch(
+    "ads_mcp.tools.docs.disable_components", new_callable=mock.AsyncMock
+)
+def test_lock_mutation_tools(mock_disable_components):
+  """Tests per-session mutation tool lock."""
+  ctx = mock.Mock()
+
+  result = asyncio.run(docs.lock_mutation_tools(ctx))
+
+  assert result == {"mutation_tools_unlocked": False}
+  mock_disable_components.assert_awaited_once_with(
+      ctx,
+      tags={"mutate"},
+      components={"tool"},
+  )
 
 
 @mock.patch("ads_mcp.tools.docs.format_value")

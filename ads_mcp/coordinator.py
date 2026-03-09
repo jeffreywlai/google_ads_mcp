@@ -15,6 +15,10 @@
 """The coordinator for the Google Ads API MCP."""
 
 from fastmcp import FastMCP
+from fastmcp.server.transforms.search import BM25SearchTransform
+
+from ads_mcp.tooling import MUTATE_TAG
+from ads_mcp.tooling import compact_search_result_serializer
 
 # Initialize FastMCP server
 mcp_server = FastMCP(
@@ -27,4 +31,20 @@ mcp_server = FastMCP(
         " credentials file."
     ),
     mask_error_details=True,
+    transforms=[
+        BM25SearchTransform(
+            max_results=8,
+            always_visible=[
+                "get_tool_guide",
+                "list_accessible_accounts",
+                "execute_gaql",
+                "get_tool_visibility_profile",
+                "unlock_mutation_tools",
+                "lock_mutation_tools",
+            ],
+            search_result_serializer=compact_search_result_serializer,
+        )
+    ],
 )
+
+mcp_server.disable(tags={MUTATE_TAG}, components={"tool"})

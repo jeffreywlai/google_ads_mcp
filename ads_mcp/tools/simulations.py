@@ -19,6 +19,7 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
@@ -59,7 +60,10 @@ def _selected_point_fields(
   return allowed_fields[normalized_type]
 
 
-@mcp.tool()
+simulation_tool = ads_read_tool(mcp, tags={"simulations"})
+
+
+@simulation_tool
 def list_campaign_simulations(
     customer_id: str,
     campaign_ids: list[str] | None = None,
@@ -120,7 +124,7 @@ def list_campaign_simulations(
   }
 
 
-@mcp.tool()
+@simulation_tool
 def list_ad_group_simulations(
     customer_id: str,
     ad_group_ids: list[str] | None = None,
@@ -183,7 +187,7 @@ def list_ad_group_simulations(
   }
 
 
-@mcp.tool()
+@simulation_tool
 def list_ad_group_criterion_simulations(
     customer_id: str,
     ad_group_id: str | None = None,

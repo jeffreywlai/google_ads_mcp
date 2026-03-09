@@ -20,6 +20,7 @@ from datetime import timedelta
 from fastmcp.exceptions import ToolError
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import validate_limit
@@ -49,7 +50,10 @@ def _resolve_date_range(
   return start_date, end_date
 
 
-@mcp.tool()
+change_tool = ads_read_tool(mcp, tags={"changes", "audit"})
+
+
+@change_tool
 def list_change_statuses(
     customer_id: str,
     resource_types: list[str] | None = None,
@@ -103,7 +107,7 @@ def list_change_statuses(
   }
 
 
-@mcp.tool()
+@change_tool
 def list_change_events(
     customer_id: str,
     resource_change_operations: list[str] | None = None,

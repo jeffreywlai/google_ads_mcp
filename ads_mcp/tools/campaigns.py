@@ -18,10 +18,14 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import get_ads_client
 
 
-@mcp.tool()
+campaign_tool = ads_mutation_tool(mcp, tags={"campaigns"})
+
+
+@campaign_tool
 def set_campaign_status(
     customer_id: str,
     campaign_id: str,
@@ -34,9 +38,7 @@ def set_campaign_status(
   """
   status_upper = status.upper()
   if status_upper not in ("PAUSED", "ENABLED"):
-    raise ToolError(
-        f"Invalid status '{status}'. Use 'PAUSED' or 'ENABLED'."
-    )
+    raise ToolError(f"Invalid status '{status}'. Use 'PAUSED' or 'ENABLED'.")
 
   ads_client = get_ads_client(login_customer_id)
   campaign_service = ads_client.get_service("CampaignService")
@@ -46,9 +48,7 @@ def set_campaign_status(
   campaign.resource_name = campaign_service.campaign_path(
       customer_id, campaign_id
   )
-  campaign.status = getattr(
-      ads_client.enums.CampaignStatusEnum, status_upper
-  )
+  campaign.status = getattr(ads_client.enums.CampaignStatusEnum, status_upper)
   operation.update_mask.paths.append("status")
 
   try:
@@ -61,7 +61,7 @@ def set_campaign_status(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@campaign_tool
 def update_campaign_budget(
     customer_id: str,
     budget_id: str,

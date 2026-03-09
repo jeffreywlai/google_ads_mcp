@@ -20,6 +20,8 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools.api import get_ads_client
 
 
@@ -28,7 +30,16 @@ from ads_mcp.tools.api import get_ads_client
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+negative_read_tool = ads_read_tool(mcp, tags={"negatives"})
+negative_tool = ads_mutation_tool(mcp, tags={"negatives"})
+destructive_negative_tool = ads_mutation_tool(
+    mcp,
+    tags={"negatives"},
+    destructive=True,
+)
+
+
+@negative_read_tool
 def list_shared_sets(
     customer_id: str,
     login_customer_id: str | None = None,
@@ -65,7 +76,7 @@ def list_shared_sets(
   return {"shared_sets": results}
 
 
-@mcp.tool()
+@negative_tool
 def create_shared_set(
     customer_id: str,
     name: str,
@@ -90,7 +101,7 @@ def create_shared_set(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@destructive_negative_tool
 def delete_shared_set(
     customer_id: str,
     shared_set_id: str,
@@ -121,7 +132,7 @@ def delete_shared_set(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@negative_read_tool
 def list_shared_set_keywords(
     customer_id: str,
     shared_set_id: str,
@@ -158,7 +169,7 @@ def list_shared_set_keywords(
   return {"keywords": results}
 
 
-@mcp.tool()
+@negative_tool
 def add_shared_set_keywords(
     customer_id: str,
     shared_set_id: str,
@@ -201,7 +212,7 @@ def add_shared_set_keywords(
   }
 
 
-@mcp.tool()
+@destructive_negative_tool
 def remove_shared_set_keywords(
     customer_id: str,
     shared_set_id: str,
@@ -239,7 +250,7 @@ def remove_shared_set_keywords(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@negative_read_tool
 def list_campaign_shared_sets(
     customer_id: str,
     campaign_id: str | None = None,
@@ -284,7 +295,7 @@ def list_campaign_shared_sets(
   return {"campaign_shared_sets": results}
 
 
-@mcp.tool()
+@negative_tool
 def attach_shared_set_to_campaign(
     customer_id: str,
     campaign_id: str,
@@ -316,7 +327,7 @@ def attach_shared_set_to_campaign(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@destructive_negative_tool
 def detach_shared_set_from_campaign(
     customer_id: str,
     campaign_id: str,
@@ -351,7 +362,7 @@ def detach_shared_set_from_campaign(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@negative_read_tool
 def list_campaign_negative_keywords(
     customer_id: str,
     campaign_id: str,
@@ -393,7 +404,7 @@ def list_campaign_negative_keywords(
   return {"keywords": results}
 
 
-@mcp.tool()
+@negative_tool
 def add_campaign_negative_keywords(
     customer_id: str,
     campaign_id: str,
@@ -437,7 +448,7 @@ def add_campaign_negative_keywords(
   }
 
 
-@mcp.tool()
+@destructive_negative_tool
 def remove_campaign_negative_keywords(
     customer_id: str,
     campaign_id: str,

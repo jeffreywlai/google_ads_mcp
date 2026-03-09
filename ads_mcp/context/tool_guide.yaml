@@ -1,0 +1,127 @@
+principles:
+  - Prefer dedicated tools over execute_gaql when a dedicated tool exists.
+  - Use search_tools to find the right dedicated tool when the tool name is
+    unclear.
+  - Use execute_gaql only for custom read queries not covered by a dedicated
+    tool.
+  - Start with the smallest dedicated tool that answers the question.
+  - Use get_reporting_view_doc or search_google_ads_fields only when query
+    construction is blocked.
+  - Mutation tools are hidden by default. Use unlock_mutation_tools only when
+    you intend to change account state.
+
+categories:
+  discovery:
+    summary: Account discovery and custom reads.
+    tools:
+      list_accessible_accounts: List accounts that can be used as login_customer_id.
+      execute_gaql: Custom reporting reads when no dedicated read tool exists.
+
+  docs:
+    summary: Documentation and field metadata.
+    tools:
+      get_tool_guide: Compact map of tools and when to use them.
+      get_gaql_doc: Compact GAQL syntax reference.
+      get_reporting_view_doc: View names or detailed view metadata.
+      get_reporting_fields_doc: Cached field metadata for known fields.
+      search_google_ads_fields: Live field metadata search for GAQL building.
+      get_tool_visibility_profile: Check whether mutation tools are unlocked for the session.
+      unlock_mutation_tools: Reveal mutation tools for the current session.
+      lock_mutation_tools: Hide mutation tools again for the current session.
+
+  optimization:
+    summary: Recommendations, optimization score, and auto-apply.
+    tools:
+      get_optimization_score_summary: Account optimization score and uplift by recommendation type.
+      list_recommendations: Open recommendations filtered by type or campaign.
+      apply_recommendations: Apply existing recommendation resource names.
+      dismiss_recommendations: Dismiss existing recommendation resource names.
+      list_recommendation_subscriptions: Current recommendation auto-apply subscriptions.
+      create_recommendation_subscription: Create a paused or enabled subscription.
+      set_recommendation_subscription_status: Pause or enable a subscription.
+
+  campaigns:
+    summary: Direct campaign and budget changes.
+    tools:
+      set_campaign_status: Pause or enable a campaign.
+      update_campaign_budget: Change daily budget amount.
+
+  ad_groups:
+    summary: Direct ad group changes.
+    tools:
+      set_ad_group_status: Pause or enable an ad group.
+      update_ad_group_bid: Change default CPC bid for an ad group.
+
+  ads:
+    summary: Direct ad changes.
+    tools:
+      set_ad_status: Pause or enable an ad.
+
+  keywords:
+    summary: Direct keyword changes.
+    tools:
+      set_keyword_status: Pause or enable a keyword.
+      update_keyword_bid: Change CPC bid for a keyword.
+
+  negatives:
+    summary: Shared sets and campaign-level negatives.
+    tools:
+      list_shared_sets: List negative keyword shared sets.
+      create_shared_set: Create a negative keyword shared set.
+      delete_shared_set: Delete a shared set.
+      list_shared_set_keywords: List keywords in a shared set.
+      add_shared_set_keywords: Add keywords to a shared set.
+      remove_shared_set_keywords: Remove keywords from a shared set.
+      list_campaign_shared_sets: List campaign to shared set links.
+      attach_shared_set_to_campaign: Attach a shared set to a campaign.
+      detach_shared_set_from_campaign: Remove a shared set from a campaign.
+      list_campaign_negative_keywords: List campaign negative keywords.
+      add_campaign_negative_keywords: Add campaign negative keywords.
+      remove_campaign_negative_keywords: Remove campaign negative keywords.
+
+  labels:
+    summary: Label lifecycle and label assignment.
+    tools:
+      create_label: Create a label.
+      delete_label: Delete a label.
+      manage_campaign_labels: Attach or detach labels on campaigns.
+      manage_ad_group_labels: Attach or detach labels on ad groups.
+
+  planning:
+    summary: Keyword ideation before build or expansion.
+    tools:
+      generate_keyword_ideas: Keyword Planner ideas with search volume and bids.
+
+  smart_campaigns:
+    summary: Smart Campaign suggestion helpers.
+    tools:
+      suggest_keyword_themes: Suggest Smart Campaign keyword themes.
+      suggest_smart_campaign_ad: Suggest Smart Campaign ad copy.
+      suggest_smart_campaign_budget: Suggest Smart Campaign budget.
+
+  search_terms:
+    summary: Search term insights and heuristic candidate generation.
+    tools:
+      list_campaign_search_term_insights: Campaign insight categories and search terms.
+      list_customer_search_term_insights: Account-level insight categories and search terms.
+      analyze_search_terms: Heuristic exact-match and negative keyword candidates.
+
+  simulations:
+    summary: Forecast bid and budget tradeoffs before changing settings.
+    tools:
+      list_campaign_simulations: Campaign-level simulations. Add simulation_type for point lists.
+      list_ad_group_simulations: Ad-group-level simulations. Add simulation_type for point lists.
+      list_ad_group_criterion_simulations: Keyword-level CPC bid simulations.
+
+  change_history:
+    summary: Audit recent changes.
+    tools:
+      list_change_statuses: Changed resources and last change timestamps.
+      list_change_events: Granular change events without full old/new resource blobs.
+
+  performance_max:
+    summary: Performance Max diagnostics.
+    tools:
+      list_asset_group_assets: Asset performance and serving diagnostics.
+      list_asset_group_top_combinations: Top served asset combinations.
+      list_performance_max_placements: Placement names and impression counts.

@@ -20,10 +20,17 @@ from typing import Any
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tooling import local_read_tool
+from ads_mcp.tooling import session_control_tool
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
 from ads_mcp.utils import MODULE_DIR
 from fastmcp.exceptions import ToolError
+from fastmcp.server.context import Context
+from fastmcp.server.transforms.visibility import disable_components
+from fastmcp.server.transforms.visibility import enable_components
+from fastmcp.server.transforms.visibility import get_visibility_rules
 from google.ads.googleads.errors import GoogleAdsException
 
 
@@ -67,6 +74,17 @@ def _get_views_list() -> str:
   return data
 
 
+def _get_tool_guide_content() -> str:
+  """Reads the compact tool guide."""
+  with open(
+      os.path.join(MODULE_DIR, "context/tool_guide.yaml"),
+      "r",
+      encoding="utf-8",
+  ) as f:
+    data = f.read()
+  return data
+
+
 def _get_view_doc_content(view: str) -> str:
   """Reads documentation for a specific view."""
   expected_dir = os.path.realpath(os.path.join(MODULE_DIR, "context", "views"))
@@ -89,7 +107,16 @@ def _get_view_doc_content(view: str) -> str:
   return data
 
 
-@mcp.tool()
+doc_tool = local_read_tool(mcp, tags={"docs"})
+tool_guide_tool = local_read_tool(mcp, tags={"docs", "guide"})
+ads_field_tool = ads_read_tool(mcp, tags={"docs", "fields", "gaql"})
+visibility_tool = session_control_tool(
+    mcp,
+    tags={"profiles", "visibility"},
+)
+
+
+@doc_tool
 def get_gaql_doc() -> str:
   """Get compact GAQL syntax reference with grammar, rules, and examples."""
   return _get_gaql_compact_content()
@@ -101,7 +128,7 @@ def get_gaql_doc_resource() -> str:
   return _get_gaql_doc_content()
 
 
-@mcp.tool()
+@doc_tool
 def get_reporting_view_doc(view: str | None = None) -> str:
   """Get Google Ads API reporting view docs.
 
@@ -113,10 +140,59 @@ def get_reporting_view_doc(view: str | None = None) -> str:
   return _get_views_list()
 
 
+@tool_guide_tool
+def get_tool_guide(topic: str | None = None) -> str:
+  """Get a compact map of tools and when to use them.
+
+  Without a topic, returns the full guide.
+  With a topic, returns only matching categories and tools.
+  """
+  content = _get_tool_guide_content()
+  if not topic:
+    return content
+
+  guide = yaml.safe_load(content)
+  topic_lower = topic.lower()
+  filtered_categories = {}
+
+  for category_name, category_data in guide["categories"].items():
+    summary = category_data.get("summary", "")
+    category_match = (
+        topic_lower in category_name.lower() or topic_lower in summary.lower()
+    )
+    matched_tools = {
+        tool_name: tool_summary
+        for tool_name, tool_summary in category_data.get("tools", {}).items()
+        if topic_lower in tool_name.lower()
+        or topic_lower in tool_summary.lower()
+    }
+
+    if category_match or matched_tools:
+      filtered_category = dict(category_data)
+      if matched_tools and not category_match:
+        filtered_category["tools"] = matched_tools
+      filtered_categories[category_name] = filtered_category
+
+  if not filtered_categories:
+    raise ToolError(f"No tool guide entries matched topic '{topic}'.")
+
+  filtered_guide = {
+      "principles": guide["principles"],
+      "categories": filtered_categories,
+  }
+  return yaml.safe_dump(filtered_guide, sort_keys=False)
+
+
 @mcp.resource("resource://Google_Ads_API_Reporting_Views")
 def get_reporting_doc() -> str:
   """Get Google Ads API reporting view docs."""
   return _get_reporting_doc_content()
+
+
+@mcp.resource("resource://Google_Ads_MCP_Tool_Guide")
+def get_tool_guide_resource() -> str:
+  """Get a compact map of Google Ads MCP tools and selection hints."""
+  return _get_tool_guide_content()
 
 
 @mcp.resource("resource://views/{view}")
@@ -128,7 +204,7 @@ def get_view_doc(view: str) -> str:
 _CACHED_FIELDS: dict[str, Any] = {}
 
 
-@mcp.tool()
+@doc_tool
 def get_reporting_fields_doc(fields: list[str]) -> str:
   """Get detailed docs for specific Google Ads API reporting query fields."""
   global _CACHED_FIELDS
@@ -148,7 +224,43 @@ def get_reporting_fields_doc(fields: list[str]) -> str:
   return yaml.dump(fields_info)
 
 
-@mcp.tool()
+@visibility_tool
+async def get_tool_visibility_profile(
+    ctx: Context,
+) -> dict[str, Any]:
+  """Gets the current session tool visibility profile."""
+  rules = await get_visibility_rules(ctx)
+  mutation_tools_unlocked = False
+  for rule in rules:
+    if set(rule.get("tags", [])) == {"mutate"} and set(
+        rule.get("components", [])
+    ) == {"tool"}:
+      mutation_tools_unlocked = bool(rule.get("enabled"))
+  return {
+      "mutation_tools_unlocked": mutation_tools_unlocked,
+      "session_rules": rules,
+  }
+
+
+@visibility_tool
+async def unlock_mutation_tools(
+    ctx: Context,
+) -> dict[str, bool]:
+  """Unlocks mutating tools for the current session only."""
+  await enable_components(ctx, tags={"mutate"}, components={"tool"})
+  return {"mutation_tools_unlocked": True}
+
+
+@visibility_tool
+async def lock_mutation_tools(
+    ctx: Context,
+) -> dict[str, bool]:
+  """Locks mutating tools for the current session only."""
+  await disable_components(ctx, tags={"mutate"}, components={"tool"})
+  return {"mutation_tools_unlocked": False}
+
+
+@ads_field_tool
 def search_google_ads_fields(
     query: str,
     limit: int = 50,

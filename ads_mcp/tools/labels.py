@@ -20,10 +20,19 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import get_ads_client
 
 
-@mcp.tool()
+label_tool = ads_mutation_tool(mcp, tags={"labels"})
+destructive_label_tool = ads_mutation_tool(
+    mcp,
+    tags={"labels"},
+    destructive=True,
+)
+
+
+@label_tool
 def create_label(
     customer_id: str,
     name: str,
@@ -50,7 +59,7 @@ def create_label(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@destructive_label_tool
 def delete_label(
     customer_id: str,
     label_id: str,
@@ -73,7 +82,7 @@ def delete_label(
   return {"resource_name": response.results[0].resource_name}
 
 
-@mcp.tool()
+@label_tool
 def manage_campaign_labels(
     customer_id: str,
     label_id: str,
@@ -123,7 +132,7 @@ def manage_campaign_labels(
   return {"resource_names": [r.resource_name for r in response.results]}
 
 
-@mcp.tool()
+@label_tool
 def manage_ad_group_labels(
     customer_id: str,
     label_id: str,
