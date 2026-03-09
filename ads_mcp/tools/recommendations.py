@@ -192,7 +192,6 @@ def get_optimization_score_summary(
         metrics.optimization_score_uplift,
         metrics.optimization_score_url
       FROM customer
-      WHERE segments.recommendation_type NOT IN (UNSPECIFIED, UNKNOWN)
       ORDER BY metrics.optimization_score_uplift DESC
       """,
       customer_id,
@@ -206,9 +205,12 @@ def get_optimization_score_summary(
 
   recommendation_breakdown = []
   for row in breakdown_rows:
+    recommendation_type = row.get("segments.recommendation_type")
+    if recommendation_type in {"UNSPECIFIED", "UNKNOWN", None}:
+      continue
     recommendation_breakdown.append(
         {
-            "recommendation_type": row["segments.recommendation_type"],
+            "recommendation_type": recommendation_type,
             "optimization_score_uplift": row.get(
                 "metrics.optimization_score_uplift"
             ),

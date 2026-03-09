@@ -42,6 +42,20 @@ def test_list_campaign_search_term_insights_builds_query():
   assert "segments.date DURING LAST_30_DAYS" in query
 
 
+def test_list_campaign_search_term_insights_accepts_campaign_id_alias():
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query",
+      return_value=[],
+  ) as mock_query:
+    search_terms.list_campaign_search_term_insights(
+        CUSTOMER_ID,
+        campaign_id="111",
+    )
+
+  query = mock_query.call_args.args[0]
+  assert "campaign.id IN (111)" in query
+
+
 def test_list_customer_search_term_insights_uses_campaign_resources():
   with mock.patch(
       "ads_mcp.tools.search_terms.run_gaql_query",
@@ -56,6 +70,20 @@ def test_list_customer_search_term_insights_uses_campaign_resources():
   assert "segments.campaign IN (" in query
   assert "'customers/1234567890/campaigns/111'" in query
   assert "'customers/1234567890/campaigns/222'" in query
+
+
+def test_list_customer_search_term_insights_accepts_campaign_id_alias():
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query",
+      return_value=[],
+  ) as mock_query:
+    search_terms.list_customer_search_term_insights(
+        CUSTOMER_ID,
+        campaign_id="111",
+    )
+
+  query = mock_query.call_args.args[0]
+  assert "'customers/1234567890/campaigns/111'" in query
 
 
 def test_analyze_search_terms_returns_candidates():

@@ -60,6 +60,11 @@ def test_get_optimization_score_summary_returns_breakdown():
           ],
           [
               {
+                  "segments.recommendation_type": "UNSPECIFIED",
+                  "metrics.optimization_score_uplift": 0.2,
+                  "metrics.optimization_score_url": "https://ignored",
+              },
+              {
                   "segments.recommendation_type": "CAMPAIGN_BUDGET",
                   "metrics.optimization_score_uplift": 0.07,
                   "metrics.optimization_score_url": "https://budget",
@@ -89,6 +94,20 @@ def test_get_optimization_score_summary_returns_breakdown():
           "optimization_score_url": "https://keyword",
       },
   ]
+
+
+def test_get_optimization_score_summary_does_not_filter_query_on_enum():
+  with mock.patch(
+      "ads_mcp.tools.recommendations.run_gaql_query",
+      side_effect=[
+          [{"customer.id": "1234567890"}],
+          [],
+      ],
+  ) as mock_query:
+    recommendations.get_optimization_score_summary(CUSTOMER_ID)
+
+  breakdown_query = mock_query.call_args_list[1].args[0]
+  assert "NOT IN (UNSPECIFIED, UNKNOWN)" not in breakdown_query
 
 
 @pytest.fixture

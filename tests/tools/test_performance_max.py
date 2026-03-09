@@ -37,7 +37,24 @@ def test_list_asset_group_assets_builds_query():
   assert "FROM asset_group_asset" in query
   assert "campaign.id IN (111)" in query
   assert "asset_group.id IN (222)" in query
-  assert "asset_group_asset.performance_label" in query
+  assert "asset_group_asset.primary_status" in query
+  assert "asset_group_asset.performance_label" not in query
+
+
+def test_list_asset_group_assets_accepts_singular_id_aliases():
+  with mock.patch(
+      "ads_mcp.tools.performance_max.run_gaql_query",
+      return_value=[],
+  ) as mock_query:
+    performance_max.list_asset_group_assets(
+        CUSTOMER_ID,
+        campaign_id="111",
+        asset_group_id="222",
+    )
+
+  query = mock_query.call_args.args[0]
+  assert "campaign.id IN (111)" in query
+  assert "asset_group.id IN (222)" in query
 
 
 def test_list_asset_group_top_combinations_builds_query():

@@ -62,11 +62,20 @@ def test_list_impression_share_includes_share_metrics():
     reporting.list_impression_share(CUSTOMER_ID)
 
   query = mock_run.call_args.args[0]
+  assert "campaign.status = ENABLED" in query
   assert "metrics.search_impression_share" in query
   assert "metrics.search_top_impression_share" in query
   assert "metrics.search_absolute_top_impression_share" in query
   assert "metrics.search_budget_lost_impression_share" in query
   assert "metrics.search_rank_lost_impression_share" in query
+
+
+def test_list_impression_share_can_include_non_enabled_campaigns():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    reporting.list_impression_share(CUSTOMER_ID, enabled_only=False)
+
+  query = mock_run.call_args.args[0]
+  assert "campaign.status = ENABLED" not in query
 
 
 def test_list_keyword_quality_scores_builds_filtered_query():

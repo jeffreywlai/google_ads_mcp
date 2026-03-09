@@ -32,10 +32,23 @@ def _date_range_condition(date_range: str) -> str:
 performance_max_tool = ads_read_tool(mcp, tags={"performance_max"})
 
 
+def _merge_ids(
+    single_id: str | None,
+    multiple_ids: list[str] | None,
+) -> list[str] | None:
+  if single_id:
+    if multiple_ids:
+      return [single_id, *multiple_ids]
+    return [single_id]
+  return multiple_ids
+
+
 @performance_max_tool
 def list_asset_group_assets(
     customer_id: str,
+    campaign_id: str | None = None,
     campaign_ids: list[str] | None = None,
+    asset_group_id: str | None = None,
     asset_group_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     limit: int = 50,
@@ -45,7 +58,9 @@ def list_asset_group_assets(
 
   Args:
       customer_id: Google Ads customer ID.
+      campaign_id: Optional single campaign ID filter.
       campaign_ids: Optional campaign IDs to filter to.
+      asset_group_id: Optional single asset group ID filter.
       asset_group_ids: Optional asset group IDs to filter to.
       date_range: GAQL date range used for conversion metrics.
       limit: Maximum number of rows to return.
@@ -55,6 +70,8 @@ def list_asset_group_assets(
       A dict containing asset group asset diagnostics.
   """
   validate_limit(limit)
+  campaign_ids = _merge_ids(campaign_id, campaign_ids)
+  asset_group_ids = _merge_ids(asset_group_id, asset_group_ids)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:
@@ -77,7 +94,6 @@ def list_asset_group_assets(
         asset.type,
         asset_group_asset.asset,
         asset_group_asset.field_type,
-        asset_group_asset.performance_label,
         asset_group_asset.primary_status,
         asset_group_asset.primary_status_details,
         asset_group_asset.status,
@@ -100,7 +116,9 @@ def list_asset_group_assets(
 @performance_max_tool
 def list_asset_group_top_combinations(
     customer_id: str,
+    campaign_id: str | None = None,
     campaign_ids: list[str] | None = None,
+    asset_group_id: str | None = None,
     asset_group_ids: list[str] | None = None,
     limit: int = 25,
     login_customer_id: str | None = None,
@@ -109,7 +127,9 @@ def list_asset_group_top_combinations(
 
   Args:
       customer_id: Google Ads customer ID.
+      campaign_id: Optional single campaign ID filter.
       campaign_ids: Optional campaign IDs to filter to.
+      asset_group_id: Optional single asset group ID filter.
       asset_group_ids: Optional asset group IDs to filter to.
       limit: Maximum number of rows to return.
       login_customer_id: Optional manager account ID.
@@ -118,6 +138,8 @@ def list_asset_group_top_combinations(
       A dict containing top asset combination rows.
   """
   validate_limit(limit)
+  campaign_ids = _merge_ids(campaign_id, campaign_ids)
+  asset_group_ids = _merge_ids(asset_group_id, asset_group_ids)
 
   where_conditions = []
   if campaign_ids:
@@ -153,6 +175,7 @@ def list_asset_group_top_combinations(
 @performance_max_tool
 def list_performance_max_placements(
     customer_id: str,
+    campaign_id: str | None = None,
     campaign_ids: list[str] | None = None,
     placement_types: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
@@ -163,6 +186,7 @@ def list_performance_max_placements(
 
   Args:
       customer_id: Google Ads customer ID.
+      campaign_id: Optional single campaign ID filter.
       campaign_ids: Optional campaign IDs to filter to.
       placement_types: Optional types such as WEBSITE or YOUTUBE_VIDEO.
       date_range: GAQL date range used for impression metrics.
@@ -173,6 +197,7 @@ def list_performance_max_placements(
       A dict containing Performance Max placement rows.
   """
   validate_limit(limit)
+  campaign_ids = _merge_ids(campaign_id, campaign_ids)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:

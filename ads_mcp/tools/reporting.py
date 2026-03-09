@@ -195,6 +195,7 @@ def list_impression_share(
     customer_id: str,
     campaign_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
+    enabled_only: bool = True,
     limit: int = 100,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -204,6 +205,7 @@ def list_impression_share(
       customer_id: Google Ads customer ID.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
+      enabled_only: Whether to include only ENABLED campaigns.
       limit: Maximum number of rows to return.
       login_customer_id: Optional manager account ID.
 
@@ -213,6 +215,8 @@ def list_impression_share(
   validate_limit(limit)
 
   where_conditions = [_date_range_condition(date_range)]
+  if enabled_only:
+    where_conditions.append("campaign.status = ENABLED")
   if campaign_ids:
     where_conditions.append(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"

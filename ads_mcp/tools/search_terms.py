@@ -48,9 +48,21 @@ def _non_negative(value: int | float, field_name: str) -> None:
 search_term_tool = ads_read_tool(mcp, tags={"search_terms"})
 
 
+def _merge_campaign_ids(
+    campaign_id: str | None,
+    campaign_ids: list[str] | None,
+) -> list[str] | None:
+  if campaign_id:
+    if campaign_ids:
+      return [campaign_id, *campaign_ids]
+    return [campaign_id]
+  return campaign_ids
+
+
 @search_term_tool
 def list_campaign_search_term_insights(
     customer_id: str,
+    campaign_id: str | None = None,
     campaign_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     min_clicks: int = 0,
@@ -62,6 +74,7 @@ def list_campaign_search_term_insights(
 
   Args:
       customer_id: Google Ads customer ID.
+      campaign_id: Optional single campaign ID filter.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
       min_clicks: Optional minimum clicks filter.
@@ -75,6 +88,7 @@ def list_campaign_search_term_insights(
   validate_limit(limit)
   _non_negative(min_clicks, "min_clicks")
   _non_negative(min_impressions, "min_impressions")
+  campaign_ids = _merge_campaign_ids(campaign_id, campaign_ids)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:
@@ -116,6 +130,7 @@ def list_campaign_search_term_insights(
 @search_term_tool
 def list_customer_search_term_insights(
     customer_id: str,
+    campaign_id: str | None = None,
     campaign_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     min_clicks: int = 0,
@@ -127,6 +142,7 @@ def list_customer_search_term_insights(
 
   Args:
       customer_id: Google Ads customer ID.
+      campaign_id: Optional single campaign ID filter.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
       min_clicks: Optional minimum clicks filter.
@@ -140,6 +156,7 @@ def list_customer_search_term_insights(
   validate_limit(limit)
   _non_negative(min_clicks, "min_clicks")
   _non_negative(min_impressions, "min_impressions")
+  campaign_ids = _merge_campaign_ids(campaign_id, campaign_ids)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:
