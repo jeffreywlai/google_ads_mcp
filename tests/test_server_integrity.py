@@ -27,11 +27,16 @@ from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
+from ads_mcp.tools import changes
 from ads_mcp.tools import docs
 from ads_mcp.tools import keyword_planner
 from ads_mcp.tools import keywords
 from ads_mcp.tools import labels
 from ads_mcp.tools import negatives
+from ads_mcp.tools import performance_max
+from ads_mcp.tools import recommendations
+from ads_mcp.tools import search_terms
+from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
 
 
@@ -88,37 +93,58 @@ TOOL_MODULES = {
         "get_gaql_doc",
         "get_reporting_view_doc",
         "get_reporting_fields_doc",
+        "search_google_ads_fields",
+    ],
+    recommendations: [
+        "list_recommendations",
+        "get_optimization_score_summary",
+        "apply_recommendations",
+        "dismiss_recommendations",
+        "list_recommendation_subscriptions",
+        "create_recommendation_subscription",
+        "set_recommendation_subscription_status",
+    ],
+    search_terms: [
+        "list_campaign_search_term_insights",
+        "list_customer_search_term_insights",
+        "analyze_search_terms",
+    ],
+    simulations: [
+        "list_campaign_simulations",
+        "list_ad_group_simulations",
+        "list_ad_group_criterion_simulations",
+    ],
+    changes: [
+        "list_change_statuses",
+        "list_change_events",
+    ],
+    performance_max: [
+        "list_asset_group_assets",
+        "list_asset_group_top_combinations",
+        "list_performance_max_placements",
     ],
 }
 
 
 # ===================================================================
-# 1. Tool registration: all 32 tools exist as callable functions
+# 1. Tool registration: all 51 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_32(self):
+  def test_total_tool_count_is_51(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 32, f"Expected 32 tools, found {total}"
+    assert total == 51, f"Expected 51 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
-      [
-          (mod, fn)
-          for mod, fns in TOOL_MODULES.items()
-          for fn in fns
-      ],
+      [(mod, fn) for mod, fns in TOOL_MODULES.items() for fn in fns],
   )
   def test_tool_exists_and_callable(self, module, func_name):
     func = getattr(module, func_name, None)
-    assert func is not None, (
-        f"{module.__name__}.{func_name} does not exist"
-    )
-    assert callable(func), (
-        f"{module.__name__}.{func_name} is not callable"
-    )
+    assert func is not None, f"{module.__name__}.{func_name} does not exist"
+    assert callable(func), f"{module.__name__}.{func_name} is not callable"
 
 
 # ===================================================================
@@ -130,11 +156,7 @@ class TestToolDocstrings:
 
   @pytest.mark.parametrize(
       "module,func_name",
-      [
-          (mod, fn)
-          for mod, fns in TOOL_MODULES.items()
-          for fn in fns
-      ],
+      [(mod, fn) for mod, fns in TOOL_MODULES.items() for fn in fns],
   )
   def test_tool_has_docstring(self, module, func_name):
     func = getattr(module, func_name)
@@ -160,34 +182,30 @@ class TestToolSignatures:
       "get_gaql_doc",
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
+      "search_google_ads_fields",
       "list_accessible_accounts",
   }
 
   @pytest.mark.parametrize(
       "module,func_name",
-      [
-          (mod, fn)
-          for mod, fns in TOOL_MODULES.items()
-          for fn in fns
-      ],
+      [(mod, fn) for mod, fns in TOOL_MODULES.items() for fn in fns],
   )
   def test_customer_id_parameter(self, module, func_name):
     if func_name in self.NON_CUSTOMER_TOOLS:
       return
     func = getattr(module, func_name)
     sig = inspect.signature(func)
-    assert "customer_id" in sig.parameters, (
-        f"{module.__name__}.{func_name} missing 'customer_id' parameter"
-    )
+    assert (
+        "customer_id" in sig.parameters
+    ), f"{module.__name__}.{func_name} missing 'customer_id' parameter"
 
   TOOLS_WITH_LOGIN_CUSTOMER_ID = {
-      fn
-      for fns in TOOL_MODULES.values()
-      for fn in fns
+      fn for fns in TOOL_MODULES.values() for fn in fns
   } - {
       "get_gaql_doc",
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
+      "search_google_ads_fields",
       "list_accessible_accounts",
   }
 
@@ -197,10 +215,12 @@ class TestToolSignatures:
           (mod, fn)
           for mod, fns in TOOL_MODULES.items()
           for fn in fns
-          if fn not in {
+          if fn
+          not in {
               "get_gaql_doc",
               "get_reporting_view_doc",
               "get_reporting_fields_doc",
+              "search_google_ads_fields",
               "list_accessible_accounts",
           }
       ],
@@ -208,9 +228,9 @@ class TestToolSignatures:
   def test_login_customer_id_optional(self, module, func_name):
     func = getattr(module, func_name)
     sig = inspect.signature(func)
-    assert "login_customer_id" in sig.parameters, (
-        f"{module.__name__}.{func_name} missing 'login_customer_id'"
-    )
+    assert (
+        "login_customer_id" in sig.parameters
+    ), f"{module.__name__}.{func_name} missing 'login_customer_id'"
     param = sig.parameters["login_customer_id"]
     assert param.default is None, (
         f"{module.__name__}.{func_name} login_customer_id "
@@ -236,12 +256,8 @@ class TestSequentialLoginCustomerId:
   def setup(self):
     # We need to test the actual get_ads_client logic, so we mock
     # at a lower level: GoogleAdsClient.load_from_storage.
-    self.campaign_patch = mock.patch(
-        "ads_mcp.tools.campaigns.get_ads_client"
-    )
-    self.ad_group_patch = mock.patch(
-        "ads_mcp.tools.ad_groups.get_ads_client"
-    )
+    self.campaign_patch = mock.patch("ads_mcp.tools.campaigns.get_ads_client")
+    self.ad_group_patch = mock.patch("ads_mcp.tools.ad_groups.get_ads_client")
     self.campaign_mock = self.campaign_patch.start()
     self.ad_group_mock = self.ad_group_patch.start()
 
@@ -307,14 +323,14 @@ class TestEmbeddedGaqlSyntax:
     assert "SELECT" in query, "Missing SELECT"
     assert "FROM" in query, "Missing FROM"
     # Check SELECT comes before FROM
-    assert query.index("SELECT") < query.index("FROM"), (
-        "SELECT must come before FROM"
-    )
+    assert query.index("SELECT") < query.index(
+        "FROM"
+    ), "SELECT must come before FROM"
     # Check WHERE comes after FROM if present
     if "WHERE" in query:
-      assert query.index("FROM") < query.index("WHERE"), (
-          "WHERE must come after FROM"
-      )
+      assert query.index("FROM") < query.index(
+          "WHERE"
+      ), "WHERE must come after FROM"
 
   def test_list_shared_sets_valid_gaql(self):
     negatives.list_shared_sets("123")
@@ -355,9 +371,9 @@ class TestEmbeddedGaqlSyntax:
       assert from_match, f"No FROM found in: {query}"
       # Only one word after FROM
       resource = from_match.group(1)
-      assert re.match(r"^[a-z][a-z_]*$", resource), (
-          f"Invalid FROM resource: {resource}"
-      )
+      assert re.match(
+          r"^[a-z][a-z_]*$", resource
+      ), f"Invalid FROM resource: {resource}"
 
 
 # ===================================================================
@@ -381,8 +397,10 @@ class TestMutationFieldIntegrity:
     # Set return value for all mutate methods
     service = client.get_service.return_value
     for attr in [
-        "mutate_campaigns", "mutate_campaign_budgets",
-        "mutate_ad_groups", "mutate_ad_group_ads",
+        "mutate_campaigns",
+        "mutate_campaign_budgets",
+        "mutate_ad_groups",
+        "mutate_ad_group_ads",
         "mutate_ad_group_criteria",
     ]:
       setattr(service, attr, mock.Mock(return_value=response))

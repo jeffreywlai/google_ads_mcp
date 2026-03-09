@@ -22,11 +22,16 @@ from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
+from ads_mcp.tools import changes
 from ads_mcp.tools import docs
 from ads_mcp.tools import keyword_planner
 from ads_mcp.tools import keywords
 from ads_mcp.tools import labels
 from ads_mcp.tools import negatives
+from ads_mcp.tools import performance_max
+from ads_mcp.tools import recommendations
+from ads_mcp.tools import search_terms
+from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
 
 import dotenv
@@ -42,11 +47,16 @@ tools = [
     ads,
     api,
     campaigns,
+    changes,
     docs,
     keyword_planner,
     keywords,
     labels,
     negatives,
+    performance_max,
+    recommendations,
+    search_terms,
+    simulations,
     smart_campaigns,
 ]
 

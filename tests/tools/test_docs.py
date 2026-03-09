@@ -74,3 +74,31 @@ def test_resources_exist():
   # mocking FastMCP
   # but checking the tool definitions is done via coverage
   pass
+
+
+@mock.patch("ads_mcp.tools.docs.format_value")
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_search_google_ads_fields(mock_get_ads_client, mock_format_value):
+  """Tests live GoogleAdsField search wrapper."""
+  mock_client = mock_get_ads_client.return_value
+  mock_service = mock_client.get_service.return_value
+  mock_service.search_google_ads_fields.return_value = [
+      mock.Mock(),
+      mock.Mock(),
+  ]
+  mock_format_value.side_effect = [
+      {"name": "campaign.id"},
+      {"name": "campaign.name"},
+  ]
+
+  result = docs.search_google_ads_fields(
+      "SELECT name WHERE name LIKE 'campaign.%'", limit=2
+  )
+
+  assert result == {
+      "fields": [
+          {"name": "campaign.id"},
+          {"name": "campaign.name"},
+      ]
+  }
+  mock_service.search_google_ads_fields.assert_called_once()

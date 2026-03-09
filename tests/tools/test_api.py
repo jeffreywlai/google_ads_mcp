@@ -63,14 +63,14 @@ def test_preprocess_gaql(query, expected):
   assert api.preprocess_gaql(query) == expected
 
 
-def test_format_value(mocker):
+def test_format_value():
   """Tests the format_value function."""
   # Test with a proto.Message
   mock_message = mock.Mock(spec=proto.Message)
-  mocker.patch.object(
+  with mock.patch.object(
       proto.Message, "to_json", return_value='{"key": "value"}'
-  )
-  assert api.format_value(mock_message) == {"key": "value"}
+  ):
+    assert api.format_value(mock_message) == {"key": "value"}
 
   # Test with a proto.Enum
   mock_enum = mock.Mock(spec=proto.Enum)
@@ -82,8 +82,9 @@ def test_format_value(mocker):
   assert api.format_value(123) == 123
 
 
+@mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_list_accessible_accounts(mock_google_ads_client):
+def test_list_accessible_accounts(mock_google_ads_client, _):
   """Tests the list_accessible_accounts function."""
   mock_client_instance = mock_google_ads_client.load_from_storage.return_value
   mock_service = mock_client_instance.get_service.return_value
@@ -94,8 +95,9 @@ def test_list_accessible_accounts(mock_google_ads_client):
   assert api.list_accessible_accounts() == ["123", "456"]
 
 
+@mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_execute_gaql(mock_google_ads_client):
+def test_execute_gaql(mock_google_ads_client, _):
   """Tests the execute_gaql function."""
   mock_client_instance = mock_google_ads_client.load_from_storage.return_value
   mock_ads_service = mock_client_instance.get_service.return_value

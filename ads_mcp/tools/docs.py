@@ -20,8 +20,11 @@ from typing import Any
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tools.api import format_value
+from ads_mcp.tools.api import get_ads_client
 from ads_mcp.utils import MODULE_DIR
 from fastmcp.exceptions import ToolError
+from google.ads.googleads.errors import GoogleAdsException
 
 
 def _get_gaql_compact_content() -> str:
@@ -143,3 +146,44 @@ def get_reporting_fields_doc(fields: list[str]) -> str:
     raise ToolError("Unknown fields: " + ", ".join(missing_fields))
 
   return yaml.dump(fields_info)
+
+
+@mcp.tool()
+def search_google_ads_fields(
+    query: str,
+    limit: int = 50,
+) -> dict[str, list[dict[str, Any]]]:
+  """Searches live GoogleAdsField metadata to help build GAQL queries.
+
+  Args:
+      query: A GoogleAdsFieldService query, for example:
+          SELECT name, category, selectable WHERE name LIKE 'campaign.%'
+      limit: Maximum number of fields to return.
+
+  Returns:
+      A dict containing live field metadata rows.
+  """
+  if not query.strip():
+    raise ToolError("query must not be empty.")
+  if limit <= 0:
+    raise ToolError("limit must be greater than 0.")
+
+  ads_client = get_ads_client()
+  field_service = ads_client.get_service("GoogleAdsFieldService")
+
+  try:
+    pager = field_service.search_google_ads_fields(
+        request={
+            "query": query,
+            "page_size": min(limit, 1000),
+        }
+    )
+    fields = []
+    for index, field in enumerate(pager):
+      if index >= limit:
+        break
+      fields.append(format_value(field))
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+  return {"fields": fields}

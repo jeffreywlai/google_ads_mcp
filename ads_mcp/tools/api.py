@@ -137,6 +137,44 @@ def format_value(value: Any) -> Any:
   return return_value
 
 
+def gaql_quote_string(value: str) -> str:
+  """Escapes a string literal for use in a GAQL query."""
+  escaped_value = value.replace("\\", "\\\\").replace("'", "\\'")
+  return f"'{escaped_value}'"
+
+
+def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
+  """Converts a Google Ads search stream response into plain dict rows."""
+  output = []
+  for batch in query_res:
+    for row in batch.results:
+      output.append(
+          {
+              field_name: format_value(get_nested_attr(row, field_name))
+              for field_name in batch.field_mask.paths
+          }
+      )
+  return output
+
+
+def run_gaql_query(
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None = None,
+) -> list[dict[str, Any]]:
+  """Executes a GAQL query and returns formatted rows."""
+  query = preprocess_gaql(query)
+  ads_client = get_ads_client(login_customer_id)
+  ads_service: GoogleAdsServiceClient = ads_client.get_service(
+      "GoogleAdsService"
+  )
+  try:
+    query_res = ads_service.search_stream(query=query, customer_id=customer_id)
+    return gaql_results_to_dicts(query_res)
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+
 @mcp.tool(
     output_schema={
         "type": "object",
@@ -155,23 +193,10 @@ def execute_gaql(
 
   Use get_gaql_doc and get_reporting_view_doc to build queries.
   """
-  query = preprocess_gaql(query)
-  ads_client = get_ads_client(login_customer_id)
-  ads_service: GoogleAdsServiceClient = ads_client.get_service(
-      "GoogleAdsService"
-  )
-  try:
-    query_res = ads_service.search_stream(query=query, customer_id=customer_id)
-    output = []
-    for batch in query_res:
-      for row in batch.results:
-        output.append(
-            {
-                i: format_value(get_nested_attr(row, i))
-                for i in batch.field_mask.paths
-            }
-        )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-
-  return {"data": output}
+  return {
+      "data": run_gaql_query(
+          query=query,
+          customer_id=customer_id,
+          login_customer_id=login_customer_id,
+      )
+  }
