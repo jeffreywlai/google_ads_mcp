@@ -2,10 +2,10 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP 3.0+](https://img.shields.io/badge/FastMCP-3.0+-green.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 32 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 55 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,15 +14,19 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **32 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
-- 📖 **Built-in Docs** — GAQL syntax reference and reporting field docs available as tools (the LLM teaches itself)
+- 🔧 **55 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, and a tool guide available as tools
+- 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
+- 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
+- 📈 **Optimization** — Recommendations, optimization score, bid/budget simulations, and search term analysis
+- 🏎️ **Performance Max** — Asset diagnostics, top combinations, and placement insights
 - 🔑 **Keyword Research** — Generate keyword ideas with search volume and competition data
 - 🏷️ **Label Management** — Create, apply, and remove labels across campaigns and ad groups
 - 🚫 **Negative Keywords** — Full shared set and campaign-level negative keyword management
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (32)
+## 📋 Available Tools (55)
 
 ### 🔍 Query & Discovery
 
@@ -30,9 +34,67 @@
 |------|-------------|
 | `execute_gaql` | Run any GAQL query with formatted results |
 | `list_accessible_accounts` | List all Google Ads accounts you can access |
-| `get_gaql_doc` | Get compact GAQL syntax reference |
-| `get_reporting_view_doc` | Get available reporting views and their fields |
-| `get_reporting_fields_doc` | Get detailed field documentation |
+
+### 📖 Docs & Tool Guidance
+
+| Tool | Description |
+|------|-------------|
+| `get_tool_guide` | Compact map of tools and when to use them |
+| `get_gaql_doc` | Compact GAQL syntax reference |
+| `get_reporting_view_doc` | Reporting view names or detailed view metadata |
+| `get_reporting_fields_doc` | Detailed docs for specific reporting query fields |
+| `search_google_ads_fields` | Live field metadata search for GAQL query building |
+
+### 🔒 Session Controls
+
+| Tool | Description |
+|------|-------------|
+| `get_tool_visibility_profile` | Check whether mutation tools are unlocked |
+| `unlock_mutation_tools` | Reveal mutation tools for the current session |
+| `lock_mutation_tools` | Hide mutation tools for the current session |
+
+### 📈 Optimization & Recommendations
+
+| Tool | Description |
+|------|-------------|
+| `get_optimization_score_summary` | Account optimization score and uplift by type |
+| `list_recommendations` | Open recommendations filtered by type or campaign |
+| `apply_recommendations` | Apply existing recommendations |
+| `dismiss_recommendations` | Dismiss existing recommendations |
+| `list_recommendation_subscriptions` | Current recommendation auto-apply subscriptions |
+| `create_recommendation_subscription` | Create a paused or enabled subscription |
+| `set_recommendation_subscription_status` | Pause or enable a subscription |
+
+### 🔎 Search Terms
+
+| Tool | Description |
+|------|-------------|
+| `list_campaign_search_term_insights` | Campaign-level insight categories and search terms |
+| `list_customer_search_term_insights` | Account-level insight categories and search terms |
+| `analyze_search_terms` | Heuristic exact-match and negative keyword candidates |
+
+### 📊 Simulations
+
+| Tool | Description |
+|------|-------------|
+| `list_campaign_simulations` | Campaign-level bid/budget simulations |
+| `list_ad_group_simulations` | Ad-group-level simulations |
+| `list_ad_group_criterion_simulations` | Keyword-level CPC bid simulations |
+
+### 🕐 Change History
+
+| Tool | Description |
+|------|-------------|
+| `list_change_statuses` | Changed resources and last change timestamps |
+| `list_change_events` | Granular change events with field-level detail |
+
+### 🏎️ Performance Max
+
+| Tool | Description |
+|------|-------------|
+| `list_asset_group_assets` | Asset links and serving diagnostics |
+| `list_asset_group_top_combinations` | Top served asset combinations |
+| `list_performance_max_placements` | Placement names and impression counts |
 
 ### 📢 Campaign Management
 
@@ -206,6 +268,38 @@ Once connected, just talk naturally:
 "Remove the 'Old' label from all ad groups"
 ```
 
+### Optimization
+
+```
+"What's my optimization score?"
+"Show me recommendations for campaign 123"
+"Apply the top recommendation"
+"What bid simulations are available for my campaigns?"
+```
+
+### Search Terms
+
+```
+"What search terms are triggering my ads?"
+"Analyze search terms and find negative keyword candidates"
+"Show me search term insights for campaign 123"
+```
+
+### Performance Max
+
+```
+"List asset group assets and their serving status"
+"Show me the top asset combinations for my PMax campaign"
+"What placements are my PMax ads showing on?"
+```
+
+### Change History
+
+```
+"What changed in my account in the last 7 days?"
+"Show me change events for campaign 123"
+```
+
 ### Smart Campaigns
 
 ```
@@ -221,9 +315,11 @@ google_ads_mcp/
 ├── ads_mcp/
 │   ├── server.py              # Server entry point (Gemini / SSE)
 │   ├── stdio.py               # Server entry point (Claude Code / stdio)
-│   ├── coordinator.py         # Shared FastMCP instance
+│   ├── coordinator.py         # Shared FastMCP instance + search/visibility config
+│   ├── tooling.py             # Shared tool decorators and annotations
 │   ├── tools/
 │   │   ├── api.py             # Core: execute_gaql, list_accessible_accounts
+│   │   ├── docs.py            # GAQL & reporting docs, tool guide, visibility controls
 │   │   ├── campaigns.py       # Pause, resume, update budget
 │   │   ├── ad_groups.py       # Pause, enable, update bid
 │   │   ├── ads.py             # Pause, enable ads
@@ -232,8 +328,13 @@ google_ads_mcp/
 │   │   ├── labels.py          # Label CRUD & assignment
 │   │   ├── keyword_planner.py # Keyword research
 │   │   ├── smart_campaigns.py # Smart campaign suggestions
-│   │   └── docs.py            # GAQL & reporting docs
-│   └── context/               # GAQL docs & reporting view YAMLs
+│   │   ├── recommendations.py # Optimization score & recommendations
+│   │   ├── search_terms.py    # Search term insights & analysis
+│   │   ├── simulations.py     # Bid & budget simulations
+│   │   ├── changes.py         # Change history auditing
+│   │   ├── performance_max.py # PMax asset & placement diagnostics
+│   │   └── _gaql.py           # Shared GAQL query helpers
+│   └── context/               # GAQL docs, reporting view YAMLs, tool guide
 ├── tests/                     # Mirrors source structure
 ├── pyproject.toml
 └── README.md
