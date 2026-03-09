@@ -21,6 +21,7 @@ import inspect
 import re
 from unittest import mock
 
+from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.server.transforms.visibility import Visibility
@@ -40,6 +41,7 @@ from ads_mcp.tools import keywords
 from ads_mcp.tools import labels
 from ads_mcp.tools import negatives
 from ads_mcp.tools import performance_max
+from ads_mcp.tools import reporting
 from ads_mcp.tools import recommendations
 from ads_mcp.tools import search_terms
 from ads_mcp.tools import simulations
@@ -133,19 +135,28 @@ TOOL_MODULES = {
         "list_asset_group_top_combinations",
         "list_performance_max_placements",
     ],
+    reporting: [
+        "list_device_performance",
+        "list_geographic_performance",
+        "list_impression_share",
+        "list_keyword_quality_scores",
+        "list_rsa_ad_strength",
+        "list_conversion_actions",
+        "list_audience_performance",
+    ],
 }
 
 
 # ===================================================================
-# 1. Tool registration: all 55 tools exist as callable functions
+# 1. Tool registration: all 62 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_55(self):
+  def test_total_tool_count_is_62(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 55, f"Expected 55 tools, found {total}"
+    assert total == 62, f"Expected 62 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -484,7 +495,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 55
+    assert len(registered_tools) == 62
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -509,14 +520,6 @@ class TestFastMcpConfiguration:
         if isinstance(transform, BM25SearchTransform)
     )
     assert search_transform._max_results == 8
-    assert search_transform._always_visible == {
-        "get_tool_guide",
-        "list_accessible_accounts",
-        "execute_gaql",
-        "get_tool_visibility_profile",
-        "unlock_mutation_tools",
-        "lock_mutation_tools",
-    }
     assert (
         search_transform._search_result_serializer
         is compact_search_result_serializer
@@ -530,7 +533,149 @@ class TestFastMcpConfiguration:
     assert visibility_transform._enabled is False
     assert visibility_transform.tags == {MUTATE_TAG}
     assert visibility_transform.components == {"tool"}
-    assert "Use search_tools first" in mcp_server.instructions
+    assert (
+        "Read/reporting and docs tools are directly visible"
+        in mcp_server.instructions
+    )
+
+  def test_public_tool_list_exposes_all_non_mutation_tools(self):
+    public_tools = asyncio.run(mcp_server.list_tools())
+    raw_tools = asyncio.run(mcp_server._local_provider.list_tools())
+
+    expected_visible = {
+        tool.name
+        for tool in raw_tools
+        if MUTATE_TAG not in set(tool.tags or [])
+    }
+    public_tool_names = {tool.name for tool in public_tools}
+
+    assert public_tool_names == expected_visible | {
+        "search_tools",
+        "call_tool",
+    }
+
+    synthetic_tools = {"search_tools", "call_tool"}
+    search_transform = next(
+        transform
+        for transform in mcp_server._transforms
+        if isinstance(transform, BM25SearchTransform)
+    )
+    assert search_transform._always_visible == expected_visible
+
+    for tool in public_tools:
+      if tool.name not in synthetic_tools:
+        assert MUTATE_TAG not in set(tool.tags or [])
+
+    assert "analyze_search_terms" in public_tool_names
+    assert "get_optimization_score_summary" in public_tool_names
+    assert "list_device_performance" in public_tool_names
+    assert "search_google_ads_fields" in public_tool_names
+    assert "apply_recommendations" not in public_tool_names
+
+  def test_client_can_call_visible_tool_directly_and_via_proxy(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        with mock.patch(
+            "ads_mcp.tools.recommendations.run_gaql_query"
+        ) as mock_run:
+          mock_run.side_effect = [
+              [
+                  {
+                      "customer.id": "123",
+                      "customer.descriptive_name": "Test Customer",
+                      "customer.currency_code": "USD",
+                      "customer.optimization_score": 0.85,
+                      "customer.optimization_score_weight": 0.42,
+                      "metrics.optimization_score_uplift": 0.12,
+                      "metrics.optimization_score_url": "https://example.com",
+                  }
+              ],
+              [
+                  {
+                      "segments.recommendation_type": "KEYWORD",
+                      "metrics.optimization_score_uplift": 0.05,
+                      "metrics.optimization_score_url": (
+                          "https://example.com/keyword"
+                      ),
+                  }
+              ],
+              [
+                  {
+                      "customer.id": "123",
+                      "customer.descriptive_name": "Test Customer",
+                      "customer.currency_code": "USD",
+                      "customer.optimization_score": 0.85,
+                      "customer.optimization_score_weight": 0.42,
+                      "metrics.optimization_score_uplift": 0.12,
+                      "metrics.optimization_score_url": "https://example.com",
+                  }
+              ],
+              [
+                  {
+                      "segments.recommendation_type": "KEYWORD",
+                      "metrics.optimization_score_uplift": 0.05,
+                      "metrics.optimization_score_url": (
+                          "https://example.com/keyword"
+                      ),
+                  }
+              ],
+          ]
+
+          direct_result = await client.call_tool(
+              "get_optimization_score_summary",
+              {"customer_id": "123"},
+          )
+          proxy_result = await client.call_tool(
+              "call_tool",
+              {
+                  "name": "get_optimization_score_summary",
+                  "arguments": {"customer_id": "123"},
+              },
+          )
+
+        assert direct_result.data["customer_id"] == "123"
+        assert direct_result.data["optimization_score"] == 0.85
+        assert proxy_result.data["customer_id"] == "123"
+        assert proxy_result.data["recommendation_type_breakdown"] == [
+            {
+                "recommendation_type": "KEYWORD",
+                "optimization_score_uplift": 0.05,
+                "optimization_score_url": "https://example.com/keyword",
+            }
+        ]
+
+    asyncio.run(_run())
+
+  def test_client_session_unlock_updates_public_tool_list(self):
+    raw_tools = asyncio.run(mcp_server._local_provider.list_tools())
+    all_registered = {tool.name for tool in raw_tools}
+    locked_visible = {
+        tool.name
+        for tool in raw_tools
+        if MUTATE_TAG not in set(tool.tags or [])
+    }
+
+    async def _run():
+      async with Client(mcp_server) as client:
+        before_names = {tool.name for tool in await client.list_tools()}
+        assert before_names == locked_visible | {"search_tools", "call_tool"}
+        assert "apply_recommendations" not in before_names
+
+        unlock_result = await client.call_tool("unlock_mutation_tools", {})
+        assert unlock_result.data == {"mutation_tools_unlocked": True}
+
+        after_names = {tool.name for tool in await client.list_tools()}
+        assert after_names == all_registered | {"search_tools", "call_tool"}
+        assert "apply_recommendations" in after_names
+        assert "create_label" in after_names
+
+        lock_result = await client.call_tool("lock_mutation_tools", {})
+        assert lock_result.data == {"mutation_tools_unlocked": False}
+
+        relocked_names = {tool.name for tool in await client.list_tools()}
+        assert relocked_names == before_names
+
+    asyncio.run(_run())
 
   def test_compact_search_serializer_returns_minimal_shape(self):
     tools = asyncio.run(mcp_server._local_provider.list_tools())

@@ -1,11 +1,12 @@
 principles:
   - Most Google Ads tools take customer_id and optional login_customer_id.
     Focus on the other args when selecting a tool.
-  - Use get_tool_guide(topic) only when search_tools leaves multiple plausible
-    options.
+  - Read/reporting and docs tools are directly visible. Call them directly
+    once you know the tool name.
+  - Use get_tool_guide(topic) only when the visible tool list and search_tools
+    still leave multiple plausible options.
   - Prefer dedicated tools over execute_gaql when a dedicated tool exists.
-  - Use search_tools to find the right dedicated tool when the tool name is
-    unclear.
+  - Use search_tools only when the right tool name is unclear.
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
   - Start with the smallest dedicated tool that answers the question.
@@ -20,6 +21,17 @@ categories:
     tools:
       list_accessible_accounts: List accounts that can be used as login_customer_id.
       execute_gaql: Custom reporting reads when no dedicated read tool exists.
+
+  reporting:
+    summary: High-frequency performance and configuration reports.
+    tools:
+      list_device_performance: Campaign performance segmented by device.
+      list_geographic_performance: Campaign performance segmented by user or geographic location.
+      list_impression_share: Campaign impression share metrics.
+      list_keyword_quality_scores: Keyword quality score diagnostics.
+      list_rsa_ad_strength: Responsive search ad strength diagnostics.
+      list_conversion_actions: Conversion action configuration.
+      list_audience_performance: Campaign or ad-group audience performance.
 
   docs:
     summary: Documentation and field metadata.

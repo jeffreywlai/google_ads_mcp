@@ -29,6 +29,7 @@ from ads_mcp.tools import keywords
 from ads_mcp.tools import labels
 from ads_mcp.tools import negatives
 from ads_mcp.tools import performance_max
+from ads_mcp.tools import reporting
 from ads_mcp.tools import recommendations
 from ads_mcp.tools import search_terms
 from ads_mcp.tools import simulations
@@ -54,6 +55,7 @@ tools = [
     labels,
     negatives,
     performance_max,
+    reporting,
     recommendations,
     search_terms,
     simulations,
