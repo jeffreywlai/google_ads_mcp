@@ -15,6 +15,7 @@
 """This module provides tools for accessing Google Ads API documentation."""
 
 import os
+import re
 from typing import Any
 
 import yaml
@@ -85,6 +86,16 @@ def _get_tool_guide_content() -> str:
   return data
 
 
+def _topic_matches(topic: str, *texts: str) -> bool:
+  """Returns True when all topic tokens appear across the provided texts."""
+  topic_tokens = re.findall(r"[a-z0-9]+", topic.lower())
+  if not topic_tokens:
+    return False
+
+  haystack = " ".join(texts).lower()
+  return all(token in haystack for token in topic_tokens)
+
+
 def _get_view_doc_content(view: str) -> str:
   """Reads documentation for a specific view."""
   expected_dir = os.path.realpath(os.path.join(MODULE_DIR, "context", "views"))
@@ -152,19 +163,15 @@ def get_tool_guide(topic: str | None = None) -> str:
     return content
 
   guide = yaml.safe_load(content)
-  topic_lower = topic.lower()
   filtered_categories = {}
 
   for category_name, category_data in guide["categories"].items():
     summary = category_data.get("summary", "")
-    category_match = (
-        topic_lower in category_name.lower() or topic_lower in summary.lower()
-    )
+    category_match = _topic_matches(topic, category_name, summary)
     matched_tools = {
         tool_name: tool_summary
         for tool_name, tool_summary in category_data.get("tools", {}).items()
-        if topic_lower in tool_name.lower()
-        or topic_lower in tool_summary.lower()
+        if _topic_matches(topic, tool_name, tool_summary)
     }
 
     if category_match or matched_tools:

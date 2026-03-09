@@ -530,34 +530,50 @@ class TestFastMcpConfiguration:
     assert visibility_transform._enabled is False
     assert visibility_transform.tags == {MUTATE_TAG}
     assert visibility_transform.components == {"tool"}
+    assert "Use search_tools first" in mcp_server.instructions
 
   def test_compact_search_serializer_returns_minimal_shape(self):
     tools = asyncio.run(mcp_server._local_provider.list_tools())
     selected_tools = [
         tool
         for tool in tools
-        if tool.name in {"execute_gaql", "unlock_mutation_tools"}
+        if tool.name
+        in {
+            "execute_gaql",
+            "list_campaign_search_term_insights",
+            "unlock_mutation_tools",
+        }
     ]
+    selected_tools = sorted(selected_tools, key=lambda tool: tool.name)
 
     result = compact_search_result_serializer(selected_tools)
 
-    assert result == {
-        "tools": [
-            {
-                "name": "execute_gaql",
-                "mode": "read",
-                "summary": "Executes a GAQL query to get reporting data.",
-                "tags": ["gaql", "read", "reporting"],
-                "required_args": ["query", "customer_id"],
-                "optional_args": ["login_customer_id"],
-            },
-            {
-                "name": "unlock_mutation_tools",
-                "mode": "control",
-                "summary": (
-                    "Unlocks mutating tools for the current session only."
-                ),
-                "tags": ["control", "profiles", "visibility"],
-            },
-        ]
-    }
+    assert result == [
+        {
+            "name": "execute_gaql",
+            "mode": "read",
+            "workflow": "reporting",
+            "summary": "Executes a GAQL query to get reporting data.",
+            "required_args": ["query"],
+        },
+        {
+            "name": "list_campaign_search_term_insights",
+            "mode": "read",
+            "workflow": "search_terms",
+            "summary": (
+                "Lists campaign_search_term_insight rows with key metrics."
+            ),
+            "optional_args": [
+                "campaign_ids",
+                "date_range",
+                "min_clicks",
+                "min_impressions",
+            ],
+        },
+        {
+            "name": "unlock_mutation_tools",
+            "mode": "control",
+            "workflow": "profiles",
+            "summary": "Unlocks mutating tools for the current session only.",
+        },
+    ]

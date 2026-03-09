@@ -194,8 +194,9 @@ def execute_gaql(
 ) -> list[dict[str, Any]]:
   """Executes a GAQL query to get reporting data.
 
-  Prefer dedicated tools first. Use get_tool_guide to find them, then use
-  get_gaql_doc and get_reporting_view_doc when a custom GAQL query is needed.
+  Prefer dedicated tools first. Use search_tools before get_tool_guide, then
+  use get_gaql_doc and get_reporting_view_doc when a custom GAQL query is
+  needed.
   """
   return {
       "data": run_gaql_query(

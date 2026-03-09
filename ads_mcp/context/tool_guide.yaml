@@ -1,4 +1,8 @@
 principles:
+  - Most Google Ads tools take customer_id and optional login_customer_id.
+    Focus on the other args when selecting a tool.
+  - Use get_tool_guide(topic) only when search_tools leaves multiple plausible
+    options.
   - Prefer dedicated tools over execute_gaql when a dedicated tool exists.
   - Use search_tools to find the right dedicated tool when the tool name is
     unclear.

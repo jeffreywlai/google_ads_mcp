@@ -24,11 +24,14 @@ from ads_mcp.tooling import compact_search_result_serializer
 mcp_server = FastMCP(
     name="Google Ads API",
     instructions=(
-        "Google Ads API MCP server. Use these tools to manage Google"
-        " Ads campaigns, execute GAQL reporting queries, manage"
-        " negative keyword lists and shared sets, and access Google"
-        " Ads API documentation. Requires a configured google-ads.yaml"
-        " credentials file."
+        "Google Ads API MCP server. Use search_tools first to find the"
+        " smallest dedicated tool. Most Google Ads tools take customer_id"
+        " and optional login_customer_id, so focus on the other args when"
+        " choosing a tool. Use get_tool_guide(topic) only when search"
+        " results are ambiguous. Use execute_gaql only for custom read"
+        " queries not covered by dedicated tools. Mutation tools stay"
+        " hidden until unlock_mutation_tools. Requires a configured"
+        " google-ads.yaml credentials file."
     ),
     mask_error_details=True,
     transforms=[

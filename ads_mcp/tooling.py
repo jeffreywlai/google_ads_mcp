@@ -25,6 +25,39 @@ from mcp.types import ToolAnnotations
 READ_TAG = "read"
 MUTATE_TAG = "mutate"
 
+_COMMON_DISCOVERY_ARGS = {
+    "customer_id",
+    "login_customer_id",
+    "limit",
+    "partial_failure",
+}
+_GENERIC_TAGS = {READ_TAG, MUTATE_TAG, "control"}
+_WORKFLOW_TAG_PRIORITY = [
+    "guide",
+    "profiles",
+    "docs",
+    "discovery",
+    "reporting",
+    "gaql",
+    "optimization",
+    "campaigns",
+    "ad_groups",
+    "ads",
+    "keywords",
+    "negatives",
+    "labels",
+    "planning",
+    "smart_campaigns",
+    "search_terms",
+    "simulations",
+    "changes",
+    "audit",
+    "performance_max",
+    "accounts",
+    "fields",
+    "visibility",
+]
+
 
 def _build_annotations(
     *,
@@ -140,7 +173,23 @@ def _first_sentence(description: str) -> str:
   return normalized
 
 
-def compact_search_result_serializer(tools: Sequence[Any]) -> dict[str, Any]:
+def _workflow_tag(tags: Sequence[str]) -> str:
+  """Returns the most useful workflow tag for discovery output."""
+  tag_set = set(tags)
+  for candidate in _WORKFLOW_TAG_PRIORITY:
+    if candidate in tag_set:
+      return candidate
+
+  for tag in tags:
+    if tag not in _GENERIC_TAGS:
+      return tag
+
+  return "general"
+
+
+def compact_search_result_serializer(
+    tools: Sequence[Any],
+) -> list[dict[str, Any]]:
   """Serializes tool search results into a compact, low-token summary."""
   items = []
   for tool in tools:
@@ -149,6 +198,16 @@ def compact_search_result_serializer(tools: Sequence[Any]) -> dict[str, Any]:
     required_args = list(parameters.get("required", []))
     optional_args = [
         arg_name for arg_name in properties if arg_name not in required_args
+    ]
+    required_args = [
+        arg_name
+        for arg_name in required_args
+        if arg_name not in _COMMON_DISCOVERY_ARGS
+    ]
+    optional_args = [
+        arg_name
+        for arg_name in optional_args
+        if arg_name not in _COMMON_DISCOVERY_ARGS
     ]
 
     tags = sorted(tool.tags or [])
@@ -162,14 +221,13 @@ def compact_search_result_serializer(tools: Sequence[Any]) -> dict[str, Any]:
     item = {
         "name": tool.name,
         "mode": mode,
+        "workflow": _workflow_tag(tags),
         "summary": _first_sentence(tool.description or ""),
     }
-    if tags:
-      item["tags"] = tags
     if required_args:
       item["required_args"] = required_args
     if optional_args:
-      item["optional_args"] = optional_args[:5]
+      item["optional_args"] = optional_args[:4]
     items.append(item)
 
-  return {"tools": items}
+  return items

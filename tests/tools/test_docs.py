@@ -135,6 +135,31 @@ categories:
       docs.get_tool_guide("missing")
 
 
+def test_get_tool_guide_matches_multiword_topics():
+  """Tests topic matching across tokenized natural-language queries."""
+  guide_yaml = """
+principles:
+  - Prefer dedicated tools.
+categories:
+  negatives:
+    summary: Shared sets and negative keyword management.
+    tools:
+      list_shared_set_keywords: List keywords in a shared negative keyword list.
+  docs:
+    summary: Documentation and guides.
+    tools:
+      get_gaql_doc: GAQL docs.
+"""
+  with mock.patch(
+      "builtins.open", new_callable=mock.mock_open, read_data=guide_yaml
+  ):
+    result = docs.get_tool_guide("negative keywords")
+
+  assert "negatives:" in result
+  assert "list_shared_set_keywords" in result
+  assert "docs:" not in result
+
+
 @mock.patch(
     "ads_mcp.tools.docs.get_visibility_rules", new_callable=mock.AsyncMock
 )
