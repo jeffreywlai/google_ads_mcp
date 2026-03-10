@@ -15,10 +15,14 @@
 """Tests for changes.py."""
 
 import asyncio
+from datetime import date
+from datetime import timedelta
 from unittest import mock
 
 from ads_mcp.server import mcp_server
 from ads_mcp.tools import changes
+from fastmcp.exceptions import ToolError
+import pytest
 
 
 CUSTOMER_ID = "1234567890"
@@ -64,6 +68,18 @@ def test_list_change_events_builds_query():
   assert "'2026-03-08 23:59:59'" in query
   assert "change_event.old_resource" not in query
   assert "change_event.new_resource" not in query
+
+
+def test_list_change_events_rejects_dates_older_than_30_days():
+  too_old_start = (date.today() - timedelta(days=31)).isoformat()
+  end_date = date.today().isoformat()
+
+  with pytest.raises(ToolError, match="last 30 days"):
+    changes.list_change_events(
+        CUSTOMER_ID,
+        start_date=too_old_start,
+        end_date=end_date,
+    )
 
 
 def test_change_tools_expose_named_output_schemas():

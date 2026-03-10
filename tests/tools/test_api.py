@@ -110,3 +110,33 @@ def test_execute_gaql(mock_google_ads_client, _):
     assert api.execute_gaql("SELECT campaign.id FROM campaign", "123") == {
         "data": [{"campaign.id": "123"}]
     }
+
+
+def test_execute_gaql_applies_max_rows_and_returns_metadata():
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    assert api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        max_rows=2,
+    ) == {
+        "data": [{"campaign.id": "1"}, {"campaign.id": "2"}],
+        "returned_row_count": 2,
+        "total_row_count": 3,
+        "truncated": True,
+        "max_rows_applied": 2,
+    }
+
+
+def test_execute_gaql_rejects_non_positive_max_rows():
+  with pytest.raises(api.ToolError, match="max_rows must be greater than 0"):
+    api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        max_rows=0,
+    )

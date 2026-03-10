@@ -15,8 +15,10 @@
 """The coordinator for the Google Ads API MCP."""
 
 from collections.abc import Sequence
+from typing import Annotated
 
 from fastmcp import FastMCP
+from fastmcp.server.context import Context
 from fastmcp.server.context import _current_context
 from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.server.transforms.visibility import get_visibility_rules
@@ -24,6 +26,31 @@ from fastmcp.tools.tool import Tool
 
 from ads_mcp.tooling import MUTATE_TAG
 from ads_mcp.tooling import compact_search_result_serializer
+
+_SEARCH_RESULT_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "mode": {"type": "string"},
+        "workflow": {"type": "string"},
+        "summary": {"type": "string"},
+        "required_args": {"type": "array", "items": {"type": "string"}},
+        "optional_args": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["name", "mode", "workflow", "summary"],
+    "additionalProperties": False,
+}
+_SEARCH_TOOL_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "result": {
+            "type": "array",
+            "items": _SEARCH_RESULT_ITEM_SCHEMA,
+        }
+    },
+    "required": ["result"],
+    "x-fastmcp-wrap-result": True,
+}
 
 
 async def _mutation_tools_unlocked() -> bool:
@@ -49,6 +76,24 @@ async def _mutation_tools_unlocked() -> bool:
 
 class NonMutationVisibleSearchTransform(BM25SearchTransform):
   """BM25 search that keeps all non-mutation tools directly visible."""
+
+  def _make_search_tool(self) -> Tool:
+    transform = self
+
+    async def search_tools(
+        query: Annotated[str, "Natural language query to search for tools"],
+        ctx: Context = None,  # type: ignore[assignment]
+    ) -> list[dict[str, object]]:
+      """Search for tools using natural language."""
+      visible_tools = await transform._get_visible_tools(ctx)
+      results = await transform._search(visible_tools, query)
+      return await transform._render_results(results)
+
+    return Tool.from_function(
+        fn=search_tools,
+        name=self._search_tool_name,
+        output_schema=_SEARCH_TOOL_OUTPUT_SCHEMA,
+    )
 
   async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
     if await _mutation_tools_unlocked():
@@ -82,7 +127,7 @@ mcp_server = FastMCP(
         " known. Mutation tools stay hidden until unlock_mutation_tools."
         " Requires a configured google-ads.yaml credentials file."
     ),
-    mask_error_details=True,
+    mask_error_details=False,
     transforms=[
         NonMutationVisibleSearchTransform(
             max_results=8,

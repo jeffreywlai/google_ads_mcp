@@ -27,6 +27,8 @@ from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import gaql_quote_string
 from ads_mcp.tools.api import run_gaql_query
 
+_CHANGE_EVENT_MAX_LOOKBACK_DAYS = 30
+
 
 def _default_date_range(days_back: int) -> tuple[str, str]:
   end_date = date.today()
@@ -47,6 +49,25 @@ def _resolve_date_range(
     return _default_date_range(days_back)
   if start_date > end_date:
     raise ToolError("start_date must be on or before end_date.")
+  return start_date, end_date
+
+
+def _resolve_change_event_date_range(
+    start_date: str | None,
+    end_date: str | None,
+    days_back: int,
+) -> tuple[str, str]:
+  """Resolves change_event dates and enforces the API's 30-day lookback."""
+  start_date, end_date = _resolve_date_range(start_date, end_date, days_back)
+  oldest_supported_start = (
+      date.today() - timedelta(days=_CHANGE_EVENT_MAX_LOOKBACK_DAYS)
+  ).isoformat()
+  if start_date < oldest_supported_start:
+    raise ToolError(
+        "change_event only supports the last"
+        f" {_CHANGE_EVENT_MAX_LOOKBACK_DAYS} days. Use start_date >= "
+        f"{oldest_supported_start}."
+    )
   return start_date, end_date
 
 
@@ -139,6 +160,7 @@ def list_change_events(
           UPDATE, or REMOVE.
       change_resource_types: Optional changed resource types.
       start_date: Inclusive YYYY-MM-DD start date. Defaults to 7 days ago.
+          Google Ads only exposes change_event for the last 30 days.
       end_date: Inclusive YYYY-MM-DD end date. Defaults to today.
       limit: Maximum number of rows to return.
       login_customer_id: Optional manager account ID.
@@ -147,7 +169,9 @@ def list_change_events(
       A dict containing change event rows.
   """
   validate_limit(limit)
-  start_date, end_date = _resolve_date_range(start_date, end_date, 7)
+  start_date, end_date = _resolve_change_event_date_range(
+      start_date, end_date, 7
+  )
 
   where_conditions = [
       "change_event.change_date_time >= "

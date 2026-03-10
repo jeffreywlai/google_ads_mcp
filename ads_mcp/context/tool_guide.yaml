@@ -133,7 +133,7 @@ categories:
     summary: Audit recent changes.
     tools:
       list_change_statuses: Changed resources and last change timestamps.
-      list_change_events: Granular change events without full old/new resource blobs.
+      list_change_events: Granular change events for the last 30 days without full old/new resource blobs.
 
   performance_max:
     summary: Performance Max diagnostics.

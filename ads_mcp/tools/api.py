@@ -36,6 +36,17 @@ from ads_mcp.utils import ROOT_DIR
 
 _ADS_CLIENT: GoogleAdsClient | None = None
 _DEFAULT_LOGIN_CUSTOMER_ID: str | None = None
+_EXECUTE_GAQL_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "data": {"type": "array", "items": {"type": "object"}},
+        "returned_row_count": {"type": "integer"},
+        "total_row_count": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "max_rows_applied": {"type": "integer"},
+    },
+    "required": ["data"],
+}
 
 
 def get_ads_client(
@@ -179,29 +190,37 @@ def run_gaql_query(
 @ads_read_tool(
     mcp,
     tags={"gaql", "reporting"},
-    output_schema={
-        "type": "object",
-        "properties": {
-            "data": {"type": "array", "items": {"type": "object"}},
-        },
-        "required": ["data"],
-    },
+    output_schema=_EXECUTE_GAQL_OUTPUT_SCHEMA,
 )
 def execute_gaql(
     query: str,
     customer_id: str,
+    max_rows: int | None = None,
     login_customer_id: str | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
   """Executes a GAQL query to get reporting data.
 
   Prefer dedicated visible tools first. Use search_tools only when the right
   tool is unclear, then use get_tool_guide, get_gaql_doc, and
-  get_reporting_view_doc when a custom GAQL query is needed.
+  get_reporting_view_doc when a custom GAQL query is needed. Set max_rows to
+  cap large result sets without changing the underlying GAQL query.
   """
+  if max_rows is not None and max_rows <= 0:
+    raise ToolError("max_rows must be greater than 0.")
+
+  rows = run_gaql_query(
+      query=query,
+      customer_id=customer_id,
+      login_customer_id=login_customer_id,
+  )
+  if max_rows is None:
+    return {"data": rows}
+
+  returned_rows = rows[:max_rows]
   return {
-      "data": run_gaql_query(
-          query=query,
-          customer_id=customer_id,
-          login_customer_id=login_customer_id,
-      )
+      "data": returned_rows,
+      "returned_row_count": len(returned_rows),
+      "total_row_count": len(rows),
+      "truncated": len(rows) > max_rows,
+      "max_rows_applied": max_rows,
   }

@@ -17,6 +17,8 @@ and cross-tool state management.
 """
 
 import asyncio
+from datetime import date
+from datetime import timedelta
 import inspect
 import re
 from unittest import mock
@@ -686,6 +688,119 @@ class TestFastMcpConfiguration:
 
     asyncio.run(_run())
 
+  def test_client_change_events_empty_results_remain_structured(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        with mock.patch(
+            "ads_mcp.tools.changes.run_gaql_query",
+            return_value=[],
+        ):
+          direct_result = await client.call_tool(
+              "list_change_events",
+              {"customer_id": "123"},
+          )
+          proxy_result = await client.call_tool(
+              "call_tool",
+              {
+                  "name": "list_change_events",
+                  "arguments": {"customer_id": "123"},
+              },
+          )
+
+        assert direct_result.structured_content == {"change_events": []}
+        assert proxy_result.structured_content == {"change_events": []}
+        assert direct_result.data.change_events == []
+        assert proxy_result.data == {"change_events": []}
+
+    asyncio.run(_run())
+
+  def test_client_can_proxy_customer_search_term_insights(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        rows = [
+            {
+                "customer_search_term_insight.id": "1",
+                "customer_search_term_insight.category_label": "Brand",
+                "segments.campaign": "customers/123/campaigns/7",
+                "segments.search_term": "brand shoes",
+                "segments.search_subcategory": "Footwear",
+                "metrics.impressions": 100,
+                "metrics.clicks": 10,
+                "metrics.ctr": 0.1,
+                "metrics.conversions": 2,
+                "metrics.conversions_value": 50.0,
+            }
+        ]
+
+        with mock.patch(
+            "ads_mcp.tools.search_terms.run_gaql_query",
+            return_value=rows,
+        ):
+          direct_result = await client.call_tool(
+              "list_customer_search_term_insights",
+              {"customer_id": "123"},
+          )
+          proxy_result = await client.call_tool(
+              "call_tool",
+              {
+                  "name": "list_customer_search_term_insights",
+                  "arguments": {"customer_id": "123"},
+              },
+          )
+
+        expected = {"customer_search_term_insights": rows}
+        assert direct_result.structured_content == expected
+        assert proxy_result.structured_content == expected
+        assert direct_result.data == expected
+        assert proxy_result.data == expected
+
+    asyncio.run(_run())
+
+  def test_client_search_tools_returns_structured_results_and_empty_lists(
+      self,
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        populated = await client.call_tool(
+            "search_tools",
+            {"query": "change events history"},
+        )
+        empty = await client.call_tool(
+            "search_tools",
+            {"query": "quokka narwhal xylophone"},
+        )
+
+        assert populated.structured_content["result"][0]["name"] == (
+            "list_change_events"
+        )
+        assert populated.data[0].name == "list_change_events"
+        assert populated.data[0].workflow == "changes"
+        assert empty.structured_content == {"result": []}
+        assert empty.data == []
+
+    asyncio.run(_run())
+
+  def test_call_tool_surfaces_underlying_tool_errors(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        too_old_start = (date.today() - timedelta(days=31)).isoformat()
+        end_date = date.today().isoformat()
+
+        with pytest.raises(ToolError, match="last 30 days"):
+          await client.call_tool(
+              "call_tool",
+              {
+                  "name": "list_change_events",
+                  "arguments": {
+                      "customer_id": "123",
+                      "start_date": too_old_start,
+                      "end_date": end_date,
+                  },
+              },
+          )
+
+    asyncio.run(_run())
+
   def test_client_session_unlock_updates_public_tool_list(self):
     raw_tools = asyncio.run(mcp_server._local_provider.list_tools())
     all_registered = {tool.name for tool in raw_tools}
@@ -740,6 +855,7 @@ class TestFastMcpConfiguration:
             "workflow": "reporting",
             "summary": "Executes a GAQL query to get reporting data.",
             "required_args": ["query"],
+            "optional_args": ["max_rows"],
         },
         {
             "name": "list_campaign_search_term_insights",
