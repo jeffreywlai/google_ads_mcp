@@ -25,6 +25,7 @@ from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.util import get_nested_attr
 from google.ads.googleads.v23.services.services.customer_service import CustomerServiceClient
 from google.ads.googleads.v23.services.services.google_ads_service import GoogleAdsServiceClient
+from google.ads.googleads.v23.services.types.google_ads_service import SearchGoogleAdsRequest
 from google.oauth2.credentials import Credentials
 import proto
 import yaml
@@ -169,6 +170,20 @@ def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
   return output
 
 
+def _gaql_response_rows(
+    query_res: Any,
+    field_paths: list[str],
+) -> list[dict[str, Any]]:
+  """Converts a non-stream Google Ads search response into plain dict rows."""
+  return [
+      {
+          field_name: format_value(get_nested_attr(row, field_name))
+          for field_name in field_paths
+      }
+      for row in query_res.results
+  ]
+
+
 def run_gaql_query(
     query: str,
     customer_id: str,
@@ -183,6 +198,38 @@ def run_gaql_query(
   try:
     query_res = ads_service.search_stream(query=query, customer_id=customer_id)
     return gaql_results_to_dicts(query_res)
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+
+def run_gaql_query_page(
+    query: str,
+    customer_id: str,
+    page_size: int,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Executes a paginated GAQL query and returns rows plus page metadata."""
+  query = preprocess_gaql(query)
+  ads_client = get_ads_client(login_customer_id)
+  ads_service: GoogleAdsServiceClient = ads_client.get_service(
+      "GoogleAdsService"
+  )
+  request = SearchGoogleAdsRequest(
+      customer_id=customer_id,
+      query=query,
+      page_size=page_size,
+  )
+  if page_token:
+    request.page_token = page_token
+
+  try:
+    response = ads_service.search(request=request)
+    return {
+        "rows": _gaql_response_rows(response, response.field_mask.paths),
+        "next_page_token": response.next_page_token or None,
+        "total_results_count": int(response.total_results_count),
+    }
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 

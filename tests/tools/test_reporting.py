@@ -79,7 +79,12 @@ def test_list_impression_share_can_include_non_enabled_campaigns():
 
 
 def test_list_keyword_quality_scores_builds_filtered_query():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
     reporting.list_keyword_quality_scores(
         CUSTOMER_ID,
         campaign_ids=["111"],
@@ -87,7 +92,7 @@ def test_list_keyword_quality_scores_builds_filtered_query():
         min_quality_score=4,
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM keyword_view" in query
   assert "ad_group_criterion.type = KEYWORD" in query
   assert "ad_group_criterion.negative = FALSE" in query
@@ -95,6 +100,7 @@ def test_list_keyword_quality_scores_builds_filtered_query():
   assert "ad_group.id IN (222)" in query
   assert "ad_group_criterion.quality_info.quality_score >= 4" in query
   assert "ad_group_criterion.quality_info.creative_quality_score" in query
+  assert "LIMIT" not in query
 
 
 def test_list_keyword_quality_scores_rejects_invalid_score():
@@ -112,6 +118,32 @@ def test_list_keyword_quality_scores_can_omit_limit_clause():
   query = mock_run.call_args.args[0]
   assert "FROM keyword_view" in query
   assert "LIMIT" not in query
+
+
+def test_list_keyword_quality_scores_returns_pagination_metadata():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [{"ad_group_criterion.criterion_id": "1"}],
+        "next_page_token": "next-page",
+        "total_results_count": 18050,
+    }
+
+    result = reporting.list_keyword_quality_scores(
+        CUSTOMER_ID,
+        limit=1000,
+        page_token="current-page",
+    )
+
+  assert mock_run.call_args.kwargs["page_size"] == 1000
+  assert mock_run.call_args.kwargs["page_token"] == "current-page"
+  assert result == {
+      "keyword_quality_scores": [{"ad_group_criterion.criterion_id": "1"}],
+      "returned_row_count": 1,
+      "total_row_count": 18050,
+      "total_page_count": 19,
+      "next_page_token": "next-page",
+      "page_size": 1000,
+  }
 
 
 def test_list_rsa_ad_strength_filters_to_responsive_search_ads():

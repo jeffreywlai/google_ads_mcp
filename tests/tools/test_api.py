@@ -140,3 +140,31 @@ def test_execute_gaql_rejects_non_positive_max_rows():
         "123",
         max_rows=0,
     )
+
+
+def test_run_gaql_query_page_returns_rows_and_metadata():
+  mock_client = mock.Mock()
+  mock_ads_service = mock_client.get_service.return_value
+  mock_ads_service.search.return_value = mock.Mock(
+      results=[mock.Mock()],
+      field_mask=mock.Mock(paths=["campaign.id"]),
+      next_page_token="next-page",
+      total_results_count=250,
+  )
+
+  with mock.patch(
+      "ads_mcp.tools.api.get_ads_client", return_value=mock_client
+  ):
+    with mock.patch("ads_mcp.tools.api.get_nested_attr", return_value="123"):
+      result = api.run_gaql_query_page(
+          "SELECT campaign.id FROM campaign",
+          "123",
+          page_size=100,
+          page_token="current-page",
+      )
+
+  assert result == {
+      "rows": [{"campaign.id": "123"}],
+      "next_page_token": "next-page",
+      "total_results_count": 250,
+  }

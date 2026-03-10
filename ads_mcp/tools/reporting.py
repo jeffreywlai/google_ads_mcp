@@ -14,6 +14,7 @@
 
 """Curated reporting tools for high-frequency Google Ads read workflows."""
 
+import math
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -25,6 +26,7 @@ from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _date_range_condition(date_range: str) -> str:
@@ -53,13 +55,6 @@ def _validate_quality_score(min_quality_score: int | None) -> None:
 
 
 reporting_tool = ads_read_tool(mcp, tags={"reporting"})
-
-
-def _limit_clause(limit: int | None) -> str:
-  if limit is None:
-    return ""
-  validate_limit(limit)
-  return f"\n      LIMIT {limit}"
 
 
 @reporting_tool
@@ -259,6 +254,7 @@ def list_keyword_quality_scores(
     ad_group_ids: list[str] | None = None,
     min_quality_score: int | None = None,
     limit: int | None = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists keyword quality score diagnostics.
@@ -268,14 +264,17 @@ def list_keyword_quality_scores(
       campaign_ids: Optional campaign IDs to filter to.
       ad_group_ids: Optional ad group IDs to filter to.
       min_quality_score: Optional minimum quality score from 1 to 10.
-      limit: Maximum number of rows to return. Set to None to omit the
-          GAQL LIMIT clause.
+      limit: Page size when paginating quality-score results. Set to None
+          to return all rows without pagination.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
       A dict containing keyword quality score rows.
   """
   _validate_quality_score(min_quality_score)
+  if limit is not None:
+    validate_limit(limit)
 
   where_conditions = [
       "ad_group_criterion.type = KEYWORD",
@@ -312,14 +311,37 @@ def list_keyword_quality_scores(
       FROM keyword_view
       {build_where_clause(where_conditions)}
       ORDER BY ad_group_criterion.quality_info.quality_score ASC
-  """ + _limit_clause(
-      limit
+  """
+
+  if limit is None:
+    rows = run_gaql_query(query, customer_id, login_customer_id)
+    return {
+        "keyword_quality_scores": rows,
+        "returned_row_count": len(rows),
+        "total_row_count": len(rows),
+        "total_page_count": 1,
+        "next_page_token": None,
+    }
+
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  total_row_count = page["total_results_count"]
+  total_page_count = (
+      math.ceil(total_row_count / limit) if total_row_count else 0
   )
 
   return {
-      "keyword_quality_scores": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
+      "keyword_quality_scores": page["rows"],
+      "returned_row_count": len(page["rows"]),
+      "total_row_count": total_row_count,
+      "total_page_count": total_page_count,
+      "next_page_token": page["next_page_token"],
+      "page_size": limit,
   }
 
 
