@@ -23,13 +23,15 @@ from ads_mcp import stdio
 @mock.patch("ads_mcp.stdio.mcp_server")
 @mock.patch("ads_mcp.stdio.api")
 @mock.patch("ads_mcp.stdio.update_views_yaml", new_callable=mock.Mock)
-def test_main(mock_update_views, mock_api, mock_mcp_server):
+@mock.patch("builtins.print")
+def test_main(mock_print, mock_update_views, mock_api, mock_mcp_server):
   """Tests main function."""
   with mock.patch("ads_mcp.stdio.asyncio.run"):
     stdio.main()
 
   mock_update_views.assert_called_once()
   mock_api.get_ads_client.assert_called_once()
+  mock_print.assert_not_called()
   mock_mcp_server.run.assert_called_once_with(
       transport="stdio", show_banner=False
   )
