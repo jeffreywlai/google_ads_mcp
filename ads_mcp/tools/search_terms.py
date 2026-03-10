@@ -172,7 +172,6 @@ def list_customer_search_term_insights(
       SELECT
         customer_search_term_insight.id,
         customer_search_term_insight.category_label,
-        segments.campaign,
         segments.search_term,
         segments.search_subcategory,
         metrics.impressions,

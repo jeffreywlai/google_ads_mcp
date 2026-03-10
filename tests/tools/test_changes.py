@@ -82,6 +82,41 @@ def test_list_change_events_rejects_dates_older_than_30_days():
     )
 
 
+def test_list_change_events_defaults_end_date_to_today():
+  start_date = "2026-03-01"
+
+  with mock.patch(
+      "ads_mcp.tools.changes.run_gaql_query",
+      return_value=[],
+  ) as mock_query:
+    changes.list_change_events(
+        CUSTOMER_ID,
+        start_date=start_date,
+    )
+
+  query = mock_query.call_args.args[0]
+  assert f"'{start_date} 00:00:00'" in query
+  assert f"'{date.today().isoformat()} 23:59:59'" in query
+
+
+def test_list_change_statuses_defaults_start_date_when_only_end_date_provided():
+  end_date = "2026-03-08"
+  expected_start_date = (date.today() - timedelta(days=7)).isoformat()
+
+  with mock.patch(
+      "ads_mcp.tools.changes.run_gaql_query",
+      return_value=[],
+  ) as mock_query:
+    changes.list_change_statuses(
+        CUSTOMER_ID,
+        end_date=end_date,
+    )
+
+  query = mock_query.call_args.args[0]
+  assert f"'{expected_start_date} 00:00:00'" in query
+  assert f"'{end_date} 23:59:59'" in query
+
+
 def test_change_tools_expose_named_output_schemas():
   async def get_schemas():
     return (

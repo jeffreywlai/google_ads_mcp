@@ -41,12 +41,11 @@ def _resolve_date_range(
     end_date: str | None,
     days_back: int,
 ) -> tuple[str, str]:
-  if start_date and not end_date:
-    raise ToolError("end_date is required when start_date is provided.")
-  if end_date and not start_date:
-    raise ToolError("start_date is required when end_date is provided.")
-  if not start_date and not end_date:
-    return _default_date_range(days_back)
+  default_start_date, default_end_date = _default_date_range(days_back)
+  if not start_date:
+    start_date = default_start_date
+  if not end_date:
+    end_date = default_end_date
   if start_date > end_date:
     raise ToolError("start_date must be on or before end_date.")
   return start_date, end_date

@@ -55,6 +55,13 @@ def _validate_quality_score(min_quality_score: int | None) -> None:
 reporting_tool = ads_read_tool(mcp, tags={"reporting"})
 
 
+def _limit_clause(limit: int | None) -> str:
+  if limit is None:
+    return ""
+  validate_limit(limit)
+  return f"\n      LIMIT {limit}"
+
+
 @reporting_tool
 def list_device_performance(
     customer_id: str,
@@ -251,7 +258,7 @@ def list_keyword_quality_scores(
     campaign_ids: list[str] | None = None,
     ad_group_ids: list[str] | None = None,
     min_quality_score: int | None = None,
-    limit: int = 100,
+    limit: int | None = 100,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists keyword quality score diagnostics.
@@ -261,13 +268,13 @@ def list_keyword_quality_scores(
       campaign_ids: Optional campaign IDs to filter to.
       ad_group_ids: Optional ad group IDs to filter to.
       min_quality_score: Optional minimum quality score from 1 to 10.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. Set to None to omit the
+          GAQL LIMIT clause.
       login_customer_id: Optional manager account ID.
 
   Returns:
       A dict containing keyword quality score rows.
   """
-  validate_limit(limit)
   _validate_quality_score(min_quality_score)
 
   where_conditions = [
@@ -305,8 +312,9 @@ def list_keyword_quality_scores(
       FROM keyword_view
       {build_where_clause(where_conditions)}
       ORDER BY ad_group_criterion.quality_info.quality_score ASC
-      LIMIT {limit}
-  """
+  """ + _limit_clause(
+      limit
+  )
 
   return {
       "keyword_quality_scores": run_gaql_query(

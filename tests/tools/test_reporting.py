@@ -102,6 +102,18 @@ def test_list_keyword_quality_scores_rejects_invalid_score():
     reporting.list_keyword_quality_scores(CUSTOMER_ID, min_quality_score=11)
 
 
+def test_list_keyword_quality_scores_can_omit_limit_clause():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    reporting.list_keyword_quality_scores(
+        CUSTOMER_ID,
+        limit=None,
+    )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM keyword_view" in query
+  assert "LIMIT" not in query
+
+
 def test_list_rsa_ad_strength_filters_to_responsive_search_ads():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
     reporting.list_rsa_ad_strength(

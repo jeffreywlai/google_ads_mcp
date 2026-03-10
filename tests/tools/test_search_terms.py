@@ -69,6 +69,7 @@ def test_list_customer_search_term_insights_uses_campaign_resources():
   query = mock_query.call_args.args[0]
   assert "FROM customer_search_term_insight" in query
   assert "segments.campaign IN (" in query
+  assert "segments.campaign," not in query
   assert "'customers/1234567890/campaigns/111'" in query
   assert "'customers/1234567890/campaigns/222'" in query
   assert "metrics.cost_micros" not in query
