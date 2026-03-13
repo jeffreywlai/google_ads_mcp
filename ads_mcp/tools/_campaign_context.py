@@ -14,10 +14,64 @@
 
 """Helpers for lightweight campaign status/spend context."""
 
+from collections import OrderedDict
+from copy import deepcopy
+import time
 from typing import Any
 
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools.api import run_gaql_query
+
+
+_CAMPAIGN_CONTEXT_CACHE_TTL_SECONDS = 15.0
+_CAMPAIGN_CONTEXT_CACHE_MAX_ENTRIES = 128
+_CAMPAIGN_CONTEXT_CACHE: OrderedDict[
+    tuple[str, str | None, str, tuple[str, ...]],
+    tuple[float, dict[str, dict[str, Any]]],
+] = OrderedDict()
+
+
+def _campaign_context_cache_key(
+    customer_id: str,
+    campaign_ids: list[str],
+    login_customer_id: str | None,
+    spend_date_range: str,
+) -> tuple[str, str | None, str, tuple[str, ...]]:
+  """Builds a cache key for campaign context reads."""
+  return (
+      customer_id,
+      login_customer_id,
+      spend_date_range,
+      tuple(sorted(set(campaign_ids), key=int)),
+  )
+
+
+def _cache_get(
+    key: tuple[str, str | None, str, tuple[str, ...]],
+) -> dict[str, dict[str, Any]] | None:
+  """Returns a cached campaign context when still fresh."""
+  cache_entry = _CAMPAIGN_CONTEXT_CACHE.get(key)
+  if not cache_entry:
+    return None
+
+  cached_at, context = cache_entry
+  if time.monotonic() - cached_at > _CAMPAIGN_CONTEXT_CACHE_TTL_SECONDS:
+    _CAMPAIGN_CONTEXT_CACHE.pop(key, None)
+    return None
+
+  _CAMPAIGN_CONTEXT_CACHE.move_to_end(key)
+  return deepcopy(context)
+
+
+def _cache_set(
+    key: tuple[str, str | None, str, tuple[str, ...]],
+    context: dict[str, dict[str, Any]],
+) -> None:
+  """Stores campaign context in the bounded in-process cache."""
+  _CAMPAIGN_CONTEXT_CACHE[key] = (time.monotonic(), deepcopy(context))
+  _CAMPAIGN_CONTEXT_CACHE.move_to_end(key)
+  while len(_CAMPAIGN_CONTEXT_CACHE) > _CAMPAIGN_CONTEXT_CACHE_MAX_ENTRIES:
+    _CAMPAIGN_CONTEXT_CACHE.popitem(last=False)
 
 
 def get_campaign_context(
@@ -30,6 +84,16 @@ def get_campaign_context(
   unique_campaign_ids = sorted(set(campaign_ids), key=int)
   if not unique_campaign_ids:
     return {}
+
+  cache_key = _campaign_context_cache_key(
+      customer_id,
+      unique_campaign_ids,
+      login_customer_id,
+      spend_date_range,
+  )
+  cached_context = _cache_get(cache_key)
+  if cached_context is not None:
+    return cached_context
 
   campaign_id_filter = quote_int_values(unique_campaign_ids)
   status_rows = run_gaql_query(
@@ -81,4 +145,5 @@ def get_campaign_context(
         "metrics.cost_micros", 0
     )
 
-  return context
+  _cache_set(cache_key, context)
+  return deepcopy(context)

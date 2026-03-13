@@ -26,8 +26,10 @@ import pytest
 def reset_ads_client():
   """Resets the cached GoogleAdsClient instance before each test."""
   api._ADS_CLIENT = None  # pylint: disable=protected-access
+  api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
   yield
   api._ADS_CLIENT = None  # pylint: disable=protected-access
+  api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
 
 
 @pytest.mark.parametrize(
@@ -179,3 +181,30 @@ def test_run_gaql_query_page_rejects_invalid_page_token():
         page_size=2,
         page_token="bad-token",
     )
+
+
+@mock.patch("ads_mcp.tools.api.Credentials")
+@mock.patch("ads_mcp.tools.api.GoogleAdsClient")
+@mock.patch("ads_mcp.tools.api.get_access_token")
+@mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0)
+@mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
+def test_get_ads_client_caches_yaml_config_for_access_token(
+    _mock_isfile,
+    _mock_getmtime,
+    mock_get_access_token,
+    mock_google_ads_client,
+    mock_credentials,
+):
+  mock_get_access_token.return_value = mock.Mock(token="access-token")
+  mock_credentials.return_value = mock.Mock()
+
+  with mock.patch(
+      "builtins.open",
+      new_callable=mock.mock_open,
+      read_data="developer_token: dev-token\n",
+  ) as mock_file:
+    api.get_ads_client()
+    api.get_ads_client()
+
+  assert mock_file.call_count == 1
+  assert mock_google_ads_client.call_count == 2

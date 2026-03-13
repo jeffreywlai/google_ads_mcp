@@ -17,6 +17,7 @@
 import json
 import os
 from typing import Any
+import time
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
@@ -38,6 +39,7 @@ from ads_mcp.utils import ROOT_DIR
 
 
 _ADS_CLIENT: GoogleAdsClient | None = None
+_ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _DEFAULT_LOGIN_CUSTOMER_ID: str | None = None
 _EXECUTE_GAQL_OUTPUT_SCHEMA = {
     "type": "object",
@@ -50,6 +52,20 @@ _EXECUTE_GAQL_OUTPUT_SCHEMA = {
     },
     "required": ["data"],
 }
+
+
+def _load_ads_config(credentials_path: str) -> dict[str, Any]:
+  """Loads the Google Ads YAML config with mtime-based caching."""
+  cache_mtime = os.path.getmtime(credentials_path)
+  cache_entry = _ADS_CONFIG_CACHE.get(credentials_path)
+  if cache_entry and cache_entry[0] == cache_mtime:
+    return cache_entry[1]
+
+  with open(credentials_path, "r", encoding="utf-8") as f:
+    ads_config = yaml.safe_load(f.read())
+
+  _ADS_CONFIG_CACHE[credentials_path] = (cache_mtime, ads_config)
+  return ads_config
 
 
 def get_ads_client(
@@ -87,8 +103,7 @@ def get_ads_client(
 
   if access_token:
     credentials = Credentials(access_token)
-    with open(credentials_path, "r", encoding="utf-8") as f:
-      ads_config = yaml.safe_load(f.read())
+    ads_config = _load_ads_config(credentials_path)
     client = GoogleAdsClient(
         credentials, developer_token=ads_config.get("developer_token")
     )

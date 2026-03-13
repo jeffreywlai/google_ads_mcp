@@ -35,55 +35,65 @@ from fastmcp.server.transforms.visibility import get_visibility_rules
 from google.ads.googleads.errors import GoogleAdsException
 
 
+_TEXT_FILE_CACHE: dict[str, tuple[float, str]] = {}
+_YAML_FILE_CACHE: dict[str, tuple[float, Any]] = {}
+_CACHED_FIELDS: dict[str, Any] = {}
+_CACHED_FIELDS_MTIME: float | None = None
+
+
+def _read_cached_text(path: str) -> str:
+  """Reads a text file with mtime-based process-local caching."""
+  cache_mtime = os.path.getmtime(path)
+  cache_entry = _TEXT_FILE_CACHE.get(path)
+  if cache_entry and cache_entry[0] == cache_mtime:
+    return cache_entry[1]
+
+  with open(path, "r", encoding="utf-8") as f:
+    data = f.read()
+
+  _TEXT_FILE_CACHE[path] = (cache_mtime, data)
+  return data
+
+
+def _load_cached_yaml(path: str) -> Any:
+  """Loads a YAML file with mtime-based process-local caching."""
+  cache_mtime = os.path.getmtime(path)
+  cache_entry = _YAML_FILE_CACHE.get(path)
+  if cache_entry and cache_entry[0] == cache_mtime:
+    return cache_entry[1]
+
+  with open(path, "r", encoding="utf-8") as f:
+    data = yaml.safe_load(f)
+
+  _YAML_FILE_CACHE[path] = (cache_mtime, data)
+  return data
+
+
 def _get_gaql_compact_content() -> str:
   """Reads the compact GAQL documentation."""
-  with open(
-      os.path.join(MODULE_DIR, "context/GAQL_compact.md"),
-      "r",
-      encoding="utf-8",
-  ) as f:
-    data = f.read()
-  return data
+  return _read_cached_text(os.path.join(MODULE_DIR, "context/GAQL_compact.md"))
 
 
 def _get_gaql_doc_content() -> str:
   """Reads the full GAQL documentation."""
-  with open(
-      os.path.join(MODULE_DIR, "context/GAQL.md"), "r", encoding="utf-8"
-  ) as f:
-    data = f.read()
-  return data
+  return _read_cached_text(os.path.join(MODULE_DIR, "context/GAQL.md"))
 
 
 def _get_reporting_doc_content() -> str:
   """Reads the general reporting documentation."""
-  with open(
-      os.path.join(MODULE_DIR, "context/Google_Ads_API_Reporting_Views.md"),
-      "r",
-      encoding="utf-8",
-  ) as f:
-    data = f.read()
-  return data
+  return _read_cached_text(
+      os.path.join(MODULE_DIR, "context/Google_Ads_API_Reporting_Views.md")
+  )
 
 
 def _get_views_list() -> str:
   """Reads the list of available view names."""
-  with open(
-      os.path.join(MODULE_DIR, "context/views.yaml"), "r", encoding="utf-8"
-  ) as f:
-    data = f.read()
-  return data
+  return _read_cached_text(os.path.join(MODULE_DIR, "context/views.yaml"))
 
 
 def _get_tool_guide_content() -> str:
   """Reads the compact tool guide."""
-  with open(
-      os.path.join(MODULE_DIR, "context/tool_guide.yaml"),
-      "r",
-      encoding="utf-8",
-  ) as f:
-    data = f.read()
-  return data
+  return _read_cached_text(os.path.join(MODULE_DIR, "context/tool_guide.yaml"))
 
 
 def _topic_matches(topic: str, *texts: str) -> bool:
@@ -105,12 +115,7 @@ def _get_view_doc_content(view: str) -> str:
   if not resolved_path.startswith(expected_dir):
     return "Invalid view name."
   try:
-    with open(
-        target_file,
-        "r",
-        encoding="utf-8",
-    ) as f:
-      data = f.read()
+    data = _read_cached_text(target_file)
   except FileNotFoundError as exc:
     raise ToolError(
         f"No view resource with the name {view} was found."
@@ -158,11 +163,12 @@ def get_tool_guide(topic: str | None = None) -> str:
   Without a topic, returns the full guide.
   With a topic, returns only matching categories and tools.
   """
-  content = _get_tool_guide_content()
+  tool_guide_path = os.path.join(MODULE_DIR, "context/tool_guide.yaml")
+  content = _read_cached_text(tool_guide_path)
   if not topic:
     return content
 
-  guide = yaml.safe_load(content)
+  guide = _load_cached_yaml(tool_guide_path)
   filtered_categories = {}
 
   for category_name, category_data in guide["categories"].items():
@@ -208,20 +214,16 @@ def get_view_doc(view: str) -> str:
   return _get_view_doc_content(view)
 
 
-_CACHED_FIELDS: dict[str, Any] = {}
-
-
 @doc_tool
 def get_reporting_fields_doc(fields: list[str]) -> str:
   """Get detailed docs for specific Google Ads API reporting query fields."""
-  global _CACHED_FIELDS
-  if not _CACHED_FIELDS:
-    with open(
-        os.path.join(MODULE_DIR, "context/fields.yaml"),
-        "r",
-        encoding="utf-8",
-    ) as f:
+  global _CACHED_FIELDS, _CACHED_FIELDS_MTIME
+  fields_path = os.path.join(MODULE_DIR, "context/fields.yaml")
+  current_mtime = os.path.getmtime(fields_path)
+  if not _CACHED_FIELDS or _CACHED_FIELDS_MTIME != current_mtime:
+    with open(fields_path, "r", encoding="utf-8") as f:
       _CACHED_FIELDS = yaml.safe_load(f)
+    _CACHED_FIELDS_MTIME = current_mtime
 
   fields_info = {field: _CACHED_FIELDS.get(field) for field in fields}
   missing_fields = [field for field in fields if not fields_info[field]]

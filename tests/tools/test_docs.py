@@ -23,6 +23,19 @@ from fastmcp.exceptions import ToolError
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def reset_doc_caches():
+  docs._TEXT_FILE_CACHE = {}  # pylint: disable=protected-access
+  docs._YAML_FILE_CACHE = {}  # pylint: disable=protected-access
+  docs._CACHED_FIELDS = {}  # pylint: disable=protected-access
+  docs._CACHED_FIELDS_MTIME = None  # pylint: disable=protected-access
+  yield
+  docs._TEXT_FILE_CACHE = {}  # pylint: disable=protected-access
+  docs._YAML_FILE_CACHE = {}  # pylint: disable=protected-access
+  docs._CACHED_FIELDS = {}  # pylint: disable=protected-access
+  docs._CACHED_FIELDS_MTIME = None  # pylint: disable=protected-access
+
+
 @mock.patch(
     "builtins.open", new_callable=mock.mock_open, read_data="doc content"
 )
@@ -158,6 +171,32 @@ categories:
   assert "negatives:" in result
   assert "list_shared_set_keywords" in result
   assert "docs:" not in result
+
+
+@mock.patch("ads_mcp.tools.docs.os.path.getmtime", return_value=123.0)
+def test_get_gaql_doc_caches_file_reads(_mock_getmtime):
+  with mock.patch(
+      "builtins.open",
+      new_callable=mock.mock_open,
+      read_data="doc content",
+  ) as mock_file:
+    assert docs.get_gaql_doc() == "doc content"
+    assert docs.get_gaql_doc() == "doc content"
+
+  assert mock_file.call_count == 1
+
+
+@mock.patch("ads_mcp.tools.docs.os.path.getmtime", return_value=123.0)
+def test_get_reporting_fields_doc_caches_yaml_reads(_mock_getmtime):
+  with mock.patch(
+      "builtins.open",
+      new_callable=mock.mock_open,
+      read_data="campaign.id:\n  type: ATTRIBUTE\n",
+  ) as mock_file:
+    assert "campaign.id" in docs.get_reporting_fields_doc(["campaign.id"])
+    assert "campaign.id" in docs.get_reporting_fields_doc(["campaign.id"])
+
+  assert mock_file.call_count == 1
 
 
 @mock.patch(
