@@ -57,6 +57,41 @@ def test_list_campaign_search_term_insights_accepts_campaign_id_alias():
   assert "campaign.id IN (111)" in query
 
 
+def test_list_campaign_search_term_insights_returns_campaign_context():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
+          "segments.search_term": "brand shoes",
+      }
+  ]
+
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query",
+      return_value=rows,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.search_terms.get_campaign_context",
+        return_value={
+            "111": {
+                "campaign.name": "Brand",
+                "campaign.status": "ENABLED",
+                "recent_30_day_cost_micros": 2_000_000,
+            }
+        },
+    ):
+      result = search_terms.list_campaign_search_term_insights(CUSTOMER_ID)
+
+  assert result["campaign_search_term_insights"] == rows
+  assert result["campaign_context"] == {
+      "111": {
+          "campaign.name": "Brand",
+          "campaign.status": "ENABLED",
+          "recent_30_day_cost_micros": 2_000_000,
+      }
+  }
+
+
 def test_list_customer_search_term_insights_uses_campaign_resources():
   with mock.patch(
       "ads_mcp.tools.search_terms.run_gaql_query",
@@ -92,6 +127,8 @@ def test_list_customer_search_term_insights_accepts_campaign_id_alias():
 def test_analyze_search_terms_returns_candidates():
   rows = [
       {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
           "search_term_view.search_term": "free trial",
           "search_term_view.status": "NONE",
           "metrics.clicks": 15,
@@ -99,6 +136,8 @@ def test_analyze_search_terms_returns_candidates():
           "metrics.conversions": 0,
       },
       {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
           "search_term_view.search_term": "buy product",
           "search_term_view.status": "NONE",
           "metrics.clicks": 8,
@@ -106,6 +145,8 @@ def test_analyze_search_terms_returns_candidates():
           "metrics.conversions": 2,
       },
       {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
           "search_term_view.search_term": "already exact",
           "search_term_view.status": "ADDED_EXACT",
           "metrics.clicks": 20,
@@ -118,8 +159,25 @@ def test_analyze_search_terms_returns_candidates():
       "ads_mcp.tools.search_terms.run_gaql_query",
       return_value=rows,
   ):
-    result = search_terms.analyze_search_terms(CUSTOMER_ID)
+    with mock.patch(
+        "ads_mcp.tools.search_terms.get_campaign_context",
+        return_value={
+            "111": {
+                "campaign.name": "Brand",
+                "campaign.status": "ENABLED",
+                "recent_30_day_cost_micros": 6_000_000,
+            }
+        },
+    ):
+      result = search_terms.analyze_search_terms(CUSTOMER_ID)
 
   assert result["negative_keyword_candidates"] == [rows[0]]
   assert result["exact_match_candidates"] == [rows[1]]
   assert result["analyzed_row_count"] == 3
+  assert result["campaign_context"] == {
+      "111": {
+          "campaign.name": "Brand",
+          "campaign.status": "ENABLED",
+          "recent_30_day_cost_micros": 6_000_000,
+      }
+  }

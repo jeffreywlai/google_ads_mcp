@@ -109,7 +109,10 @@ def test_list_keyword_quality_scores_rejects_invalid_score():
 
 
 def test_list_keyword_quality_scores_can_omit_limit_clause():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[],
+  ) as mock_run:
     reporting.list_keyword_quality_scores(
         CUSTOMER_ID,
         limit=None,
@@ -123,27 +126,211 @@ def test_list_keyword_quality_scores_can_omit_limit_clause():
 def test_list_keyword_quality_scores_returns_pagination_metadata():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
-        "rows": [{"ad_group_criterion.criterion_id": "1"}],
+        "rows": [
+            {
+                "campaign.id": "77",
+                "campaign.name": "Brand",
+                "ad_group_criterion.criterion_id": "1",
+            }
+        ],
         "next_page_token": "next-page",
         "total_results_count": 18050,
     }
-
-    result = reporting.list_keyword_quality_scores(
-        CUSTOMER_ID,
-        limit=1000,
-        page_token="current-page",
-    )
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={
+            "77": {
+                "campaign.name": "Brand",
+                "campaign.status": "ENABLED",
+                "recent_30_day_cost_micros": 3_000_000,
+            }
+        },
+    ):
+      result = reporting.list_keyword_quality_scores(
+          CUSTOMER_ID,
+          limit=1000,
+          page_token="current-page",
+      )
 
   assert mock_run.call_args.kwargs["page_size"] == 1000
   assert mock_run.call_args.kwargs["page_token"] == "current-page"
   assert result == {
-      "keyword_quality_scores": [{"ad_group_criterion.criterion_id": "1"}],
+      "keyword_quality_scores": [
+          {
+              "campaign.id": "77",
+              "campaign.name": "Brand",
+              "ad_group_criterion.criterion_id": "1",
+          }
+      ],
       "returned_row_count": 1,
       "total_row_count": 18050,
       "total_page_count": 19,
       "next_page_token": "next-page",
       "page_size": 1000,
+      "campaign_context": {
+          "77": {
+              "campaign.name": "Brand",
+              "campaign.status": "ENABLED",
+              "recent_30_day_cost_micros": 3_000_000,
+          }
+      },
   }
+
+
+def test_get_campaign_conversion_goals_merges_standard_and_custom_goals():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    mock_run.side_effect = [
+        [
+            {
+                "campaign.id": "111",
+                "campaign.name": "Search",
+                "campaign.status": "ENABLED",
+                "conversion_goal_campaign_config.goal_config_level": (
+                    "CAMPAIGN"
+                ),
+                "conversion_goal_campaign_config.custom_conversion_goal": (
+                    "customers/123/customConversionGoals/77"
+                ),
+            }
+        ],
+        [
+            {
+                "campaign_conversion_goal.category": "PURCHASE",
+                "campaign_conversion_goal.origin": "WEBSITE",
+                "campaign_conversion_goal.biddable": True,
+            }
+        ],
+        [
+            {
+                "custom_conversion_goal.id": "77",
+                "custom_conversion_goal.name": "Primary Goal",
+                "custom_conversion_goal.status": "ENABLED",
+                "custom_conversion_goal.conversion_actions": [
+                    "customers/123/conversionActions/1"
+                ],
+            }
+        ],
+    ]
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={
+            "111": {
+                "campaign.name": "Search",
+                "campaign.status": "ENABLED",
+                "recent_30_day_cost_micros": 4_000_000,
+            }
+        },
+    ):
+      result = reporting.get_campaign_conversion_goals(CUSTOMER_ID, "111")
+
+  assert (
+      "FROM conversion_goal_campaign_config"
+      in mock_run.call_args_list[0].args[0]
+  )
+  assert "FROM campaign_conversion_goal" in mock_run.call_args_list[1].args[0]
+  assert "FROM custom_conversion_goal" in mock_run.call_args_list[2].args[0]
+  assert result == {
+      "campaign": {
+          "id": "111",
+          "name": "Search",
+          "status": "ENABLED",
+          "recent_30_day_cost_micros": 4_000_000,
+      },
+      "goal_config_level": "CAMPAIGN",
+      "uses_custom_conversion_goal": True,
+      "custom_conversion_goal": {
+          "id": "77",
+          "name": "Primary Goal",
+          "status": "ENABLED",
+          "conversion_actions": ["customers/123/conversionActions/1"],
+          "resource_name": "customers/123/customConversionGoals/77",
+      },
+      "standard_conversion_goals": [
+          {
+              "category": "PURCHASE",
+              "origin": "WEBSITE",
+              "biddable": True,
+          }
+      ],
+  }
+
+
+def test_summarize_keyword_quality_scores_returns_compact_distributions():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
+          "ad_group_criterion.keyword.match_type": "EXACT",
+          "ad_group_criterion.status": "ENABLED",
+          "ad_group_criterion.quality_info.quality_score": 10,
+      },
+      {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
+          "ad_group_criterion.keyword.match_type": "PHRASE",
+          "ad_group_criterion.status": "ENABLED",
+          "ad_group_criterion.quality_info.quality_score": 8,
+      },
+      {
+          "campaign.id": "222",
+          "campaign.name": "Generic",
+          "ad_group_criterion.keyword.match_type": "BROAD",
+          "ad_group_criterion.status": "PAUSED",
+          "ad_group_criterion.quality_info.quality_score": None,
+      },
+  ]
+
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={
+            "111": {
+                "campaign.name": "Brand",
+                "campaign.status": "ENABLED",
+                "recent_30_day_cost_micros": 5_000_000,
+            },
+            "222": {
+                "campaign.name": "Generic",
+                "campaign.status": "PAUSED",
+                "recent_30_day_cost_micros": 0,
+            },
+        },
+    ):
+      result = reporting.summarize_keyword_quality_scores(CUSTOMER_ID)
+
+  assert result["total_keyword_count"] == 3
+  assert result["scored_keyword_count"] == 2
+  assert result["unscored_keyword_count"] == 1
+  assert result["average_quality_score"] == 9.0
+  assert result["quality_score_distribution"] == [
+      {"quality_score": 8, "keyword_count": 1},
+      {"quality_score": 10, "keyword_count": 1},
+      {"quality_score": None, "keyword_count": 1},
+  ]
+  assert result["match_type_distribution"] == [
+      {"match_type": "BROAD", "keyword_count": 1},
+      {"match_type": "EXACT", "keyword_count": 1},
+      {"match_type": "PHRASE", "keyword_count": 1},
+  ]
+  assert result["keyword_status_distribution"] == [
+      {"status": "ENABLED", "keyword_count": 2},
+      {"status": "PAUSED", "keyword_count": 1},
+  ]
+  assert result["campaign_distribution"] == [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Brand",
+          "keyword_count": 2,
+      },
+      {
+          "campaign.id": "222",
+          "campaign.name": "Generic",
+          "keyword_count": 1,
+      },
+  ]
 
 
 def test_list_rsa_ad_strength_filters_to_responsive_search_ads():

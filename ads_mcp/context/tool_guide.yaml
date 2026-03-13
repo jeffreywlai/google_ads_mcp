@@ -28,7 +28,9 @@ categories:
       list_device_performance: Campaign performance segmented by device.
       list_geographic_performance: Campaign performance segmented by user or geographic location.
       list_impression_share: Campaign impression share metrics.
+      get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
       list_keyword_quality_scores: Keyword quality score diagnostics.
+      summarize_keyword_quality_scores: Compact keyword quality score distributions without raw row dumps.
       list_rsa_ad_strength: Responsive search ad strength diagnostics.
       list_conversion_actions: Conversion action configuration.
       list_audience_performance: Campaign or ad-group audience performance.

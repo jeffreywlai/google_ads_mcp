@@ -20,6 +20,7 @@ from fastmcp.exceptions import ToolError
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tools._campaign_context import get_campaign_context
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_string_values
@@ -57,6 +58,23 @@ def _merge_campaign_ids(
       return [campaign_id, *campaign_ids]
     return [campaign_id]
   return campaign_ids
+
+
+def _campaign_context_from_rows(
+    customer_id: str,
+    rows: list[dict[str, Any]],
+    login_customer_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+  """Builds a compact campaign context map from result rows."""
+  campaign_ids = sorted(
+      {
+          row["campaign.id"]
+          for row in rows
+          if row.get("campaign.id") not in (None, "")
+      },
+      key=int,
+  )
+  return get_campaign_context(customer_id, campaign_ids, login_customer_id)
 
 
 @search_term_tool
@@ -119,10 +137,14 @@ def list_campaign_search_term_insights(
       LIMIT {limit}
   """
 
+  rows = run_gaql_query(query, customer_id, login_customer_id)
   return {
-      "campaign_search_term_insights": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
+      "campaign_search_term_insights": rows,
+      "campaign_context": _campaign_context_from_rows(
+          customer_id,
+          rows,
+          login_customer_id,
+      ),
   }
 
 
@@ -284,6 +306,11 @@ def analyze_search_terms(
       "analyzed_row_count": len(search_terms),
       "negative_keyword_candidates": negative_keyword_candidates,
       "exact_match_candidates": exact_match_candidates,
+      "campaign_context": _campaign_context_from_rows(
+          customer_id,
+          search_terms,
+          login_customer_id,
+      ),
       "heuristics": {
           "date_range": date_range,
           "min_negative_clicks": min_negative_clicks,

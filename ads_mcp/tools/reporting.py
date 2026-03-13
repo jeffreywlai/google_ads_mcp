@@ -14,6 +14,7 @@
 
 """Curated reporting tools for high-frequency Google Ads read workflows."""
 
+from collections import Counter
 import math
 from typing import Any
 
@@ -21,10 +22,12 @@ from fastmcp.exceptions import ToolError
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tools._campaign_context import get_campaign_context
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import gaql_quote_string
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
 
@@ -52,6 +55,83 @@ def _validate_quality_score(min_quality_score: int | None) -> None:
     return
   if min_quality_score < 1 or min_quality_score > 10:
     raise ToolError("min_quality_score must be between 1 and 10.")
+
+
+def _campaign_ids_from_rows(rows: list[dict[str, Any]]) -> list[str]:
+  """Returns unique campaign IDs present in GAQL result rows."""
+  campaign_ids = {
+      row["campaign.id"]
+      for row in rows
+      if row.get("campaign.id") not in (None, "")
+  }
+  return sorted(campaign_ids, key=int)
+
+
+def _keyword_quality_score_query(
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    min_quality_score: int | None = None,
+) -> str:
+  """Builds the shared keyword quality score GAQL query."""
+  where_conditions = [
+      "ad_group_criterion.type = KEYWORD",
+      "ad_group_criterion.negative = FALSE",
+  ]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+  if min_quality_score is not None:
+    where_conditions.append(
+        "ad_group_criterion.quality_info.quality_score >= "
+        f"{min_quality_score}"
+    )
+
+  return f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        ad_group_criterion.criterion_id,
+        ad_group_criterion.keyword.text,
+        ad_group_criterion.keyword.match_type,
+        ad_group_criterion.status,
+        ad_group_criterion.quality_info.quality_score,
+        ad_group_criterion.quality_info.creative_quality_score,
+        ad_group_criterion.quality_info.post_click_quality_score,
+        ad_group_criterion.quality_info.search_predicted_ctr
+      FROM keyword_view
+      {build_where_clause(where_conditions)}
+      ORDER BY ad_group_criterion.quality_info.quality_score ASC
+  """
+
+
+def _distribution(
+    counter: Counter[Any],
+    key_name: str,
+    count_name: str,
+) -> list[dict[str, Any]]:
+  """Serializes a counter into a stable list of dicts."""
+
+  def _sort_key(value: Any) -> tuple[int, Any]:
+    if value is None:
+      return (2, "")
+    if isinstance(value, (int, float)):
+      return (0, value)
+    return (1, str(value))
+
+  ordered_items = sorted(
+      counter.items(),
+      key=lambda item: _sort_key(item[0]),
+  )
+  return [
+      {key_name: value, count_name: count} for value, count in ordered_items
+  ]
 
 
 reporting_tool = ads_read_tool(mcp, tags={"reporting"})
@@ -248,6 +328,121 @@ def list_impression_share(
 
 
 @reporting_tool
+def get_campaign_conversion_goals(
+    customer_id: str,
+    campaign_id: str,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Returns campaign conversion goals, including custom goal config.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_id: Campaign ID to inspect.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with campaign goal config, standard goals, and custom goal
+      details when configured.
+  """
+  campaign_id = str(int(campaign_id))
+  config_rows = run_gaql_query(
+      f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.status,
+        conversion_goal_campaign_config.goal_config_level,
+        conversion_goal_campaign_config.custom_conversion_goal
+      FROM conversion_goal_campaign_config
+      WHERE campaign.id = {campaign_id}
+      LIMIT 1
+      """,
+      customer_id,
+      login_customer_id,
+  )
+  if not config_rows:
+    raise ToolError(
+        f"No conversion goal config was returned for {campaign_id}."
+    )
+
+  standard_goal_rows = run_gaql_query(
+      f"""
+      SELECT
+        campaign_conversion_goal.category,
+        campaign_conversion_goal.origin,
+        campaign_conversion_goal.biddable
+      FROM campaign_conversion_goal
+      WHERE campaign.id = {campaign_id}
+      ORDER BY campaign_conversion_goal.category,
+        campaign_conversion_goal.origin
+      """,
+      customer_id,
+      login_customer_id,
+  )
+
+  config = config_rows[0]
+  custom_goal_resource = config.get(
+      "conversion_goal_campaign_config.custom_conversion_goal"
+  )
+  custom_goal = None
+  if custom_goal_resource:
+    custom_goal_rows = run_gaql_query(
+        f"""
+        SELECT
+          custom_conversion_goal.id,
+          custom_conversion_goal.name,
+          custom_conversion_goal.status,
+          custom_conversion_goal.conversion_actions
+        FROM custom_conversion_goal
+        WHERE custom_conversion_goal.resource_name = {gaql_quote_string(custom_goal_resource)}
+        LIMIT 1
+        """,
+        customer_id,
+        login_customer_id,
+    )
+    if custom_goal_rows:
+      custom_goal = {
+          "id": custom_goal_rows[0].get("custom_conversion_goal.id"),
+          "name": custom_goal_rows[0].get("custom_conversion_goal.name"),
+          "status": custom_goal_rows[0].get("custom_conversion_goal.status"),
+          "conversion_actions": custom_goal_rows[0].get(
+              "custom_conversion_goal.conversion_actions"
+          ),
+          "resource_name": custom_goal_resource,
+      }
+
+  campaign_context = get_campaign_context(
+      customer_id,
+      [campaign_id],
+      login_customer_id,
+  ).get(campaign_id, {})
+
+  return {
+      "campaign": {
+          "id": config["campaign.id"],
+          "name": config.get("campaign.name"),
+          "status": config.get("campaign.status"),
+          "recent_30_day_cost_micros": campaign_context.get(
+              "recent_30_day_cost_micros", 0
+          ),
+      },
+      "goal_config_level": config.get(
+          "conversion_goal_campaign_config.goal_config_level"
+      ),
+      "uses_custom_conversion_goal": bool(custom_goal_resource),
+      "custom_conversion_goal": custom_goal,
+      "standard_conversion_goals": [
+          {
+              "category": row.get("campaign_conversion_goal.category"),
+              "origin": row.get("campaign_conversion_goal.origin"),
+              "biddable": row.get("campaign_conversion_goal.biddable"),
+          }
+          for row in standard_goal_rows
+      ],
+  }
+
+
+@reporting_tool
 def list_keyword_quality_scores(
     customer_id: str,
     campaign_ids: list[str] | None = None,
@@ -276,51 +471,26 @@ def list_keyword_quality_scores(
   if limit is not None:
     validate_limit(limit)
 
-  where_conditions = [
-      "ad_group_criterion.type = KEYWORD",
-      "ad_group_criterion.negative = FALSE",
-  ]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
-  if min_quality_score is not None:
-    where_conditions.append(
-        "ad_group_criterion.quality_info.quality_score >= "
-        f"{min_quality_score}"
-    )
-
-  query = f"""
-      SELECT
-        campaign.id,
-        campaign.name,
-        ad_group.id,
-        ad_group.name,
-        ad_group_criterion.criterion_id,
-        ad_group_criterion.keyword.text,
-        ad_group_criterion.keyword.match_type,
-        ad_group_criterion.status,
-        ad_group_criterion.quality_info.quality_score,
-        ad_group_criterion.quality_info.creative_quality_score,
-        ad_group_criterion.quality_info.post_click_quality_score,
-        ad_group_criterion.quality_info.search_predicted_ctr
-      FROM keyword_view
-      {build_where_clause(where_conditions)}
-      ORDER BY ad_group_criterion.quality_info.quality_score ASC
-  """
+  query = _keyword_quality_score_query(
+      campaign_ids=campaign_ids,
+      ad_group_ids=ad_group_ids,
+      min_quality_score=min_quality_score,
+  )
 
   if limit is None:
     rows = run_gaql_query(query, customer_id, login_customer_id)
+    campaign_context = get_campaign_context(
+        customer_id,
+        _campaign_ids_from_rows(rows),
+        login_customer_id,
+    )
     return {
         "keyword_quality_scores": rows,
         "returned_row_count": len(rows),
         "total_row_count": len(rows),
         "total_page_count": 1,
         "next_page_token": None,
+        "campaign_context": campaign_context,
     }
 
   page = run_gaql_query_page(
@@ -334,6 +504,11 @@ def list_keyword_quality_scores(
   total_page_count = (
       math.ceil(total_row_count / limit) if total_row_count else 0
   )
+  campaign_context = get_campaign_context(
+      customer_id,
+      _campaign_ids_from_rows(page["rows"]),
+      login_customer_id,
+  )
 
   return {
       "keyword_quality_scores": page["rows"],
@@ -342,6 +517,110 @@ def list_keyword_quality_scores(
       "total_page_count": total_page_count,
       "next_page_token": page["next_page_token"],
       "page_size": limit,
+      "campaign_context": campaign_context,
+  }
+
+
+@reporting_tool
+def summarize_keyword_quality_scores(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    min_quality_score: int | None = None,
+    top_campaigns_limit: int = 20,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Summarizes keyword quality-score results without returning raw rows.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      min_quality_score: Optional minimum quality score from 1 to 10.
+      top_campaigns_limit: Maximum number of campaign summary rows to return.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with compact quality-score distributions and top campaigns.
+  """
+  _validate_quality_score(min_quality_score)
+  validate_limit(top_campaigns_limit)
+
+  rows = run_gaql_query(
+      _keyword_quality_score_query(
+          campaign_ids=campaign_ids,
+          ad_group_ids=ad_group_ids,
+          min_quality_score=min_quality_score,
+      ),
+      customer_id,
+      login_customer_id,
+  )
+  quality_score_counts: Counter[Any] = Counter()
+  match_type_counts: Counter[Any] = Counter()
+  status_counts: Counter[Any] = Counter()
+  campaign_counts: Counter[str] = Counter()
+  campaign_names: dict[str, Any] = {}
+  scored_keywords = 0
+  total_quality_score = 0
+
+  for row in rows:
+    quality_score = row.get("ad_group_criterion.quality_info.quality_score")
+    quality_score_counts[quality_score] += 1
+    match_type_counts[row.get("ad_group_criterion.keyword.match_type")] += 1
+    status_counts[row.get("ad_group_criterion.status")] += 1
+
+    campaign_id = row.get("campaign.id")
+    if campaign_id:
+      campaign_counts[campaign_id] += 1
+      campaign_names[campaign_id] = row.get("campaign.name")
+
+    if quality_score is not None:
+      scored_keywords += 1
+      total_quality_score += quality_score
+
+  campaign_context = get_campaign_context(
+      customer_id,
+      list(campaign_counts),
+      login_customer_id,
+  )
+  top_campaigns = []
+  for campaign_id, keyword_count in campaign_counts.most_common(
+      top_campaigns_limit
+  ):
+    top_campaigns.append(
+        {
+            "campaign.id": campaign_id,
+            "campaign.name": campaign_names.get(campaign_id),
+            "keyword_count": keyword_count,
+        }
+    )
+
+  return {
+      "total_keyword_count": len(rows),
+      "scored_keyword_count": scored_keywords,
+      "unscored_keyword_count": len(rows) - scored_keywords,
+      "average_quality_score": (
+          round(total_quality_score / scored_keywords, 2)
+          if scored_keywords
+          else None
+      ),
+      "quality_score_distribution": _distribution(
+          quality_score_counts,
+          "quality_score",
+          "keyword_count",
+      ),
+      "match_type_distribution": _distribution(
+          match_type_counts,
+          "match_type",
+          "keyword_count",
+      ),
+      "keyword_status_distribution": _distribution(
+          status_counts,
+          "status",
+          "keyword_count",
+      ),
+      "campaign_distribution": top_campaigns,
+      "campaign_context": campaign_context,
   }
 
 
