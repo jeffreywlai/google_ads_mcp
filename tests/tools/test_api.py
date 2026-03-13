@@ -17,6 +17,7 @@
 from unittest import mock
 
 from ads_mcp.tools import api
+from google.protobuf.field_mask_pb2 import FieldMask
 import proto
 import pytest
 
@@ -76,6 +77,11 @@ def test_format_value():
   mock_enum = mock.Mock(spec=proto.Enum)
   mock_enum.name = "ENUM_VALUE"
   assert api.format_value(mock_enum) == "ENUM_VALUE"
+
+  # Test with a google.protobuf Message
+  assert api.format_value(FieldMask(paths=["campaign.status"])) == {
+      "paths": ["campaign.status"]
+  }
 
   # Test with a simple type
   assert api.format_value("string") == "string"
@@ -143,28 +149,33 @@ def test_execute_gaql_rejects_non_positive_max_rows():
 
 
 def test_run_gaql_query_page_returns_rows_and_metadata():
-  mock_client = mock.Mock()
-  mock_ads_service = mock_client.get_service.return_value
-  mock_ads_service.search.return_value = mock.Mock(
-      results=[mock.Mock()],
-      field_mask=mock.Mock(paths=["campaign.id"]),
-      next_page_token="next-page",
-      total_results_count=250,
-  )
-
   with mock.patch(
-      "ads_mcp.tools.api.get_ads_client", return_value=mock_client
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[
+          {"campaign.id": "1"},
+          {"campaign.id": "2"},
+          {"campaign.id": "3"},
+      ],
   ):
-    with mock.patch("ads_mcp.tools.api.get_nested_attr", return_value="123"):
-      result = api.run_gaql_query_page(
-          "SELECT campaign.id FROM campaign",
-          "123",
-          page_size=100,
-          page_token="current-page",
-      )
+    result = api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        page_size=2,
+        page_token="1",
+    )
 
   assert result == {
-      "rows": [{"campaign.id": "123"}],
-      "next_page_token": "next-page",
-      "total_results_count": 250,
+      "rows": [{"campaign.id": "2"}, {"campaign.id": "3"}],
+      "next_page_token": None,
+      "total_results_count": 3,
   }
+
+
+def test_run_gaql_query_page_rejects_invalid_page_token():
+  with pytest.raises(api.ToolError, match="Invalid page_token"):
+    api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        page_size=2,
+        page_token="bad-token",
+    )

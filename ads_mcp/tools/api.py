@@ -25,7 +25,9 @@ from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.util import get_nested_attr
 from google.ads.googleads.v23.services.services.customer_service import CustomerServiceClient
 from google.ads.googleads.v23.services.services.google_ads_service import GoogleAdsServiceClient
-from google.ads.googleads.v23.services.types.google_ads_service import SearchGoogleAdsRequest
+from google.protobuf.field_mask_pb2 import FieldMask
+from google.protobuf.json_format import MessageToDict
+from google.protobuf.message import Message as ProtobufMessage
 from google.oauth2.credentials import Credentials
 import proto
 import yaml
@@ -142,6 +144,13 @@ def format_value(value: Any) -> Any:
         use_integers_for_enums=False,
     )
     return_value = json.loads(return_value)
+  elif isinstance(value, FieldMask):
+    return_value = {"paths": list(value.paths)}
+  elif isinstance(value, ProtobufMessage):
+    return_value = MessageToDict(
+        value,
+        preserving_proto_field_name=True,
+    )
   elif isinstance(value, proto.Enum):
     return_value = value.name
   else:
@@ -170,18 +179,17 @@ def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
   return output
 
 
-def _gaql_response_rows(
-    query_res: Any,
-    field_paths: list[str],
-) -> list[dict[str, Any]]:
-  """Converts a non-stream Google Ads search response into plain dict rows."""
-  return [
-      {
-          field_name: format_value(get_nested_attr(row, field_name))
-          for field_name in field_paths
-      }
-      for row in query_res.results
-  ]
+def _decode_page_token(page_token: str | None) -> int:
+  """Decodes a simple offset-style page token."""
+  if not page_token:
+    return 0
+  try:
+    offset = int(page_token)
+  except ValueError as exc:
+    raise ToolError("Invalid page_token.") from exc
+  if offset < 0:
+    raise ToolError("Invalid page_token.")
+  return offset
 
 
 def run_gaql_query(
@@ -209,29 +217,29 @@ def run_gaql_query_page(
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Executes a paginated GAQL query and returns rows plus page metadata."""
-  query = preprocess_gaql(query)
-  ads_client = get_ads_client(login_customer_id)
-  ads_service: GoogleAdsServiceClient = ads_client.get_service(
-      "GoogleAdsService"
-  )
-  request = SearchGoogleAdsRequest(
-      customer_id=customer_id,
-      query=query,
-      page_size=page_size,
-  )
-  if page_token:
-    request.page_token = page_token
+  """Executes a GAQL query and slices the results into stable pages.
 
-  try:
-    response = ads_service.search(request=request)
-    return {
-        "rows": _gaql_response_rows(response, response.field_mask.paths),
-        "next_page_token": response.next_page_token or None,
-        "total_results_count": int(response.total_results_count),
-    }
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+  Google Ads Search uses a fixed page size for some resources, so this helper
+  provides a consistent cursor contract for MCP tools by applying client-side
+  paging over the full result set.
+  """
+  if page_size <= 0:
+    raise ToolError("page_size must be greater than 0.")
+
+  offset = _decode_page_token(page_token)
+  rows = run_gaql_query(
+      query=query,
+      customer_id=customer_id,
+      login_customer_id=login_customer_id,
+  )
+  next_offset = offset + page_size
+  return {
+      "rows": rows[offset:next_offset],
+      "next_page_token": (
+          str(next_offset) if next_offset < len(rows) else None
+      ),
+      "total_results_count": len(rows),
+  }
 
 
 @ads_read_tool(

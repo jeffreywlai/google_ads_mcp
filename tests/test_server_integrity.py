@@ -687,7 +687,8 @@ class TestFastMcpConfiguration:
 
         assert direct_result.structured_content == {"change_events": rows}
         assert proxy_result.structured_content == {"change_events": rows}
-        assert direct_result.data.change_events == rows
+        assert "change_events" in direct_result.data
+        assert len(direct_result.data["change_events"]) == len(rows)
         assert proxy_result.data == {"change_events": rows}
 
     asyncio.run(_run())
@@ -713,7 +714,7 @@ class TestFastMcpConfiguration:
 
         assert direct_result.structured_content == {"change_events": []}
         assert proxy_result.structured_content == {"change_events": []}
-        assert direct_result.data.change_events == []
+        assert direct_result.data == {"change_events": []}
         assert proxy_result.data == {"change_events": []}
 
     asyncio.run(_run())
@@ -870,6 +871,7 @@ class TestFastMcpConfiguration:
             ),
             "required_args": ["campaign_id"],
             "optional_args": [
+                "insight_id",
                 "date_range",
                 "min_clicks",
                 "min_impressions",

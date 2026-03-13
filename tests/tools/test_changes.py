@@ -117,7 +117,7 @@ def test_list_change_statuses_defaults_start_date_when_only_end_date_provided():
   assert f"'{end_date} 23:59:59'" in query
 
 
-def test_change_tools_expose_named_output_schemas():
+def test_change_tools_do_not_force_output_schemas():
   async def get_schemas():
     return (
         (await mcp_server.get_tool("list_change_statuses")).output_schema,
@@ -128,35 +128,12 @@ def test_change_tools_expose_named_output_schemas():
 
   assert change_statuses_schema == {
       "type": "object",
-      "properties": {
-          "change_statuses": {
-              "type": "array",
-              "items": {
-                  "anyOf": [
-                      {
-                          "type": "object",
-                          "additionalProperties": True,
-                      }
-                  ],
-              },
-          }
+      "additionalProperties": {
+          "type": "array",
+          "items": {
+              "type": "object",
+              "additionalProperties": True,
+          },
       },
-      "required": ["change_statuses"],
   }
-  assert change_events_schema == {
-      "type": "object",
-      "properties": {
-          "change_events": {
-              "type": "array",
-              "items": {
-                  "anyOf": [
-                      {
-                          "type": "object",
-                          "additionalProperties": True,
-                      }
-                  ],
-              },
-          }
-      },
-      "required": ["change_events"],
-  }
+  assert change_events_schema == change_statuses_schema
