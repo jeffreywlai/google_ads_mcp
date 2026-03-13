@@ -120,7 +120,7 @@ categories:
   search_terms:
     summary: Search term insights and heuristic candidate generation.
     tools:
-      list_campaign_search_term_insights: Campaign insight categories and search terms.
+      list_campaign_search_term_insights: Single-campaign insight categories and search terms.
       list_customer_search_term_insights: Account-level insight categories and search terms.
       analyze_search_terms: Heuristic exact-match and negative keyword candidates.
 

@@ -80,8 +80,7 @@ def _campaign_context_from_rows(
 @search_term_tool
 def list_campaign_search_term_insights(
     customer_id: str,
-    campaign_id: str | None = None,
-    campaign_ids: list[str] | None = None,
+    campaign_id: str,
     date_range: str = "LAST_30_DAYS",
     min_clicks: int = 0,
     min_impressions: int = 0,
@@ -92,8 +91,8 @@ def list_campaign_search_term_insights(
 
   Args:
       customer_id: Google Ads customer ID.
-      campaign_id: Optional single campaign ID filter.
-      campaign_ids: Optional campaign IDs to filter to.
+      campaign_id: Required campaign ID filter. Google Ads requires a single
+          campaign resource for campaign_search_term_insight.
       date_range: GAQL date range such as LAST_30_DAYS.
       min_clicks: Optional minimum clicks filter.
       min_impressions: Optional minimum impressions filter.
@@ -106,13 +105,11 @@ def list_campaign_search_term_insights(
   validate_limit(limit)
   _non_negative(min_clicks, "min_clicks")
   _non_negative(min_impressions, "min_impressions")
-  campaign_ids = _merge_campaign_ids(campaign_id, campaign_ids)
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [
+      _date_range_condition(date_range),
+      f"campaign.id = {int(campaign_id)}",
+  ]
   if min_clicks:
     where_conditions.append(f"metrics.clicks >= {min_clicks}")
   if min_impressions:

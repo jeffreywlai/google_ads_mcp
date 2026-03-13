@@ -868,11 +868,11 @@ class TestFastMcpConfiguration:
             "summary": (
                 "Lists campaign_search_term_insight rows with key metrics."
             ),
+            "required_args": ["campaign_id"],
             "optional_args": [
-                "campaign_id",
-                "campaign_ids",
                 "date_range",
                 "min_clicks",
+                "min_impressions",
             ],
         },
         {
