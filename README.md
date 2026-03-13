@@ -5,7 +5,7 @@
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 64 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 65 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,13 +14,14 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **64 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 🔧 **65 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, and a tool guide available as tools
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
 - 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, quality score summaries, conversion goals, RSA ad strength, conversion actions, and audience performance
 - 📄 **Cursor Pagination** — All list tools support `page_token` for paging through large result sets with total counts
-- ⚡ **Response Caching** — Docs, tool guide, and campaign context are cached to reduce latency and token usage
+- ⚡ **Response Caching** — Docs, tool guide, campaign context, and paged queries are cached to reduce latency and token usage
+- 📥 **CSV Export** — Export any GAQL query to CSV for bulk extraction and downstream analysis
 - 📈 **Optimization** — Recommendations, optimization score, bid/budget simulations, and search term analysis
 - 🏎️ **Performance Max** — Asset diagnostics, top combinations, and placement insights
 - 🔑 **Keyword Research** — Generate keyword ideas with search volume and competition data
@@ -29,13 +30,14 @@
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (64)
+## 📋 Available Tools (65)
 
 ### 🔍 Query & Discovery
 
 | Tool | Description |
 |------|-------------|
 | `execute_gaql` | Run any GAQL query with formatted results |
+| `export_gaql_csv` | Export GAQL query results to a CSV file for bulk extraction |
 | `list_accessible_accounts` | List all Google Ads accounts you can access |
 
 ### 📖 Docs & Tool Guidance
@@ -258,6 +260,13 @@ Once connected, just talk naturally:
 "Show me the top 10 keywords by conversions this month"
 "What's my total spend across all campaigns last week?"
 "Show me ad performance broken down by device"
+```
+
+### Exporting
+
+```
+"Export all keyword performance data to CSV"
+"Export campaign metrics for the last 90 days to a file"
 ```
 
 ### Managing
