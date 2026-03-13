@@ -19,14 +19,17 @@ from datetime import date
 from datetime import timedelta
 import os
 from pathlib import Path
+import uuid
 
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 import pytest
+import yaml
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 _RESOLVED_LIVE_CUSTOMER_ID: str | None = None
+_CONFIGURED_LOGIN_CUSTOMER_ID: str | None = None
 
 
 def _credentials_path() -> str:
@@ -40,6 +43,18 @@ def _credentials_path() -> str:
       return candidate
 
   pytest.skip("Google Ads credentials file is not available.")
+
+
+def _configured_login_customer_id() -> str | None:
+  global _CONFIGURED_LOGIN_CUSTOMER_ID
+  if _CONFIGURED_LOGIN_CUSTOMER_ID is None:
+    with open(_credentials_path(), "r", encoding="utf-8") as f:
+      config = yaml.safe_load(f)
+    login_customer_id = config.get("login_customer_id")
+    _CONFIGURED_LOGIN_CUSTOMER_ID = (
+        str(login_customer_id) if login_customer_id else ""
+    )
+  return _CONFIGURED_LOGIN_CUSTOMER_ID or None
 
 
 def _live_mcp_config() -> dict[str, object]:
@@ -171,6 +186,10 @@ def _live_customer_id() -> str:
   return _RESOLVED_LIVE_CUSTOMER_ID
 
 
+def _mutation_customer_id() -> str:
+  return os.getenv("GOOGLE_ADS_LIVE_MUTATION_CUSTOMER_ID") or _live_customer_id()
+
+
 async def _first_search_campaign_id(customer_id: str) -> str | None:
   result = await _call_tool(
       "execute_gaql",
@@ -217,6 +236,10 @@ def _keyword_quality_score_key(row: dict[str, object]) -> tuple[str, str, str]:
       str(row["ad_group.id"]),
       str(row["ad_group_criterion.criterion_id"]),
   )
+
+
+def _resource_id(resource_name: str) -> str:
+  return resource_name.rsplit("/", maxsplit=1)[-1]
 
 
 def test_live_stdio_tools_are_exposed():
@@ -415,6 +438,163 @@ def test_live_call_tool_proxy_matches_direct_calls():
         direct = await client.call_tool(name, arguments)
         proxied = await _call_tool_via_proxy(client, name, arguments)
         assert direct.structured_content == proxied.structured_content
+
+  asyncio.run(_run())
+
+
+def test_live_manager_login_customer_id_header_works():
+  customer_id = _live_customer_id()
+  login_customer_id = _configured_login_customer_id()
+  if not login_customer_id:
+    pytest.skip("No login_customer_id is configured for the live test.")
+
+  async def _run():
+    async with Client(_live_mcp_config()) as client:
+      default_result = await client.call_tool(
+          "execute_gaql",
+          {
+              "customer_id": customer_id,
+              "query": "SELECT customer.id FROM customer LIMIT 1",
+              "max_rows": 1,
+          },
+      )
+      explicit_result = await client.call_tool(
+          "execute_gaql",
+          {
+              "customer_id": customer_id,
+              "login_customer_id": login_customer_id,
+              "query": "SELECT customer.id FROM customer LIMIT 1",
+              "max_rows": 1,
+          },
+      )
+      reset_result = await client.call_tool(
+          "execute_gaql",
+          {
+              "customer_id": customer_id,
+              "query": "SELECT customer.id FROM customer LIMIT 1",
+              "max_rows": 1,
+          },
+      )
+
+      for result in (default_result, explicit_result, reset_result):
+        assert result.structured_content["data"][0]["customer.id"] == int(
+            customer_id
+        )
+
+  asyncio.run(_run())
+
+
+def test_live_mutation_canary_create_and_delete_label():
+  customer_id = _mutation_customer_id()
+  label_name = f"mcp-live-canary-{uuid.uuid4().hex[:10]}"
+
+  async def _run():
+    async with Client(_live_mcp_config()) as client:
+      before_tools = {tool.name for tool in await client.list_tools()}
+      assert "create_label" not in before_tools
+
+      unlock_result = await client.call_tool("unlock_mutation_tools", {})
+      assert unlock_result.structured_content == {
+          "mutation_tools_unlocked": True
+      }
+
+      unlocked_tools = {tool.name for tool in await client.list_tools()}
+      assert "create_label" in unlocked_tools
+      assert "delete_label" in unlocked_tools
+
+      created_resource_name = None
+      try:
+        created = await client.call_tool(
+            "create_label",
+            {
+                "customer_id": customer_id,
+                "name": label_name,
+                "description": "Live MCP canary label",
+            },
+        )
+        created_resource_name = created.structured_content["resource_name"]
+        label_id = _resource_id(created_resource_name)
+
+        label_lookup = await client.call_tool(
+            "execute_gaql",
+            {
+                "customer_id": customer_id,
+                "query": (
+                    "SELECT label.id, label.name "
+                    f"FROM label WHERE label.id = {label_id} LIMIT 1"
+                ),
+                "max_rows": 1,
+            },
+        )
+        assert label_lookup.structured_content["data"] == [
+            {
+                "label.id": int(label_id),
+                "label.name": label_name,
+            }
+        ]
+      finally:
+        if created_resource_name:
+          label_id = _resource_id(created_resource_name)
+          await client.call_tool(
+              "delete_label",
+              {
+                  "customer_id": customer_id,
+                  "label_id": label_id,
+              },
+          )
+
+        lock_result = await client.call_tool("lock_mutation_tools", {})
+        assert lock_result.structured_content == {
+            "mutation_tools_unlocked": False
+        }
+        after_tools = {tool.name for tool in await client.list_tools()}
+        assert "create_label" not in after_tools
+
+  asyncio.run(_run())
+
+
+def test_live_recommendation_and_optimization_smoke():
+  customer_id = _live_customer_id()
+
+  async def _run():
+    async with Client(_live_mcp_config()) as client:
+      optimization = await client.call_tool(
+          "get_optimization_score_summary",
+          {
+              "customer_id": customer_id,
+          },
+      )
+      recommendations = await client.call_tool(
+          "list_recommendations",
+          {
+              "customer_id": customer_id,
+              "limit": 5,
+          },
+      )
+      subscriptions = await client.call_tool(
+          "list_recommendation_subscriptions",
+          {
+              "customer_id": customer_id,
+              "limit": 5,
+          },
+      )
+
+      assert optimization.structured_content["customer_id"] == int(customer_id)
+      assert "optimization_score" in optimization.structured_content
+      assert "optimization_score_weight" in optimization.structured_content
+      assert isinstance(
+          optimization.structured_content["recommendation_type_breakdown"],
+          list,
+      )
+      assert "recommendations" in recommendations.structured_content
+      assert isinstance(
+          recommendations.structured_content["recommendations"], list
+      )
+      assert "recommendation_subscriptions" in subscriptions.structured_content
+      assert isinstance(
+          subscriptions.structured_content["recommendation_subscriptions"],
+          list,
+      )
 
   asyncio.run(_run())
 
