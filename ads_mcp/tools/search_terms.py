@@ -23,22 +23,12 @@ from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._campaign_context import get_campaign_context
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_int_values
-from ads_mcp.tools._gaql import quote_string_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import run_gaql_query
 
 
 def _date_range_condition(date_range: str) -> str:
   return f"segments.date DURING {date_range}"
-
-
-def _campaign_resource_names(
-    customer_id: str, campaign_ids: list[str]
-) -> list[str]:
-  return [
-      f"customers/{customer_id}/campaigns/{campaign_id}"
-      for campaign_id in campaign_ids
-  ]
 
 
 def _non_negative(value: int | float, field_name: str) -> None:
@@ -193,7 +183,7 @@ def list_campaign_search_term_insights(
         {", ".join(_campaign_insight_select_fields(include_search_terms))}
       FROM campaign_search_term_insight
       {build_where_clause(where_conditions)}
-      ORDER BY metrics.clicks DESC
+      {"ORDER BY metrics.clicks DESC" if not include_search_terms else ""}
       {"LIMIT " + str(limit) if not include_search_terms else ""}
   """
 
@@ -226,8 +216,10 @@ def list_customer_search_term_insights(
 
   Args:
       customer_id: Google Ads customer ID.
-      campaign_id: Optional single campaign ID filter.
-      campaign_ids: Optional campaign IDs to filter to.
+      campaign_id: Unsupported for this resource. Use
+          list_campaign_search_term_insights for campaign-scoped analysis.
+      campaign_ids: Unsupported for this resource. Use
+          list_campaign_search_term_insights for campaign-scoped analysis.
       insight_id: Optional single insight ID. When provided, includes
           `segments.search_term` and `segments.search_subcategory` for that
           specific insight. Without it, returns category-level rows only.
@@ -245,16 +237,19 @@ def list_customer_search_term_insights(
   _non_negative(min_impressions, "min_impressions")
   campaign_ids = _merge_campaign_ids(campaign_id, campaign_ids)
   include_search_terms = insight_id is not None
+  use_client_side_limit = include_search_terms
+
+  if campaign_ids:
+    raise ToolError(
+        "customer_search_term_insight does not support campaign_id/"
+        "campaign_ids filters. Use list_campaign_search_term_insights for "
+        "campaign-scoped analysis or query by insight_id only."
+    )
 
   where_conditions = [_date_range_condition(date_range)]
   if insight_id:
     where_conditions.append(
         f"customer_search_term_insight.id = {int(insight_id)}"
-    )
-  if campaign_ids:
-    where_conditions.append(
-        "segments.campaign IN "
-        f"({quote_string_values(_campaign_resource_names(customer_id, campaign_ids))})"
     )
   if min_clicks:
     where_conditions.append(f"metrics.clicks >= {min_clicks}")
@@ -266,12 +261,12 @@ def list_customer_search_term_insights(
         {", ".join(_customer_insight_select_fields(include_search_terms))}
       FROM customer_search_term_insight
       {build_where_clause(where_conditions)}
-      ORDER BY metrics.clicks DESC
-      {"LIMIT " + str(limit) if not include_search_terms else ""}
+      {"ORDER BY metrics.clicks DESC" if not include_search_terms else ""}
+      {"LIMIT " + str(limit) if not use_client_side_limit else ""}
   """
 
   rows = run_gaql_query(query, customer_id, login_customer_id)
-  if include_search_terms:
+  if use_client_side_limit:
     rows = _limit_rows(rows, limit)
 
   return {"customer_search_term_insights": rows}

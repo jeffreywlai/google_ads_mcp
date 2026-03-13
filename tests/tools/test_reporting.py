@@ -100,6 +100,7 @@ def test_list_keyword_quality_scores_builds_filtered_query():
   assert "ad_group.id IN (222)" in query
   assert "ad_group_criterion.quality_info.quality_score >= 4" in query
   assert "ad_group_criterion.quality_info.creative_quality_score" in query
+  assert "ad_group_criterion.criterion_id ASC" in query
   assert "LIMIT" not in query
 
 

@@ -74,6 +74,7 @@ def test_list_campaign_search_term_insights_term_detail_uses_insight_id():
   assert "campaign_search_term_insight.id = 7" in query
   assert "segments.search_term" in query
   assert "segments.search_subcategory" in query
+  assert "ORDER BY" not in query
   assert "LIMIT" not in query
   assert result["campaign_search_term_insights"] == [rows[0]]
 
@@ -121,39 +122,15 @@ def test_list_campaign_search_term_insights_requires_campaign_id():
     search_terms.list_campaign_search_term_insights(CUSTOMER_ID)
 
 
-def test_list_customer_search_term_insights_uses_campaign_resources():
-  with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=[],
-  ) as mock_query:
-    search_terms.list_customer_search_term_insights(
-        CUSTOMER_ID, campaign_ids=["111", "222"]
-    )
-
-  query = mock_query.call_args.args[0]
-  assert "FROM customer_search_term_insight" in query
-  assert "segments.campaign IN (" in query
-  assert "segments.campaign," not in query
-  assert "'customers/1234567890/campaigns/111'" in query
-  assert "'customers/1234567890/campaigns/222'" in query
-  assert "metrics.cost_micros" not in query
-  assert "segments.search_term" not in query
-  assert "segments.search_subcategory" not in query
-  assert "LIMIT 100" in query
-
-
-def test_list_customer_search_term_insights_accepts_campaign_id_alias():
-  with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=[],
-  ) as mock_query:
+def test_list_customer_search_term_insights_rejects_campaign_filters():
+  with pytest.raises(
+      search_terms.ToolError,
+      match="does not support campaign_id/campaign_ids filters",
+  ):
     search_terms.list_customer_search_term_insights(
         CUSTOMER_ID,
-        campaign_id="111",
+        campaign_ids=["111", "222"],
     )
-
-  query = mock_query.call_args.args[0]
-  assert "'customers/1234567890/campaigns/111'" in query
 
 
 def test_list_customer_search_term_insights_term_detail_applies_limit_after_query():
@@ -165,18 +142,33 @@ def test_list_customer_search_term_insights_term_detail_applies_limit_after_quer
   with mock.patch(
       "ads_mcp.tools.search_terms.run_gaql_query",
       return_value=rows,
-  ):
+  ) as mock_query:
     result = search_terms.list_customer_search_term_insights(
         CUSTOMER_ID,
         insight_id="1",
         limit=1,
     )
 
+  query = mock_query.call_args.args[0]
+  assert "ORDER BY" not in query
+  assert "LIMIT" not in query
   assert result == {
       "customer_search_term_insights": [
           {"customer_search_term_insight.id": "1"}
       ]
   }
+
+
+def test_list_customer_search_term_insights_rejects_campaign_filter_with_insight_id():
+  with pytest.raises(
+      search_terms.ToolError,
+      match="does not support campaign_id/campaign_ids filters",
+  ):
+    search_terms.list_customer_search_term_insights(
+        CUSTOMER_ID,
+        campaign_id="111",
+        insight_id="7",
+    )
 
 
 def test_analyze_search_terms_returns_candidates():

@@ -107,7 +107,11 @@ def _keyword_quality_score_query(
         ad_group_criterion.quality_info.search_predicted_ctr
       FROM keyword_view
       {build_where_clause(where_conditions)}
-      ORDER BY ad_group_criterion.quality_info.quality_score ASC
+      ORDER BY
+        ad_group_criterion.quality_info.quality_score ASC,
+        campaign.id ASC,
+        ad_group.id ASC,
+        ad_group_criterion.criterion_id ASC
   """
 
 
