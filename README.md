@@ -19,6 +19,7 @@
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
 - 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, quality score summaries, conversion goals, RSA ad strength, conversion actions, and audience performance
+- 📄 **Cursor Pagination** — All list tools support `page_token` for paging through large result sets with total counts
 - ⚡ **Response Caching** — Docs, tool guide, and campaign context are cached to reduce latency and token usage
 - 📈 **Optimization** — Recommendations, optimization score, bid/budget simulations, and search term analysis
 - 🏎️ **Performance Max** — Asset diagnostics, top combinations, and placement insights
