@@ -49,6 +49,7 @@ def test_list_campaign_search_term_insights_builds_query():
   assert "segments.search_term" not in query
   assert "segments.search_subcategory" not in query
   assert "LIMIT" not in query
+  assert mock_query.call_args.kwargs["page_size"] == 1000
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
   assert result["truncated"] is False
@@ -188,6 +189,20 @@ def test_list_customer_search_term_insights_term_detail_applies_limit_after_quer
       "next_page_token": "1",
       "page_size": 1,
   }
+
+
+def test_list_customer_search_term_insights_uses_bulk_default_page_size():
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    search_terms.list_customer_search_term_insights(CUSTOMER_ID)
+
+  assert mock_query.call_args.kwargs["page_size"] == 1000
 
 
 def test_list_customer_search_term_insights_rejects_campaign_filter_with_insight_id():

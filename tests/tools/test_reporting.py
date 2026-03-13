@@ -127,6 +127,7 @@ def test_list_keyword_quality_scores_builds_filtered_query():
   assert "ad_group_criterion.quality_info.creative_quality_score" in query
   assert "ad_group_criterion.criterion_id ASC" in query
   assert "LIMIT" not in query
+  assert mock_run.call_args.kwargs["page_size"] == 1000
 
 
 def test_list_keyword_quality_scores_rejects_invalid_score():

@@ -483,7 +483,7 @@ def list_keyword_quality_scores(
     campaign_ids: list[str] | None = None,
     ad_group_ids: list[str] | None = None,
     min_quality_score: int | None = None,
-    limit: int | None = 100,
+    limit: int | None = 1000,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:

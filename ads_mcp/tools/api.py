@@ -14,9 +14,13 @@
 
 """This module contains tools for interacting with the Google Ads API."""
 
+from collections import OrderedDict
+import csv
+from copy import deepcopy
 import json
 import math
 import os
+import tempfile
 import time
 from typing import Any
 
@@ -42,6 +46,11 @@ from ads_mcp.utils import ROOT_DIR
 _ADS_CLIENT: GoogleAdsClient | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _DEFAULT_LOGIN_CUSTOMER_ID: str | None = None
+_PAGED_QUERY_CACHE_TTL_SECONDS = 90.0
+_PAGED_QUERY_CACHE_MAX_ENTRIES = 2
+_PAGED_QUERY_CACHE: OrderedDict[
+    tuple[str, str | None, str], tuple[float, list[dict[str, Any]]]
+] = OrderedDict()
 _EXECUTE_GAQL_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -52,6 +61,26 @@ _EXECUTE_GAQL_OUTPUT_SCHEMA = {
         "max_rows_applied": {"type": "integer"},
     },
     "required": ["data"],
+}
+_EXPORT_GAQL_CSV_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "file_path": {"type": "string"},
+        "row_count": {"type": "integer"},
+        "total_row_count": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "max_rows_applied": {"type": "integer"},
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "bytes_written": {"type": "integer"},
+    },
+    "required": [
+        "file_path",
+        "row_count",
+        "total_row_count",
+        "truncated",
+        "columns",
+        "bytes_written",
+    ],
 }
 
 
@@ -208,6 +237,102 @@ def _decode_page_token(page_token: str | None) -> int:
   return offset
 
 
+def _page_cache_key(
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+) -> tuple[str, str | None, str]:
+  """Builds a stable cache key for paged GAQL queries."""
+  return (customer_id, login_customer_id, query)
+
+
+def _get_cached_page_rows(
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+) -> list[dict[str, Any]] | None:
+  """Returns cached paged query rows when the entry is still fresh."""
+  cache_key = _page_cache_key(query, customer_id, login_customer_id)
+  cache_entry = _PAGED_QUERY_CACHE.get(cache_key)
+  if not cache_entry:
+    return None
+
+  cached_at, cached_rows = cache_entry
+  if (time.monotonic() - cached_at) > _PAGED_QUERY_CACHE_TTL_SECONDS:
+    _PAGED_QUERY_CACHE.pop(cache_key, None)
+    return None
+
+  _PAGED_QUERY_CACHE.move_to_end(cache_key)
+  return deepcopy(cached_rows)
+
+
+def _set_cached_page_rows(
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+    rows: list[dict[str, Any]],
+) -> None:
+  """Stores paged query rows in a bounded TTL cache."""
+  cache_key = _page_cache_key(query, customer_id, login_customer_id)
+  _PAGED_QUERY_CACHE[cache_key] = (time.monotonic(), deepcopy(rows))
+  _PAGED_QUERY_CACHE.move_to_end(cache_key)
+
+  while len(_PAGED_QUERY_CACHE) > _PAGED_QUERY_CACHE_MAX_ENTRIES:
+    _PAGED_QUERY_CACHE.popitem(last=False)
+
+
+def _csv_columns(rows: list[dict[str, Any]]) -> list[str]:
+  """Returns CSV columns in first-seen row/key order."""
+  columns = []
+  seen_columns = set()
+  for row in rows:
+    for column in row:
+      if column in seen_columns:
+        continue
+      seen_columns.add(column)
+      columns.append(column)
+  return columns
+
+
+def _csv_cell_value(value: Any) -> Any:
+  """Serializes a row value into a CSV-safe scalar."""
+  if value is None:
+    return ""
+  if isinstance(value, (str, int, float, bool)):
+    return value
+  return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+def _write_csv_rows(
+    rows: list[dict[str, Any]],
+    output_path: str | None = None,
+) -> tuple[str, list[str], int]:
+  """Writes GAQL rows to CSV and returns the path, columns, and size."""
+  if output_path:
+    resolved_path = os.path.abspath(output_path)
+    parent_dir = os.path.dirname(resolved_path)
+    if parent_dir:
+      os.makedirs(parent_dir, exist_ok=True)
+  else:
+    file_descriptor, resolved_path = tempfile.mkstemp(
+        prefix="google_ads_mcp_",
+        suffix=".csv",
+    )
+    os.close(file_descriptor)
+
+  columns = _csv_columns(rows)
+  with open(resolved_path, "w", newline="", encoding="utf-8") as csv_file:
+    writer = csv.writer(csv_file)
+    if columns:
+      writer.writerow(columns)
+      for row in rows:
+        writer.writerow(
+            [_csv_cell_value(row.get(column)) for column in columns]
+        )
+
+  return resolved_path, columns, os.path.getsize(resolved_path)
+
+
 def run_gaql_query(
     query: str,
     customer_id: str,
@@ -243,11 +368,14 @@ def run_gaql_query_page(
     raise ToolError("page_size must be greater than 0.")
 
   offset = _decode_page_token(page_token)
-  rows = run_gaql_query(
-      query=query,
-      customer_id=customer_id,
-      login_customer_id=login_customer_id,
-  )
+  rows = _get_cached_page_rows(query, customer_id, login_customer_id)
+  if rows is None:
+    rows = run_gaql_query(
+        query=query,
+        customer_id=customer_id,
+        login_customer_id=login_customer_id,
+    )
+    _set_cached_page_rows(query, customer_id, login_customer_id, rows)
   next_offset = offset + page_size
   return {
       "rows": rows[offset:next_offset],
@@ -316,3 +444,56 @@ def execute_gaql(
       "truncated": len(rows) > max_rows,
       "max_rows_applied": max_rows,
   }
+
+
+@ads_read_tool(
+    mcp,
+    tags={"gaql", "reporting", "export"},
+    output_schema=_EXPORT_GAQL_CSV_OUTPUT_SCHEMA,
+)
+def export_gaql_csv(
+    query: str,
+    customer_id: str,
+    output_path: str | None = None,
+    max_rows: int | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Exports GAQL query results to a CSV file for bulk extraction.
+
+  Prefer this over execute_gaql when the goal is loading a large result set
+  into another system or reading the data outside the model context.
+
+  Args:
+      query: GAQL query to export.
+      customer_id: Google Ads customer ID.
+      output_path: Optional destination path. Defaults to a temp CSV file.
+      max_rows: Optional row cap for partial exports.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with the CSV path and export metadata.
+  """
+  if max_rows is not None and max_rows <= 0:
+    raise ToolError("max_rows must be greater than 0.")
+
+  rows = run_gaql_query(
+      query=query,
+      customer_id=customer_id,
+      login_customer_id=login_customer_id,
+  )
+  exported_rows = rows if max_rows is None else rows[:max_rows]
+  file_path, columns, bytes_written = _write_csv_rows(
+      exported_rows, output_path
+  )
+
+  result = {
+      "file_path": file_path,
+      "row_count": len(exported_rows),
+      "total_row_count": len(rows),
+      "truncated": len(exported_rows) < len(rows),
+      "columns": columns,
+      "bytes_written": bytes_written,
+  }
+  if max_rows is not None:
+    result["max_rows_applied"] = max_rows
+  return result

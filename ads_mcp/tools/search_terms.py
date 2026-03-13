@@ -133,7 +133,7 @@ def list_campaign_search_term_insights(
     date_range: str = "LAST_30_DAYS",
     min_clicks: int = 0,
     min_impressions: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -212,7 +212,7 @@ def list_customer_search_term_insights(
     date_range: str = "LAST_30_DAYS",
     min_clicks: int = 0,
     min_impressions: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:

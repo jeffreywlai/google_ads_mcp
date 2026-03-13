@@ -201,7 +201,7 @@ def list_performance_max_placements(
     campaign_ids: list[str] | None = None,
     placement_types: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
-    limit: int = 50,
+    limit: int = 500,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:

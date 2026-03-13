@@ -102,7 +102,7 @@ def list_recommendations(
     recommendation_types: list[str] | None = None,
     campaign_ids: list[str] | None = None,
     include_dismissed: bool = False,
-    limit: int = 50,
+    limit: int = 500,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:

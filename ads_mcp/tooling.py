@@ -37,6 +37,7 @@ _WORKFLOW_TAG_PRIORITY = [
     "profiles",
     "docs",
     "discovery",
+    "export",
     "reporting",
     "gaql",
     "optimization",

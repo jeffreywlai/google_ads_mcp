@@ -15,6 +15,7 @@
 """Tests for the API tools."""
 
 from unittest import mock
+import os
 
 from ads_mcp.tools import api
 from google.protobuf.field_mask_pb2 import FieldMask
@@ -27,9 +28,11 @@ def reset_ads_client():
   """Resets the cached GoogleAdsClient instance before each test."""
   api._ADS_CLIENT = None  # pylint: disable=protected-access
   api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
+  api._PAGED_QUERY_CACHE = api.OrderedDict()  # pylint: disable=protected-access
   yield
   api._ADS_CLIENT = None  # pylint: disable=protected-access
   api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
+  api._PAGED_QUERY_CACHE = api.OrderedDict()  # pylint: disable=protected-access
 
 
 @pytest.mark.parametrize(
@@ -183,6 +186,59 @@ def test_run_gaql_query_page_rejects_invalid_page_token():
     )
 
 
+def test_run_gaql_query_page_reuses_short_lived_cache():
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    first_page = api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        page_size=2,
+    )
+    second_page = api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        page_size=2,
+        page_token="2",
+    )
+
+  assert mock_run.call_count == 1
+  assert first_page["rows"] == [{"campaign.id": "1"}, {"campaign.id": "2"}]
+  assert second_page["rows"] == [{"campaign.id": "3"}]
+
+
+def test_run_gaql_query_page_expires_cache_after_ttl():
+  rows = [{"campaign.id": "1"}]
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.api.time.monotonic",
+        side_effect=[100.0, 191.0, 191.0],
+    ):
+      api.run_gaql_query_page(
+          "SELECT campaign.id FROM campaign",
+          "123",
+          page_size=1,
+      )
+      api.run_gaql_query_page(
+          "SELECT campaign.id FROM campaign",
+          "123",
+          page_size=1,
+      )
+
+  assert mock_run.call_count == 2
+
+
 def test_build_paginated_list_response_returns_completeness_metadata():
   assert api.build_paginated_list_response(
       "campaigns",
@@ -202,6 +258,67 @@ def test_build_paginated_list_response_returns_completeness_metadata():
       "next_page_token": "2",
       "page_size": 2,
   }
+
+
+def test_export_gaql_csv_writes_file_and_metadata(tmp_path):
+  output_path = tmp_path / "export.csv"
+  rows = [
+      {
+          "campaign.id": "1",
+          "metrics.clicks": 10,
+          "nested": {"a": 1},
+      },
+      {
+          "campaign.id": "2",
+          "metrics.clicks": 5,
+          "nested": {"a": 2},
+      },
+  ]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    result = api.export_gaql_csv(
+        query="SELECT campaign.id, metrics.clicks FROM campaign",
+        customer_id="123",
+        output_path=str(output_path),
+    )
+
+  assert result["file_path"] == str(output_path)
+  assert result["row_count"] == 2
+  assert result["total_row_count"] == 2
+  assert result["truncated"] is False
+  assert result["columns"] == [
+      "campaign.id",
+      "metrics.clicks",
+      "nested",
+  ]
+  assert result["bytes_written"] == os.path.getsize(output_path)
+  assert output_path.read_text(encoding="utf-8").splitlines() == [
+      "campaign.id,metrics.clicks,nested",
+      '1,10,"{""a"":1}"',
+      '2,5,"{""a"":2}"',
+  ]
+
+
+def test_export_gaql_csv_applies_max_rows(tmp_path):
+  output_path = tmp_path / "limited.csv"
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    result = api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=str(output_path),
+        max_rows=2,
+    )
+
+  assert result["row_count"] == 2
+  assert result["total_row_count"] == 3
+  assert result["truncated"] is True
+  assert result["max_rows_applied"] == 2
 
 
 @mock.patch("ads_mcp.tools.api.Credentials")

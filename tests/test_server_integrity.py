@@ -54,6 +54,7 @@ from ads_mcp.tools import smart_campaigns
 TOOL_MODULES = {
     api: [
         "execute_gaql",
+        "export_gaql_csv",
         "list_accessible_accounts",
     ],
     campaigns: [
@@ -152,15 +153,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 64 tools exist as callable functions
+# 1. Tool registration: all 65 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_64(self):
+  def test_total_tool_count_is_65(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 64, f"Expected 64 tools, found {total}"
+    assert total == 65, f"Expected 65 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -499,7 +500,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 64
+    assert len(registered_tools) == 65
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -575,6 +576,7 @@ class TestFastMcpConfiguration:
     assert "get_campaign_conversion_goals" in public_tool_names
     assert "list_device_performance" in public_tool_names
     assert "summarize_keyword_quality_scores" in public_tool_names
+    assert "export_gaql_csv" in public_tool_names
     assert "search_google_ads_fields" in public_tool_names
     assert "apply_recommendations" not in public_tool_names
 
@@ -790,7 +792,7 @@ class TestFastMcpConfiguration:
             "total_page_count": 1,
             "truncated": False,
             "next_page_token": None,
-            "page_size": 100,
+            "page_size": 1000,
         }
         assert direct_result.structured_content == expected
         assert proxy_result.structured_content == expected

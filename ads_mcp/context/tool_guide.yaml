@@ -9,6 +9,8 @@ principles:
   - Use search_tools only when the right tool name is unclear.
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
+  - Use export_gaql_csv for bulk extracts that would be too large or noisy as
+    JSON tool output.
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.
@@ -23,6 +25,7 @@ categories:
     tools:
       list_accessible_accounts: List accounts that can be used as login_customer_id.
       execute_gaql: Custom reporting reads when no dedicated read tool exists.
+      export_gaql_csv: Bulk-export GAQL results to a CSV file when JSON responses would be too large.
 
   reporting:
     summary: High-frequency performance and configuration reports.

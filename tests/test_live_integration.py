@@ -247,6 +247,7 @@ def _resource_id(resource_name: str) -> str:
 def test_live_stdio_tools_are_exposed():
   tool_names = asyncio.run(_list_tools())
   assert "execute_gaql" in tool_names
+  assert "export_gaql_csv" in tool_names
   assert "list_change_events" in tool_names
   assert "list_customer_search_term_insights" in tool_names
   assert "list_keyword_quality_scores" in tool_names
@@ -268,6 +269,34 @@ def test_live_execute_gaql_returns_structured_rows():
   assert "data" in result.structured_content
   assert result.structured_content["returned_row_count"] == 1
   assert result.structured_content["max_rows_applied"] == 1
+
+
+def test_live_export_gaql_csv_writes_csv(tmp_path):
+  customer_id = _live_customer_id()
+  output_path = tmp_path / "customer_export.csv"
+
+  result = asyncio.run(
+      _call_tool(
+          "export_gaql_csv",
+          {
+              "customer_id": customer_id,
+              "query": (
+                  "SELECT customer.id, customer.descriptive_name "
+                  "FROM customer LIMIT 1"
+              ),
+              "output_path": str(output_path),
+              "max_rows": 1,
+          },
+      )
+  )
+
+  assert result.structured_content["file_path"] == str(output_path)
+  assert result.structured_content["row_count"] == 1
+  assert result.structured_content["max_rows_applied"] == 1
+  assert output_path.is_file()
+  assert output_path.read_text(encoding="utf-8").splitlines()[0] == (
+      "customer.id,customer.descriptive_name"
+  )
 
 
 def test_live_change_events_defaults_dates_and_preserves_shape():

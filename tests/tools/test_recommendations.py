@@ -45,6 +45,7 @@ def test_list_recommendations_builds_filtered_query():
   assert "campaign.id IN (111, 222)" in query
   assert "recommendation.dismissed = FALSE" in query
   assert "recommendation.impact" not in query
+  assert mock_query.call_args.kwargs["page_size"] == 500
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
   assert result["truncated"] is False

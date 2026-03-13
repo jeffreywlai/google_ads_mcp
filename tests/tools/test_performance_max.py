@@ -128,5 +128,6 @@ def test_list_performance_max_placements_builds_query():
   assert "campaign.id IN (111)" in query
   assert "placement_type IN (WEBSITE)" in query
   assert "metrics.impressions" in query
+  assert mock_query.call_args.kwargs["page_size"] == 500
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
