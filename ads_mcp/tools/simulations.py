@@ -23,7 +23,8 @@ from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
-from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import build_paginated_list_response
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 _CAMPAIGN_SIMULATION_FIELDS = {
@@ -69,6 +70,7 @@ def list_campaign_simulations(
     campaign_ids: list[str] | None = None,
     simulation_type: str | None = None,
     limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists campaign_simulation rows and their point lists.
@@ -78,6 +80,7 @@ def list_campaign_simulations(
       campaign_ids: Optional campaign IDs to filter to.
       simulation_type: Optional type such as BUDGET or CPC_BID.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -114,14 +117,21 @@ def list_campaign_simulations(
       FROM campaign_simulation
       {build_where_clause(where_conditions)}
       ORDER BY campaign_simulation.end_date DESC
-      LIMIT {limit}
   """
-
-  return {
-      "campaign_simulations": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "campaign_simulations",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @simulation_tool
@@ -130,6 +140,7 @@ def list_ad_group_simulations(
     ad_group_ids: list[str] | None = None,
     simulation_type: str | None = None,
     limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists ad_group_simulation rows and their point lists.
@@ -139,6 +150,7 @@ def list_ad_group_simulations(
       ad_group_ids: Optional ad group IDs to filter to.
       simulation_type: Optional type such as CPC_BID or TARGET_ROAS.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -177,14 +189,21 @@ def list_ad_group_simulations(
       FROM ad_group_simulation
       {build_where_clause(where_conditions)}
       ORDER BY ad_group_simulation.end_date DESC
-      LIMIT {limit}
   """
-
-  return {
-      "ad_group_simulations": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "ad_group_simulations",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @simulation_tool
@@ -193,6 +212,7 @@ def list_ad_group_criterion_simulations(
     ad_group_id: str | None = None,
     criterion_ids: list[str] | None = None,
     limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists ad_group_criterion_simulation CPC bid point lists.
@@ -202,6 +222,7 @@ def list_ad_group_criterion_simulations(
       ad_group_id: Optional ad group ID filter.
       criterion_ids: Optional criterion IDs to filter to.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -235,11 +256,18 @@ def list_ad_group_criterion_simulations(
       FROM ad_group_criterion_simulation
       {build_where_clause(where_conditions)}
       ORDER BY ad_group_criterion_simulation.end_date DESC
-      LIMIT {limit}
   """
-
-  return {
-      "ad_group_criterion_simulations": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "ad_group_criterion_simulations",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )

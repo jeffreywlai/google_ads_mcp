@@ -24,7 +24,9 @@ from ads_mcp.tools._campaign_context import get_campaign_context
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _date_range_condition(date_range: str) -> str:
@@ -65,14 +67,6 @@ def _campaign_context_from_rows(
       key=int,
   )
   return get_campaign_context(customer_id, campaign_ids, login_customer_id)
-
-
-def _limit_rows(
-    rows: list[dict[str, Any]],
-    limit: int,
-) -> list[dict[str, Any]]:
-  """Applies the tool-level limit after GAQL execution."""
-  return rows[:limit]
 
 
 def _campaign_insight_select_fields(
@@ -140,6 +134,7 @@ def list_campaign_search_term_insights(
     min_clicks: int = 0,
     min_impressions: int = 0,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists campaign_search_term_insight rows with key metrics.
@@ -155,6 +150,7 @@ def list_campaign_search_term_insights(
       min_clicks: Optional minimum clicks filter.
       min_impressions: Optional minimum impressions filter.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -184,20 +180,27 @@ def list_campaign_search_term_insights(
       FROM campaign_search_term_insight
       {build_where_clause(where_conditions)}
       {"ORDER BY metrics.clicks DESC" if not include_search_terms else ""}
-      {"LIMIT " + str(limit) if not include_search_terms else ""}
   """
-
-  rows = run_gaql_query(query, customer_id, login_customer_id)
-  if include_search_terms:
-    rows = _limit_rows(rows, limit)
-  return {
-      "campaign_search_term_insights": rows,
-      "campaign_context": _campaign_context_from_rows(
-          customer_id,
-          rows,
-          login_customer_id,
-      ),
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "campaign_search_term_insights",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["campaign_context"] = _campaign_context_from_rows(
+      customer_id,
+      page["rows"],
+      login_customer_id,
+  )
+  return result
 
 
 @search_term_tool
@@ -210,6 +213,7 @@ def list_customer_search_term_insights(
     min_clicks: int = 0,
     min_impressions: int = 0,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists customer_search_term_insight rows with key metrics.
@@ -227,6 +231,7 @@ def list_customer_search_term_insights(
       min_clicks: Optional minimum clicks filter.
       min_impressions: Optional minimum impressions filter.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -237,7 +242,6 @@ def list_customer_search_term_insights(
   _non_negative(min_impressions, "min_impressions")
   campaign_ids = _merge_campaign_ids(campaign_id, campaign_ids)
   include_search_terms = insight_id is not None
-  use_client_side_limit = include_search_terms
 
   if campaign_ids:
     raise ToolError(
@@ -262,14 +266,21 @@ def list_customer_search_term_insights(
       FROM customer_search_term_insight
       {build_where_clause(where_conditions)}
       {"ORDER BY metrics.clicks DESC" if not include_search_terms else ""}
-      {"LIMIT " + str(limit) if not use_client_side_limit else ""}
   """
-
-  rows = run_gaql_query(query, customer_id, login_customer_id)
-  if use_client_side_limit:
-    rows = _limit_rows(rows, limit)
-
-  return {"customer_search_term_insights": rows}
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "customer_search_term_insights",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @search_term_tool

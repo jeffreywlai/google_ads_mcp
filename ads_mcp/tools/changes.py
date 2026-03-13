@@ -16,6 +16,7 @@
 
 from datetime import date
 from datetime import timedelta
+from typing import Any
 
 from fastmcp.exceptions import ToolError
 
@@ -24,10 +25,12 @@ from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import gaql_quote_string
-from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import run_gaql_query_page
 
 _CHANGE_EVENT_MAX_LOOKBACK_DAYS = 30
+_CHANGE_HISTORY_RESULT_CAP = 10_000
 
 
 def _default_date_range(days_back: int) -> tuple[str, str]:
@@ -80,8 +83,9 @@ def list_change_statuses(
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
-) -> dict[str, list[dict[str, object]]]:
+) -> dict[str, Any]:
   """Lists changed resources from change_status.
 
   Args:
@@ -90,10 +94,11 @@ def list_change_statuses(
       start_date: Inclusive YYYY-MM-DD start date. Defaults to 7 days ago.
       end_date: Inclusive YYYY-MM-DD end date. Defaults to today.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
-      A dict containing change status rows.
+      A dict containing change status rows plus completeness metadata.
   """
   validate_limit(limit)
   start_date, end_date = _resolve_date_range(start_date, end_date, 7)
@@ -119,12 +124,26 @@ def list_change_statuses(
       FROM change_status
       {build_where_clause(where_conditions)}
       ORDER BY change_status.last_change_date_time DESC
-      LIMIT {limit}
+      LIMIT {_CHANGE_HISTORY_RESULT_CAP}
   """
-
-  return {
-      "change_statuses": run_gaql_query(query, customer_id, login_customer_id)
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "change_statuses",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  if page["total_results_count"] >= _CHANGE_HISTORY_RESULT_CAP:
+    result["truncated"] = True
+    result["api_result_cap"] = _CHANGE_HISTORY_RESULT_CAP
+  return result
 
 
 @change_tool
@@ -135,8 +154,9 @@ def list_change_events(
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
-) -> dict[str, list[dict[str, object]]]:
+) -> dict[str, Any]:
   """Lists granular changes from change_event.
 
   Args:
@@ -148,10 +168,11 @@ def list_change_events(
           Google Ads only exposes change_event for the last 30 days.
       end_date: Inclusive YYYY-MM-DD end date. Defaults to today.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
-      A dict containing change event rows.
+      A dict containing change event rows plus completeness metadata.
   """
   validate_limit(limit)
   start_date, end_date = _resolve_change_event_date_range(
@@ -187,9 +208,23 @@ def list_change_events(
       FROM change_event
       {build_where_clause(where_conditions)}
       ORDER BY change_event.change_date_time DESC
-      LIMIT {limit}
+      LIMIT {_CHANGE_HISTORY_RESULT_CAP}
   """
-
-  return {
-      "change_events": run_gaql_query(query, customer_id, login_customer_id)
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "change_events",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  if page["total_results_count"] >= _CHANGE_HISTORY_RESULT_CAP:
+    result["truncated"] = True
+    result["api_result_cap"] = _CHANGE_HISTORY_RESULT_CAP
+  return result

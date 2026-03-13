@@ -187,7 +187,9 @@ def _live_customer_id() -> str:
 
 
 def _mutation_customer_id() -> str:
-  return os.getenv("GOOGLE_ADS_LIVE_MUTATION_CUSTOMER_ID") or _live_customer_id()
+  return (
+      os.getenv("GOOGLE_ADS_LIVE_MUTATION_CUSTOMER_ID") or _live_customer_id()
+  )
 
 
 async def _first_search_campaign_id(customer_id: str) -> str | None:
@@ -281,6 +283,9 @@ def test_live_change_events_defaults_dates_and_preserves_shape():
   )
 
   assert "change_events" in result.structured_content
+  assert "returned_count" in result.structured_content
+  assert "total_count" in result.structured_content
+  assert "next_page_token" in result.structured_content
   assert isinstance(result.structured_content["change_events"], list)
 
 
@@ -297,6 +302,8 @@ def test_live_change_statuses_smoke():
   )
 
   assert "change_statuses" in result.structured_content
+  assert "returned_count" in result.structured_content
+  assert "total_count" in result.structured_content
   assert isinstance(result.structured_content["change_statuses"], list)
 
 
@@ -313,6 +320,8 @@ def test_live_customer_search_term_insights_smoke():
   )
 
   assert "customer_search_term_insights" in result.structured_content
+  assert "returned_count" in result.structured_content
+  assert "total_count" in result.structured_content
   assert isinstance(
       result.structured_content["customer_search_term_insights"], list
   )
@@ -714,15 +723,37 @@ def test_live_empty_results_preserve_shape():
           },
       )
 
-      assert change_events.structured_content == {"change_events": []}
+      assert change_events.structured_content == {
+          "change_events": [],
+          "returned_count": 0,
+          "total_count": 0,
+          "total_page_count": 0,
+          "truncated": False,
+          "next_page_token": None,
+          "page_size": 1,
+      }
       assert customer_search_terms.structured_content == {
-          "customer_search_term_insights": []
+          "customer_search_term_insights": [],
+          "returned_count": 0,
+          "total_count": 0,
+          "total_page_count": 0,
+          "truncated": False,
+          "next_page_token": None,
+          "page_size": 1,
       }
       assert campaign_search_terms.structured_content == {
           "campaign_search_term_insights": [],
+          "returned_count": 0,
+          "total_count": 0,
+          "total_page_count": 0,
+          "truncated": False,
+          "next_page_token": None,
+          "page_size": 1,
           "campaign_context": {},
       }
       assert quality_scores.structured_content["keyword_quality_scores"] == []
+      assert quality_scores.structured_content["returned_count"] == 0
+      assert quality_scores.structured_content["total_count"] == 0
       assert quality_scores.structured_content["returned_row_count"] == 0
       assert quality_scores.structured_content["total_row_count"] == 0
       assert quality_scores.structured_content["total_page_count"] == 0

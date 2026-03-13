@@ -25,17 +25,21 @@ CUSTOMER_ID = "1234567890"
 
 def test_list_campaign_search_term_insights_builds_query():
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.search_terms.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
-    search_terms.list_campaign_search_term_insights(
+    result = search_terms.list_campaign_search_term_insights(
         CUSTOMER_ID,
         campaign_id="111",
         min_clicks=5,
         min_impressions=10,
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM campaign_search_term_insight" in query
   assert "campaign.id = 111" in query
   assert "metrics.clicks >= 5" in query
@@ -44,7 +48,10 @@ def test_list_campaign_search_term_insights_builds_query():
   assert "metrics.cost_micros" not in query
   assert "segments.search_term" not in query
   assert "segments.search_subcategory" not in query
-  assert "LIMIT 100" in query
+  assert "LIMIT" not in query
+  assert result["returned_count"] == 0
+  assert result["total_count"] == 0
+  assert result["truncated"] is False
 
 
 def test_list_campaign_search_term_insights_term_detail_uses_insight_id():
@@ -60,8 +67,12 @@ def test_list_campaign_search_term_insights_term_detail_uses_insight_id():
   ]
 
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.search_terms.run_gaql_query_page",
+      return_value={
+          "rows": [rows[0]],
+          "next_page_token": "1",
+          "total_results_count": 2,
+      },
   ) as mock_query:
     result = search_terms.list_campaign_search_term_insights(
         CUSTOMER_ID,
@@ -70,13 +81,17 @@ def test_list_campaign_search_term_insights_term_detail_uses_insight_id():
         limit=1,
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "campaign_search_term_insight.id = 7" in query
   assert "segments.search_term" in query
   assert "segments.search_subcategory" in query
   assert "ORDER BY" not in query
   assert "LIMIT" not in query
   assert result["campaign_search_term_insights"] == [rows[0]]
+  assert result["returned_count"] == 1
+  assert result["total_count"] == 2
+  assert result["truncated"] is True
+  assert result["next_page_token"] == "1"
 
 
 def test_list_campaign_search_term_insights_returns_campaign_context():
@@ -89,8 +104,12 @@ def test_list_campaign_search_term_insights_returns_campaign_context():
   ]
 
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.search_terms.run_gaql_query_page",
+      return_value={
+          "rows": rows,
+          "next_page_token": None,
+          "total_results_count": 1,
+      },
   ):
     with mock.patch(
         "ads_mcp.tools.search_terms.get_campaign_context",
@@ -115,6 +134,8 @@ def test_list_campaign_search_term_insights_returns_campaign_context():
           "recent_30_day_cost_micros": 2_000_000,
       }
   }
+  assert result["returned_count"] == 1
+  assert result["total_count"] == 1
 
 
 def test_list_campaign_search_term_insights_requires_campaign_id():
@@ -140,8 +161,12 @@ def test_list_customer_search_term_insights_term_detail_applies_limit_after_quer
   ]
 
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.search_terms.run_gaql_query_page",
+      return_value={
+          "rows": [{"customer_search_term_insight.id": "1"}],
+          "next_page_token": "1",
+          "total_results_count": 2,
+      },
   ) as mock_query:
     result = search_terms.list_customer_search_term_insights(
         CUSTOMER_ID,
@@ -149,13 +174,19 @@ def test_list_customer_search_term_insights_term_detail_applies_limit_after_quer
         limit=1,
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "ORDER BY" not in query
   assert "LIMIT" not in query
   assert result == {
       "customer_search_term_insights": [
           {"customer_search_term_insight.id": "1"}
-      ]
+      ],
+      "returned_count": 1,
+      "total_count": 2,
+      "total_page_count": 2,
+      "truncated": True,
+      "next_page_token": "1",
+      "page_size": 1,
   }
 
 

@@ -27,6 +27,7 @@ from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import gaql_quote_string
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
@@ -147,6 +148,7 @@ def list_device_performance(
     campaign_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists campaign performance segmented by device.
@@ -156,6 +158,7 @@ def list_device_performance(
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -185,14 +188,21 @@ def list_device_performance(
       FROM campaign
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "device_performance": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "device_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @reporting_tool
@@ -202,6 +212,7 @@ def list_geographic_performance(
     date_range: str = "LAST_30_DAYS",
     location_view: str = "USER_LOCATION",
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists campaign performance segmented by geography.
@@ -212,6 +223,7 @@ def list_geographic_performance(
       date_range: GAQL date range such as LAST_30_DAYS.
       location_view: USER_LOCATION or GEOGRAPHIC.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -265,15 +277,23 @@ def list_geographic_performance(
       FROM {from_resource}
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "location_view": normalized_view,
-      "geographic_performance": run_gaql_query(
-          query, customer_id, login_customer_id
-      ),
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "geographic_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["location_view"] = normalized_view
+  return result
 
 
 @reporting_tool
@@ -283,6 +303,7 @@ def list_impression_share(
     date_range: str = "LAST_30_DAYS",
     enabled_only: bool = True,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists campaign impression share metrics.
@@ -293,6 +314,7 @@ def list_impression_share(
       date_range: GAQL date range such as LAST_30_DAYS.
       enabled_only: Whether to include only ENABLED campaigns.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -323,12 +345,21 @@ def list_impression_share(
       FROM campaign
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "impression_share": run_gaql_query(query, customer_id, login_customer_id)
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "impression_share",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @reporting_tool
@@ -490,10 +521,14 @@ def list_keyword_quality_scores(
     )
     return {
         "keyword_quality_scores": rows,
+        "returned_count": len(rows),
+        "total_count": len(rows),
         "returned_row_count": len(rows),
         "total_row_count": len(rows),
         "total_page_count": 1,
+        "truncated": False,
         "next_page_token": None,
+        "page_size": None,
         "campaign_context": campaign_context,
     }
 
@@ -516,9 +551,12 @@ def list_keyword_quality_scores(
 
   return {
       "keyword_quality_scores": page["rows"],
+      "returned_count": len(page["rows"]),
+      "total_count": total_row_count,
       "returned_row_count": len(page["rows"]),
       "total_row_count": total_row_count,
       "total_page_count": total_page_count,
+      "truncated": page["next_page_token"] is not None,
       "next_page_token": page["next_page_token"],
       "page_size": limit,
       "campaign_context": campaign_context,
@@ -635,6 +673,7 @@ def list_rsa_ad_strength(
     ad_group_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists RSA ad strength diagnostics.
@@ -645,6 +684,7 @@ def list_rsa_ad_strength(
       ad_group_ids: Optional ad group IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -683,12 +723,21 @@ def list_rsa_ad_strength(
       FROM ad_group_ad
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "rsa_ad_strength": run_gaql_query(query, customer_id, login_customer_id)
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "rsa_ad_strength",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @reporting_tool
@@ -697,6 +746,7 @@ def list_conversion_actions(
     statuses: list[str] | None = None,
     types: list[str] | None = None,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists conversion action configuration.
@@ -706,6 +756,7 @@ def list_conversion_actions(
       statuses: Optional conversion action statuses to filter to.
       types: Optional conversion action types to filter to.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -738,14 +789,21 @@ def list_conversion_actions(
       FROM conversion_action
       {build_where_clause(where_conditions)}
       ORDER BY conversion_action.name
-      LIMIT {limit}
   """
-
-  return {
-      "conversion_actions": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "conversion_actions",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @reporting_tool
@@ -756,6 +814,7 @@ def list_audience_performance(
     ad_group_ids: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists audience performance at campaign or ad group scope.
@@ -767,6 +826,7 @@ def list_audience_performance(
       ad_group_ids: Optional ad group IDs to filter to when scope is AD_GROUP.
       date_range: GAQL date range such as LAST_30_DAYS.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -837,12 +897,20 @@ def list_audience_performance(
       FROM {from_resource}
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "scope": normalized_scope,
-      "audience_performance": run_gaql_query(
-          query, customer_id, login_customer_id
-      ),
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "audience_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["scope"] = normalized_scope
+  return result

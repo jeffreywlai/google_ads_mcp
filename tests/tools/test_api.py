@@ -183,6 +183,27 @@ def test_run_gaql_query_page_rejects_invalid_page_token():
     )
 
 
+def test_build_paginated_list_response_returns_completeness_metadata():
+  assert api.build_paginated_list_response(
+      "campaigns",
+      rows=[{"campaign.id": "1"}, {"campaign.id": "2"}],
+      total_count=5,
+      page_size=2,
+      next_page_token="2",
+  ) == {
+      "campaigns": [
+          {"campaign.id": "1"},
+          {"campaign.id": "2"},
+      ],
+      "returned_count": 2,
+      "total_count": 5,
+      "total_page_count": 3,
+      "truncated": True,
+      "next_page_token": "2",
+      "page_size": 2,
+  }
+
+
 @mock.patch("ads_mcp.tools.api.Credentials")
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
 @mock.patch("ads_mcp.tools.api.get_access_token")

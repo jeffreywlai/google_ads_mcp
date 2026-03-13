@@ -30,9 +30,11 @@ from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_string_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _enum_from_name(enum_cls: Any, value: str, field_name: str) -> Any:
@@ -101,6 +103,7 @@ def list_recommendations(
     campaign_ids: list[str] | None = None,
     include_dismissed: bool = False,
     limit: int = 50,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists recommendation resources with impact and account context.
@@ -112,6 +115,7 @@ def list_recommendations(
       campaign_ids: Optional campaign IDs to filter to.
       include_dismissed: Whether dismissed recommendations should be included.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -146,12 +150,21 @@ def list_recommendations(
       FROM recommendation
       {build_where_clause(where_conditions)}
       ORDER BY recommendation.type
-      LIMIT {limit}
   """
-
-  return {
-      "recommendations": run_gaql_query(query, customer_id, login_customer_id)
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "recommendations",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @recommendation_read_tool
@@ -378,6 +391,7 @@ def list_recommendation_subscriptions(
     customer_id: str,
     recommendation_types: list[str] | None = None,
     limit: int = 100,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists recommendation subscriptions used for auto-apply.
@@ -386,6 +400,7 @@ def list_recommendation_subscriptions(
       customer_id: Google Ads customer ID.
       recommendation_types: Optional recommendation types to filter to.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -410,14 +425,21 @@ def list_recommendation_subscriptions(
       FROM recommendation_subscription
       {build_where_clause(where_conditions)}
       ORDER BY recommendation_subscription.type
-      LIMIT {limit}
   """
-
-  return {
-      "recommendation_subscriptions": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "recommendation_subscriptions",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @recommendation_tool

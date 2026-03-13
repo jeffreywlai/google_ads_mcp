@@ -24,26 +24,35 @@ CUSTOMER_ID = "1234567890"
 
 def test_list_campaign_simulations_uses_type_specific_fields():
   with mock.patch(
-      "ads_mcp.tools.simulations.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.simulations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
-    simulations.list_campaign_simulations(
+    result = simulations.list_campaign_simulations(
         CUSTOMER_ID,
         campaign_ids=["111"],
         simulation_type="budget",
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM campaign_simulation" in query
   assert "campaign.id IN (111)" in query
   assert "campaign_simulation.type = BUDGET" in query
   assert "campaign_simulation.budget_point_list.points" in query
+  assert result["returned_count"] == 0
 
 
 def test_list_ad_group_simulations_uses_type_specific_fields():
   with mock.patch(
-      "ads_mcp.tools.simulations.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.simulations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
     simulations.list_ad_group_simulations(
         CUSTOMER_ID,
@@ -51,7 +60,7 @@ def test_list_ad_group_simulations_uses_type_specific_fields():
         simulation_type="cpc_bid",
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM ad_group_simulation" in query
   assert "ad_group.id IN (222)" in query
   assert "ad_group_simulation.cpc_bid_point_list.points" in query
@@ -59,12 +68,16 @@ def test_list_ad_group_simulations_uses_type_specific_fields():
 
 def test_list_campaign_simulations_without_type_stays_lightweight():
   with mock.patch(
-      "ads_mcp.tools.simulations.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.simulations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
     simulations.list_campaign_simulations(CUSTOMER_ID)
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM campaign_simulation" in query
   assert "budget_point_list.points" not in query
   assert "cpc_bid_point_list.points" not in query
@@ -72,17 +85,22 @@ def test_list_campaign_simulations_without_type_stays_lightweight():
 
 def test_list_ad_group_criterion_simulations_builds_query():
   with mock.patch(
-      "ads_mcp.tools.simulations.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.simulations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
-    simulations.list_ad_group_criterion_simulations(
+    result = simulations.list_ad_group_criterion_simulations(
         CUSTOMER_ID,
         ad_group_id="333",
         criterion_ids=["444", "555"],
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM ad_group_criterion_simulation" in query
   assert "ad_group.id = 333" in query
   assert "ad_group_criterion.criterion_id IN (444, 555)" in query
   assert "ad_group_criterion_simulation.cpc_bid_point_list.points" in query
+  assert result["returned_count"] == 0

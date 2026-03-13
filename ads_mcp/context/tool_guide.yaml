@@ -10,6 +10,8 @@ principles:
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
   - Start with the smallest dedicated tool that answers the question.
+  - For list tools, check returned_count, total_count, total_page_count,
+    truncated, and next_page_token before assuming you have the full result.
   - Use get_reporting_view_doc or search_google_ads_fields only when query
     construction is blocked.
   - Mutation tools are hidden by default. Use unlock_mutation_tools only when

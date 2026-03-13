@@ -26,21 +26,62 @@ CUSTOMER_ID = "1234567890"
 
 def test_list_recommendations_builds_filtered_query():
   with mock.patch(
-      "ads_mcp.tools.recommendations.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.recommendations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
-    recommendations.list_recommendations(
+    result = recommendations.list_recommendations(
         CUSTOMER_ID,
         recommendation_types=["campaign_budget", "keyword"],
         campaign_ids=["111", "222"],
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM recommendation" in query
   assert "recommendation.type IN (CAMPAIGN_BUDGET, KEYWORD)" in query
   assert "campaign.id IN (111, 222)" in query
   assert "recommendation.dismissed = FALSE" in query
   assert "recommendation.impact" not in query
+  assert result["returned_count"] == 0
+  assert result["total_count"] == 0
+  assert result["truncated"] is False
+
+
+def test_list_recommendation_subscriptions_returns_paging_metadata():
+  with mock.patch(
+      "ads_mcp.tools.recommendations.run_gaql_query_page",
+      return_value={
+          "rows": [
+              {
+                  "recommendation_subscription.resource_name": (
+                      "customers/123/recommendationSubscriptions/KEYWORD"
+                  )
+              }
+          ],
+          "next_page_token": "100",
+          "total_results_count": 150,
+      },
+  ):
+    result = recommendations.list_recommendation_subscriptions(
+        CUSTOMER_ID,
+        limit=100,
+    )
+
+  assert result["recommendation_subscriptions"] == [
+      {
+          "recommendation_subscription.resource_name": (
+              "customers/123/recommendationSubscriptions/KEYWORD"
+          )
+      }
+  ]
+  assert result["returned_count"] == 1
+  assert result["total_count"] == 150
+  assert result["total_page_count"] == 2
+  assert result["truncated"] is True
+  assert result["next_page_token"] == "100"
 
 
 def test_get_optimization_score_summary_returns_breakdown():

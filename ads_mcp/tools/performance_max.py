@@ -22,7 +22,8 @@ from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
-from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import build_paginated_list_response
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _date_range_condition(date_range: str) -> str:
@@ -52,6 +53,7 @@ def list_asset_group_assets(
     asset_group_ids: list[str] | None = None,
     date_range: str | None = None,
     limit: int = 50,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists Performance Max asset links and their serving diagnostics.
@@ -65,6 +67,7 @@ def list_asset_group_assets(
       date_range: Optional GAQL date range used for conversion metrics.
           Leave unset to list linked assets regardless of recent activity.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -106,14 +109,21 @@ def list_asset_group_assets(
       FROM asset_group_asset
       {build_where_clause(where_conditions)}
       ORDER BY metrics.conversions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "asset_group_assets": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "asset_group_assets",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @performance_max_tool
@@ -124,6 +134,7 @@ def list_asset_group_top_combinations(
     asset_group_id: str | None = None,
     asset_group_ids: list[str] | None = None,
     limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists top served asset combinations for Performance Max.
@@ -135,6 +146,7 @@ def list_asset_group_top_combinations(
       asset_group_id: Optional single asset group ID filter.
       asset_group_ids: Optional asset group IDs to filter to.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -165,14 +177,21 @@ def list_asset_group_top_combinations(
       FROM asset_group_top_combination_view
       {build_where_clause(where_conditions)}
       ORDER BY asset_group.id
-      LIMIT {limit}
   """
-
-  return {
-      "asset_group_top_combinations": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "asset_group_top_combinations",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @performance_max_tool
@@ -183,6 +202,7 @@ def list_performance_max_placements(
     placement_types: list[str] | None = None,
     date_range: str = "LAST_30_DAYS",
     limit: int = 50,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists Performance Max placements with impression metrics.
@@ -194,6 +214,7 @@ def list_performance_max_placements(
       placement_types: Optional types such as WEBSITE or YOUTUBE_VIDEO.
       date_range: GAQL date range used for impression metrics.
       limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -225,11 +246,18 @@ def list_performance_max_placements(
       FROM performance_max_placement_view
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
-      LIMIT {limit}
   """
-
-  return {
-      "performance_max_placements": run_gaql_query(
-          query, customer_id, login_customer_id
-      )
-  }
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "performance_max_placements",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )

@@ -227,7 +227,13 @@ def compact_search_result_serializer(
     if required_args:
       item["required_args"] = required_args
     if optional_args:
-      item["optional_args"] = optional_args[:4]
+      visible_optional_args = optional_args[:4]
+      if (
+          "page_token" in optional_args
+          and "page_token" not in visible_optional_args
+      ):
+        visible_optional_args = [*visible_optional_args[:3], "page_token"]
+      item["optional_args"] = visible_optional_args
     items.append(item)
 
   return items

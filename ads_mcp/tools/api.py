@@ -15,9 +15,10 @@
 """This module contains tools for interacting with the Google Ads API."""
 
 import json
+import math
 import os
-from typing import Any
 import time
+from typing import Any
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
@@ -254,6 +255,27 @@ def run_gaql_query_page(
           str(next_offset) if next_offset < len(rows) else None
       ),
       "total_results_count": len(rows),
+  }
+
+
+def build_paginated_list_response(
+    item_key: str,
+    rows: list[dict[str, Any]],
+    total_count: int,
+    page_size: int,
+    next_page_token: str | None,
+) -> dict[str, Any]:
+  """Builds a consistent paginated list response envelope."""
+  return {
+      item_key: rows,
+      "returned_count": len(rows),
+      "total_count": total_count,
+      "total_page_count": (
+          math.ceil(total_count / page_size) if total_count else 0
+      ),
+      "truncated": next_page_token is not None,
+      "next_page_token": next_page_token,
+      "page_size": page_size,
   }
 
 

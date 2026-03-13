@@ -670,8 +670,12 @@ class TestFastMcpConfiguration:
         ]
 
         with mock.patch(
-            "ads_mcp.tools.changes.run_gaql_query",
-            return_value=rows,
+            "ads_mcp.tools.changes.run_gaql_query_page",
+            return_value={
+                "rows": rows,
+                "next_page_token": None,
+                "total_results_count": 1,
+            },
         ):
           direct_result = await client.call_tool(
               "list_change_events",
@@ -685,11 +689,20 @@ class TestFastMcpConfiguration:
               },
           )
 
-        assert direct_result.structured_content == {"change_events": rows}
-        assert proxy_result.structured_content == {"change_events": rows}
+        expected = {
+            "change_events": rows,
+            "returned_count": 1,
+            "total_count": 1,
+            "total_page_count": 1,
+            "truncated": False,
+            "next_page_token": None,
+            "page_size": 100,
+        }
+        assert direct_result.structured_content == expected
+        assert proxy_result.structured_content == expected
         assert "change_events" in direct_result.data
         assert len(direct_result.data["change_events"]) == len(rows)
-        assert proxy_result.data == {"change_events": rows}
+        assert proxy_result.data == expected
 
     asyncio.run(_run())
 
@@ -697,8 +710,12 @@ class TestFastMcpConfiguration:
     async def _run():
       async with Client(mcp_server) as client:
         with mock.patch(
-            "ads_mcp.tools.changes.run_gaql_query",
-            return_value=[],
+            "ads_mcp.tools.changes.run_gaql_query_page",
+            return_value={
+                "rows": [],
+                "next_page_token": None,
+                "total_results_count": 0,
+            },
         ):
           direct_result = await client.call_tool(
               "list_change_events",
@@ -712,10 +729,19 @@ class TestFastMcpConfiguration:
               },
           )
 
-        assert direct_result.structured_content == {"change_events": []}
-        assert proxy_result.structured_content == {"change_events": []}
-        assert direct_result.data == {"change_events": []}
-        assert proxy_result.data == {"change_events": []}
+        expected = {
+            "change_events": [],
+            "returned_count": 0,
+            "total_count": 0,
+            "total_page_count": 0,
+            "truncated": False,
+            "next_page_token": None,
+            "page_size": 100,
+        }
+        assert direct_result.structured_content == expected
+        assert proxy_result.structured_content == expected
+        assert direct_result.data == expected
+        assert proxy_result.data == expected
 
     asyncio.run(_run())
 
@@ -738,8 +764,12 @@ class TestFastMcpConfiguration:
         ]
 
         with mock.patch(
-            "ads_mcp.tools.search_terms.run_gaql_query",
-            return_value=rows,
+            "ads_mcp.tools.search_terms.run_gaql_query_page",
+            return_value={
+                "rows": rows,
+                "next_page_token": None,
+                "total_results_count": 1,
+            },
         ):
           direct_result = await client.call_tool(
               "list_customer_search_term_insights",
@@ -753,7 +783,15 @@ class TestFastMcpConfiguration:
               },
           )
 
-        expected = {"customer_search_term_insights": rows}
+        expected = {
+            "customer_search_term_insights": rows,
+            "returned_count": 1,
+            "total_count": 1,
+            "total_page_count": 1,
+            "truncated": False,
+            "next_page_token": None,
+            "page_size": 100,
+        }
         assert direct_result.structured_content == expected
         assert proxy_result.structured_content == expected
         assert direct_result.data == expected
@@ -874,7 +912,7 @@ class TestFastMcpConfiguration:
                 "insight_id",
                 "date_range",
                 "min_clicks",
-                "min_impressions",
+                "page_token",
             ],
         },
         {

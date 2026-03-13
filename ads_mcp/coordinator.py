@@ -124,7 +124,10 @@ mcp_server = FastMCP(
         " ambiguous. Use execute_gaql only for custom read queries not"
         " covered by dedicated tools. Keep call_tool for discovery"
         " compatibility, but prefer direct tool calls once tool names are"
-        " known. Mutation tools stay hidden until unlock_mutation_tools."
+        " known. When a list tool returns returned_count, total_count,"
+        " total_page_count, truncated, or next_page_token, use that"
+        " metadata to decide whether more pages are needed. Mutation tools"
+        " stay hidden until unlock_mutation_tools."
         " Requires a configured google-ads.yaml credentials file."
     ),
     mask_error_details=False,

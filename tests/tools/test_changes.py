@@ -14,12 +14,10 @@
 
 """Tests for changes.py."""
 
-import asyncio
 from datetime import date
 from datetime import timedelta
 from unittest import mock
 
-from ads_mcp.server import mcp_server
 from ads_mcp.tools import changes
 from fastmcp.exceptions import ToolError
 import pytest
@@ -30,29 +28,41 @@ CUSTOMER_ID = "1234567890"
 
 def test_list_change_statuses_builds_query():
   with mock.patch(
-      "ads_mcp.tools.changes.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
-    changes.list_change_statuses(
+    result = changes.list_change_statuses(
         CUSTOMER_ID,
         resource_types=["campaign", "ad_group"],
         start_date="2026-03-01",
         end_date="2026-03-08",
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM change_status" in query
   assert "change_status.resource_type IN (CAMPAIGN, AD_GROUP)" in query
   assert "'2026-03-01 00:00:00'" in query
   assert "'2026-03-08 23:59:59'" in query
+  assert "LIMIT 10000" in query
+  assert result["returned_count"] == 0
+  assert result["total_count"] == 0
+  assert result["truncated"] is False
 
 
 def test_list_change_events_builds_query():
   with mock.patch(
-      "ads_mcp.tools.changes.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
-    changes.list_change_events(
+    result = changes.list_change_events(
         CUSTOMER_ID,
         resource_change_operations=["update"],
         change_resource_types=["campaign"],
@@ -60,7 +70,7 @@ def test_list_change_events_builds_query():
         end_date="2026-03-08",
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert "FROM change_event" in query
   assert "change_event.resource_change_operation IN (UPDATE)" in query
   assert "change_event.change_resource_type IN (CAMPAIGN)" in query
@@ -68,6 +78,27 @@ def test_list_change_events_builds_query():
   assert "'2026-03-08 23:59:59'" in query
   assert "change_event.old_resource" not in query
   assert "change_event.new_resource" not in query
+  assert "LIMIT 10000" in query
+  assert result["returned_count"] == 0
+  assert result["total_count"] == 0
+  assert result["truncated"] is False
+
+
+def test_change_tools_flag_when_google_cap_is_reached():
+  with mock.patch(
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value={
+          "rows": [
+              {"change_status.resource_name": "customers/123/campaigns/1"}
+          ],
+          "next_page_token": None,
+          "total_results_count": 10000,
+      },
+  ):
+    result = changes.list_change_statuses(CUSTOMER_ID, limit=10000)
+
+  assert result["truncated"] is True
+  assert result["api_result_cap"] == 10000
 
 
 def test_list_change_events_rejects_dates_older_than_30_days():
@@ -86,15 +117,19 @@ def test_list_change_events_defaults_end_date_to_today():
   start_date = "2026-03-01"
 
   with mock.patch(
-      "ads_mcp.tools.changes.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
     changes.list_change_events(
         CUSTOMER_ID,
         start_date=start_date,
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert f"'{start_date} 00:00:00'" in query
   assert f"'{date.today().isoformat()} 23:59:59'" in query
 
@@ -104,36 +139,18 @@ def test_list_change_statuses_defaults_start_date_when_only_end_date_provided():
   expected_start_date = (date.today() - timedelta(days=7)).isoformat()
 
   with mock.patch(
-      "ads_mcp.tools.changes.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_query:
     changes.list_change_statuses(
         CUSTOMER_ID,
         end_date=end_date,
     )
 
-  query = mock_query.call_args.args[0]
+  query = mock_query.call_args.kwargs["query"]
   assert f"'{expected_start_date} 00:00:00'" in query
   assert f"'{end_date} 23:59:59'" in query
-
-
-def test_change_tools_do_not_force_output_schemas():
-  async def get_schemas():
-    return (
-        (await mcp_server.get_tool("list_change_statuses")).output_schema,
-        (await mcp_server.get_tool("list_change_events")).output_schema,
-    )
-
-  change_statuses_schema, change_events_schema = asyncio.run(get_schemas())
-
-  assert change_statuses_schema == {
-      "type": "object",
-      "additionalProperties": {
-          "type": "array",
-          "items": {
-              "type": "object",
-              "additionalProperties": True,
-          },
-      },
-  }
-  assert change_events_schema == change_statuses_schema

@@ -25,31 +25,45 @@ CUSTOMER_ID = "123"
 
 
 def test_list_device_performance_builds_campaign_query():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
-    reporting.list_device_performance(
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_device_performance(
         CUSTOMER_ID,
         campaign_ids=["111", "222"],
         date_range="LAST_7_DAYS",
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM campaign" in query
   assert "segments.device" in query
   assert "campaign.id IN (111, 222)" in query
   assert "segments.date DURING LAST_7_DAYS" in query
+  assert result["returned_count"] == 0
+  assert result["total_count"] == 0
 
 
 def test_list_geographic_performance_uses_geographic_view():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
-    reporting.list_geographic_performance(
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_geographic_performance(
         CUSTOMER_ID,
         location_view="geographic",
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM geographic_view" in query
   assert "geographic_view.country_criterion_id" in query
   assert "geographic_view.location_type" in query
+  assert result["location_view"] == "GEOGRAPHIC"
+  assert result["returned_count"] == 0
 
 
 def test_list_geographic_performance_rejects_invalid_view():
@@ -58,23 +72,34 @@ def test_list_geographic_performance_rejects_invalid_view():
 
 
 def test_list_impression_share_includes_share_metrics():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
-    reporting.list_impression_share(CUSTOMER_ID)
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_impression_share(CUSTOMER_ID)
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "campaign.status = ENABLED" in query
   assert "metrics.search_impression_share" in query
   assert "metrics.search_top_impression_share" in query
   assert "metrics.search_absolute_top_impression_share" in query
   assert "metrics.search_budget_lost_impression_share" in query
   assert "metrics.search_rank_lost_impression_share" in query
+  assert result["returned_count"] == 0
 
 
 def test_list_impression_share_can_include_non_enabled_campaigns():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
     reporting.list_impression_share(CUSTOMER_ID, enabled_only=False)
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "campaign.status = ENABLED" not in query
 
 
@@ -163,9 +188,12 @@ def test_list_keyword_quality_scores_returns_pagination_metadata():
               "ad_group_criterion.criterion_id": "1",
           }
       ],
+      "returned_count": 1,
+      "total_count": 18050,
       "returned_row_count": 1,
       "total_row_count": 18050,
       "total_page_count": 19,
+      "truncated": True,
       "next_page_token": "next-page",
       "page_size": 1000,
       "campaign_context": {
@@ -335,56 +363,79 @@ def test_summarize_keyword_quality_scores_returns_compact_distributions():
 
 
 def test_list_rsa_ad_strength_filters_to_responsive_search_ads():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
-    reporting.list_rsa_ad_strength(
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_rsa_ad_strength(
         CUSTOMER_ID,
         ad_group_ids=["333"],
         date_range="LAST_14_DAYS",
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM ad_group_ad" in query
   assert "ad_group_ad.ad.type = RESPONSIVE_SEARCH_AD" in query
   assert "ad_group.id IN (333)" in query
   assert "segments.date DURING LAST_14_DAYS" in query
   assert "ad_group_ad.ad_strength" in query
+  assert result["returned_count"] == 0
 
 
 def test_list_conversion_actions_builds_filtered_query():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
-    reporting.list_conversion_actions(
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_conversion_actions(
         CUSTOMER_ID,
         statuses=["enabled"],
         types=["purchase", "sign_up"],
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM conversion_action" in query
   assert "conversion_action.status IN (ENABLED)" in query
   assert "conversion_action.type IN (PURCHASE, SIGN_UP)" in query
   assert (
       "conversion_action.attribution_model_settings.attribution_model" in query
   )
+  assert result["returned_count"] == 0
 
 
 def test_list_audience_performance_campaign_scope_uses_campaign_view():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
     result = reporting.list_audience_performance(
         CUSTOMER_ID,
         scope="campaign",
         campaign_ids=["111"],
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert result["scope"] == "CAMPAIGN"
   assert "FROM campaign_audience_view" in query
   assert "campaign_criterion.user_list.user_list" in query
   assert "campaign_criterion.custom_audience.custom_audience" in query
   assert "campaign.id IN (111)" in query
+  assert result["returned_count"] == 0
 
 
 def test_list_audience_performance_ad_group_scope_uses_ad_group_view():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
     result = reporting.list_audience_performance(
         CUSTOMER_ID,
         scope="ad_group",
@@ -392,12 +443,13 @@ def test_list_audience_performance_ad_group_scope_uses_ad_group_view():
         ad_group_ids=["222"],
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert result["scope"] == "AD_GROUP"
   assert "FROM ad_group_audience_view" in query
   assert "ad_group_criterion.audience.audience" in query
   assert "campaign.id IN (111)" in query
   assert "ad_group.id IN (222)" in query
+  assert result["returned_count"] == 0
 
 
 def test_list_audience_performance_rejects_ad_group_ids_for_campaign_scope():
