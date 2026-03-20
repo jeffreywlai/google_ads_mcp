@@ -22,6 +22,7 @@ from ads_mcp.tools import ads
 from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
 from ads_mcp.tools import changes
+from ads_mcp.tools import conversions
 from ads_mcp.tools import docs
 from ads_mcp.tools import keyword_planner
 from ads_mcp.tools import keywords
@@ -45,6 +46,7 @@ tools = [
     api,
     campaigns,
     changes,
+    conversions,
     docs,
     keyword_planner,
     keywords,
