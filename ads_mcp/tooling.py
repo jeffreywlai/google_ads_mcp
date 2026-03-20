@@ -36,6 +36,7 @@ _WORKFLOW_TAG_PRIORITY = [
     "guide",
     "profiles",
     "docs",
+    "conversions",
     "discovery",
     "export",
     "reporting",

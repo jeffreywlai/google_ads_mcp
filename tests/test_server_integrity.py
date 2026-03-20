@@ -37,6 +37,7 @@ from ads_mcp.tools import ads
 from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
 from ads_mcp.tools import changes
+from ads_mcp.tools import conversions
 from ads_mcp.tools import docs
 from ads_mcp.tools import keyword_planner
 from ads_mcp.tools import keywords
@@ -133,6 +134,10 @@ TOOL_MODULES = {
         "list_change_statuses",
         "list_change_events",
     ],
+    conversions: [
+        "upload_click_conversions",
+        "upload_call_conversions",
+    ],
     performance_max: [
         "list_asset_group_assets",
         "list_asset_group_top_combinations",
@@ -153,15 +158,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 65 tools exist as callable functions
+# 1. Tool registration: all 67 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_65(self):
+  def test_total_tool_count_is_67(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 65, f"Expected 65 tools, found {total}"
+    assert total == 67, f"Expected 67 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -500,7 +505,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 65
+    assert len(registered_tools) == 67
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"

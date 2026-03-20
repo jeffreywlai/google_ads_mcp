@@ -40,6 +40,12 @@ categories:
       list_conversion_actions: Conversion action configuration.
       list_audience_performance: Campaign or ad-group audience performance.
 
+  conversions:
+    summary: Raw conversion upload testing and diagnostics.
+    tools:
+      upload_click_conversions: Low-level ClickConversion uploads that preserve results and partial-failure details.
+      upload_call_conversions: Low-level CallConversion uploads that preserve results and partial-failure details.
+
   docs:
     summary: Documentation and field metadata.
     tools:
