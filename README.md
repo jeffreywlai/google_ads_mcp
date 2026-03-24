@@ -5,7 +5,7 @@
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 65 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 67 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **65 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 🔧 **67 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, and a tool guide available as tools
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
@@ -28,9 +28,10 @@
 - 🏷️ **Label Management** — Create, apply, and remove labels across campaigns and ad groups
 - 🚫 **Negative Keywords** — Full shared set and campaign-level negative keyword management
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
+- 📤 **Conversion Uploads** — Upload offline click and call conversions with partial failure handling
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (65)
+## 📋 Available Tools (67)
 
 ### 🔍 Query & Discovery
 
@@ -176,6 +177,13 @@
 | `suggest_keyword_themes` | Get keyword theme suggestions for a business |
 | `suggest_smart_campaign_ad` | Get AI-suggested headlines and descriptions |
 | `suggest_smart_campaign_budget` | Get low/recommended/high budget options |
+
+### 📤 Conversion Uploads
+
+| Tool | Description |
+|------|-------------|
+| `upload_click_conversions` | Upload offline click conversions (gclid/gbraid/wbraid) |
+| `upload_call_conversions` | Upload offline call conversions |
 
 ## 🚀 Quick Start
 
@@ -340,6 +348,14 @@ Once connected, just talk naturally:
 "Show me change events for campaign 123"
 ```
 
+### Conversion Uploads
+
+```
+"Upload a click conversion for gclid ABC123 on conversion action 456"
+"Upload a call conversion for caller +1234567890"
+"Validate my click conversion payload without actually uploading"
+```
+
 ### Smart Campaigns
 
 ```
@@ -375,6 +391,7 @@ google_ads_mcp/
 │   │   ├── search_terms.py    # Search term insights & analysis
 │   │   ├── simulations.py     # Bid & budget simulations
 │   │   ├── changes.py         # Change history auditing
+│   │   ├── conversions.py     # Offline conversion uploads (click & call)
 │   │   ├── reporting.py       # Curated reporting tools (device, geo, impression share, etc.)
 │   │   ├── performance_max.py # PMax asset & placement diagnostics
 │   │   ├── _gaql.py           # Shared GAQL query helpers
