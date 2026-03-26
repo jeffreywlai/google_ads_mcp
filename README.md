@@ -5,7 +5,7 @@
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 67 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 68 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,8 +14,9 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **67 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
-- 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, and a tool guide available as tools
+- 🔧 **68 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
+- 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
 - 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, quality score summaries, conversion goals, RSA ad strength, conversion actions, and audience performance
@@ -31,7 +32,7 @@
 - 📤 **Conversion Uploads** — Upload offline click and call conversions with partial failure handling
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (67)
+## 📋 Available Tools (68)
 
 ### 🔍 Query & Discovery
 
@@ -47,6 +48,7 @@
 |------|-------------|
 | `get_tool_guide` | Compact map of tools and when to use them |
 | `get_gaql_doc` | Compact GAQL syntax reference |
+| `get_resource_metadata` | Selectable, filterable, and sortable fields for a GAQL resource |
 | `get_reporting_view_doc` | Reporting view names or detailed view metadata |
 | `get_reporting_fields_doc` | Detailed docs for specific reporting query fields |
 | `search_google_ads_fields` | Live field metadata search for GAQL query building |

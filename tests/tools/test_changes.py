@@ -135,8 +135,9 @@ def test_list_change_events_defaults_end_date_to_today():
 
 
 def test_list_change_statuses_defaults_start_date_when_only_end_date_provided():
-  end_date = "2026-03-08"
-  expected_start_date = (date.today() - timedelta(days=7)).isoformat()
+  today = date.today()
+  end_date = (today - timedelta(days=1)).isoformat()
+  expected_start_date = (today - timedelta(days=7)).isoformat()
 
   with mock.patch(
       "ads_mcp.tools.changes.run_gaql_query_page",

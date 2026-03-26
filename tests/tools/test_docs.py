@@ -103,6 +103,76 @@ def test_resources_exist():
   pass
 
 
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_get_resource_metadata(mock_get_ads_client):
+  """Tests resource-level field metadata lookup."""
+  mock_client = mock_get_ads_client.return_value
+  mock_service = mock_client.get_service.return_value
+
+  campaign_id = mock.Mock()
+  campaign_id.name = "campaign.id"
+  campaign_id.selectable = True
+  campaign_id.filterable = True
+  campaign_id.sortable = True
+
+  campaign_status = mock.Mock()
+  campaign_status.name = "campaign.status"
+  campaign_status.selectable = True
+  campaign_status.filterable = True
+  campaign_status.sortable = False
+
+  ad_group_id = mock.Mock()
+  ad_group_id.name = "ad_group.id"
+  ad_group_id.selectable = True
+  ad_group_id.filterable = True
+  ad_group_id.sortable = True
+
+  mock_service.search_google_ads_fields.return_value = [
+      campaign_id,
+      campaign_status,
+      ad_group_id,
+  ]
+
+  result = docs.get_resource_metadata("campaign")
+
+  assert result == {
+      "resource": "campaign",
+      "selectable": ["campaign.id", "campaign.status"],
+      "filterable": ["campaign.id", "campaign.status"],
+      "sortable": ["campaign.id"],
+  }
+  mock_service.search_google_ads_fields.assert_called_once_with(
+      request={
+          "query": (
+              "SELECT name, selectable, filterable, sortable "
+              "WHERE name LIKE 'campaign.%'"
+          ),
+          "page_size": 1000,
+      }
+  )
+
+
+def test_get_resource_metadata_rejects_invalid_resource_name():
+  """Tests resource metadata lookup input validation."""
+  with pytest.raises(
+      ToolError,
+      match="resource_name must be a snake_case Google Ads resource name",
+  ):
+    docs.get_resource_metadata("campaign'; DROP TABLE")
+
+
+@mock.patch("ads_mcp.tools.docs.urllib.request.urlopen")
+def test_get_release_notes(mock_urlopen):
+  """Tests live release notes resource fetching."""
+  mock_response = mock.Mock()
+  mock_response.read.return_value = b"release notes"
+  mock_urlopen.return_value.__enter__.return_value = mock_response
+
+  assert docs.get_release_notes() == "release notes"
+  request = mock_urlopen.call_args.args[0]
+  assert request.full_url == docs._LIVE_RELEASE_NOTES_URL  # pylint: disable=protected-access
+
+
 def test_get_tool_guide_filters_topic():
   """Tests get_tool_guide topic filtering."""
   guide_yaml = """

@@ -14,8 +14,8 @@ principles:
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.
-  - Use get_reporting_view_doc or search_google_ads_fields only when query
-    construction is blocked.
+  - Use get_resource_metadata, get_reporting_view_doc, or
+    search_google_ads_fields only when query construction is blocked.
   - Mutation tools are hidden by default. Use unlock_mutation_tools only when
     you intend to change account state.
 
@@ -51,6 +51,7 @@ categories:
     tools:
       get_tool_guide: Compact map of tools and when to use them.
       get_gaql_doc: Compact GAQL syntax reference.
+      get_resource_metadata: Resource-specific selectable, filterable, and sortable field lists.
       get_reporting_view_doc: View names or detailed view metadata.
       get_reporting_fields_doc: Cached field metadata for known fields.
       search_google_ads_fields: Live field metadata search for GAQL building.

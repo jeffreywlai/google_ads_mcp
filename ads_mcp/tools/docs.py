@@ -16,6 +16,8 @@
 
 import os
 import re
+import urllib.error
+import urllib.request
 from typing import Any
 
 import yaml
@@ -39,6 +41,10 @@ _TEXT_FILE_CACHE: dict[str, tuple[float, str]] = {}
 _YAML_FILE_CACHE: dict[str, tuple[float, Any]] = {}
 _CACHED_FIELDS: dict[str, Any] = {}
 _CACHED_FIELDS_MTIME: float | None = None
+_LIVE_RELEASE_NOTES_URL = (
+    "https://developers.google.com/google-ads/api/docs/release-notes"
+)
+_REMOTE_DOC_USER_AGENT = "Mozilla/5.0"
 
 
 def _read_cached_text(path: str) -> str:
@@ -69,6 +75,21 @@ def _load_cached_yaml(path: str) -> Any:
   return data
 
 
+def _read_live_doc(url: str) -> str:
+  """Fetches a live Google Ads documentation page."""
+  request = urllib.request.Request(
+      url,
+      headers={"User-Agent": _REMOTE_DOC_USER_AGENT},
+  )
+  try:
+    with urllib.request.urlopen(request, timeout=20) as response:
+      return response.read().decode("utf-8")
+  except urllib.error.URLError as exc:
+    raise ToolError(
+        f"Failed to fetch live Google Ads documentation from {url}."
+    ) from exc
+
+
 def _get_gaql_compact_content() -> str:
   """Reads the compact GAQL documentation."""
   return _read_cached_text(os.path.join(MODULE_DIR, "context/GAQL_compact.md"))
@@ -94,6 +115,40 @@ def _get_views_list() -> str:
 def _get_tool_guide_content() -> str:
   """Reads the compact tool guide."""
   return _read_cached_text(os.path.join(MODULE_DIR, "context/tool_guide.yaml"))
+
+
+def _build_resource_metadata_query(resource_name: str) -> str:
+  """Builds a GoogleAdsFieldService query for one GAQL resource."""
+  if not re.fullmatch(r"[a-z][a-z0-9_]*", resource_name):
+    raise ToolError(
+        "resource_name must be a snake_case Google Ads resource name."
+    )
+
+  return (
+      "SELECT name, selectable, filterable, sortable "
+      f"WHERE name LIKE '{resource_name}.%'"
+  )
+
+
+def _search_google_ads_field_rows(
+    query: str,
+    limit: int,
+) -> list[Any]:
+  """Runs a GoogleAdsFieldService query and returns raw field rows."""
+  ads_client = get_ads_client()
+  field_service = ads_client.get_service("GoogleAdsFieldService")
+  pager = field_service.search_google_ads_fields(
+      request={
+          "query": query,
+          "page_size": min(limit, 1000),
+      }
+  )
+  rows = []
+  for index, field in enumerate(pager):
+    if index >= limit:
+      break
+    rows.append(field)
+  return rows
 
 
 def _topic_matches(topic: str, *texts: str) -> bool:
@@ -156,6 +211,48 @@ def get_reporting_view_doc(view: str | None = None) -> str:
   return _get_views_list()
 
 
+@ads_field_tool
+def get_resource_metadata(resource_name: str) -> dict[str, Any]:
+  """Get selectable, filterable, and sortable fields for one resource.
+
+  Args:
+      resource_name: Google Ads resource name, for example `campaign`
+          or `ad_group`.
+
+  Returns:
+      A dict containing sorted field names grouped by metadata type.
+  """
+  query = _build_resource_metadata_query(resource_name)
+
+  try:
+    fields = _search_google_ads_field_rows(query, limit=5000)
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+  resource_prefix = f"{resource_name}."
+  selectable = []
+  filterable = []
+  sortable = []
+
+  for field in fields:
+    field_name = getattr(field, "name", "")
+    if not field_name.startswith(resource_prefix):
+      continue
+    if field.selectable:
+      selectable.append(field_name)
+    if field.filterable:
+      filterable.append(field_name)
+    if field.sortable:
+      sortable.append(field_name)
+
+  return {
+      "resource": resource_name,
+      "selectable": sorted(selectable),
+      "filterable": sorted(filterable),
+      "sortable": sorted(sortable),
+  }
+
+
 @tool_guide_tool
 def get_tool_guide(topic: str | None = None) -> str:
   """Get a compact map of tools and when to use them.
@@ -206,6 +303,16 @@ def get_reporting_doc() -> str:
 def get_tool_guide_resource() -> str:
   """Get a compact map of Google Ads MCP tools and selection hints."""
   return _get_tool_guide_content()
+
+
+@mcp.resource(
+    "resource://Google_Ads_API_Release_Notes",
+    mime_type="text/html",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+)
+def get_release_notes() -> str:
+  """Get live Google Ads API release notes."""
+  return _read_live_doc(_LIVE_RELEASE_NOTES_URL)
 
 
 @mcp.resource("resource://views/{view}")
@@ -289,21 +396,11 @@ def search_google_ads_fields(
   if limit <= 0:
     raise ToolError("limit must be greater than 0.")
 
-  ads_client = get_ads_client()
-  field_service = ads_client.get_service("GoogleAdsFieldService")
-
   try:
-    pager = field_service.search_google_ads_fields(
-        request={
-            "query": query,
-            "page_size": min(limit, 1000),
-        }
-    )
-    fields = []
-    for index, field in enumerate(pager):
-      if index >= limit:
-        break
-      fields.append(format_value(field))
+    fields = [
+        format_value(field)
+        for field in _search_google_ads_field_rows(query, limit=limit)
+    ]
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 

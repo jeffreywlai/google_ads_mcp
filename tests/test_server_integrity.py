@@ -104,6 +104,7 @@ TOOL_MODULES = {
     docs: [
         "get_tool_guide",
         "get_gaql_doc",
+        "get_resource_metadata",
         "get_reporting_view_doc",
         "get_reporting_fields_doc",
         "search_google_ads_fields",
@@ -158,15 +159,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 67 tools exist as callable functions
+# 1. Tool registration: all 68 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_67(self):
+  def test_total_tool_count_is_68(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 67, f"Expected 67 tools, found {total}"
+    assert total == 68, f"Expected 68 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -212,6 +213,7 @@ class TestToolSignatures:
   NON_CUSTOMER_TOOLS = {
       "get_gaql_doc",
       "get_tool_guide",
+      "get_resource_metadata",
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
       "search_google_ads_fields",
@@ -239,6 +241,7 @@ class TestToolSignatures:
   } - {
       "get_gaql_doc",
       "get_tool_guide",
+      "get_resource_metadata",
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
       "search_google_ads_fields",
@@ -258,6 +261,7 @@ class TestToolSignatures:
           not in {
               "get_gaql_doc",
               "get_tool_guide",
+              "get_resource_metadata",
               "get_reporting_view_doc",
               "get_reporting_fields_doc",
               "search_google_ads_fields",
@@ -505,7 +509,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 67
+    assert len(registered_tools) == 68
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -582,8 +586,23 @@ class TestFastMcpConfiguration:
     assert "list_device_performance" in public_tool_names
     assert "summarize_keyword_quality_scores" in public_tool_names
     assert "export_gaql_csv" in public_tool_names
+    assert "get_resource_metadata" in public_tool_names
     assert "search_google_ads_fields" in public_tool_names
     assert "apply_recommendations" not in public_tool_names
+
+  def test_resource_list_includes_live_release_notes(self):
+    resources = {
+        resource.name: resource
+        for resource in asyncio.run(
+            mcp_server._local_provider.list_resources()
+        )
+    }
+
+    assert "get_release_notes" in resources
+    assert (
+        str(resources["get_release_notes"].uri)
+        == "resource://Google_Ads_API_Release_Notes"
+    )
 
   def test_client_can_call_visible_tool_directly_and_via_proxy(self):
     async def _run():
