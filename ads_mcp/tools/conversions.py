@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Low-level ConversionUploadService tools for testing raw uploads."""
+"""Conversion upload tools and offline upload diagnostics."""
 
 from typing import Any
 
@@ -26,9 +26,16 @@ from google.ads.googleads.v23.services.types.conversion_upload_service import (
 )
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import quote_int_values
+from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _extract_partial_failure(response: Any) -> Any:
@@ -70,7 +77,191 @@ def _format_results(results: Any) -> list[dict[str, Any]]:
   return [format_value(result) for result in results]
 
 
+def _summary_filter_conditions(
+    summary_field_prefix: str,
+    clients: list[str] | None = None,
+    statuses: list[str] | None = None,
+) -> list[str]:
+  """Builds common WHERE conditions for offline upload summary views."""
+  where_conditions = []
+  if clients:
+    where_conditions.append(
+        f"{summary_field_prefix}.client IN ({quote_enum_values(clients)})"
+    )
+  if statuses:
+    where_conditions.append(
+        f"{summary_field_prefix}.status IN ({quote_enum_values(statuses)})"
+    )
+  return where_conditions
+
+
+conversion_diagnostics_tool = ads_read_tool(
+    mcp,
+    tags={"conversions", "reporting"},
+)
 conversion_upload_tool = ads_mutation_tool(mcp, tags={"conversions"})
+
+
+@conversion_diagnostics_tool
+def list_offline_conversion_upload_client_summaries(
+    customer_id: str,
+    clients: list[str] | None = None,
+    statuses: list[str] | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists account-level offline conversion upload diagnostics.
+
+  This uses the `offline_conversion_upload_client_summary` reporting view to
+  retrieve import health by client type, including `alerts`,
+  `daily_summaries`, and `job_summaries`.
+
+  Google Ads only returns diagnostics when `customer_id` matches the account
+  used recently to import conversions. For cross-account conversion tracking,
+  query the manager account that performed the imports.
+
+  Args:
+      customer_id: Google Ads customer ID used for the imports.
+      clients: Optional client filters such as `GOOGLE_ADS_API` or
+          `GOOGLE_ADS_WEB_CLIENT`.
+      statuses: Optional status filters such as `EXCELLENT`,
+          `NEEDS_ATTENTION`, or `NO_RECENT_UPLOADS`.
+      limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing client-level offline upload diagnostic rows plus
+      completeness metadata.
+  """
+  validate_limit(limit)
+  summary = "offline_conversion_upload_client_summary"
+  where_conditions = _summary_filter_conditions(
+      summary,
+      clients=clients,
+      statuses=statuses,
+  )
+
+  query = f"""
+      SELECT
+        customer.id,
+        customer.descriptive_name,
+        {summary}.client,
+        {summary}.alerts,
+        {summary}.daily_summaries,
+        {summary}.job_summaries,
+        {summary}.last_upload_date_time,
+        {summary}.pending_event_count,
+        {summary}.pending_rate,
+        {summary}.status,
+        {summary}.success_rate,
+        {summary}.successful_event_count,
+        {summary}.total_event_count
+      FROM {summary}
+      {build_where_clause(where_conditions)}
+      ORDER BY
+        {summary}.last_upload_date_time DESC,
+        {summary}.client ASC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "offline_conversion_upload_client_summaries",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@conversion_diagnostics_tool
+def list_offline_conversion_upload_conversion_action_summaries(
+    customer_id: str,
+    conversion_action_ids: list[str] | None = None,
+    clients: list[str] | None = None,
+    statuses: list[str] | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists conversion-action-level offline conversion upload diagnostics.
+
+  This uses the `offline_conversion_upload_conversion_action_summary`
+  reporting view to retrieve import health per conversion action and client,
+  including `alerts`, `daily_summaries`, and `job_summaries`.
+
+  Google Ads only returns diagnostics when `customer_id` matches the account
+  used recently to import conversions. For cross-account conversion tracking,
+  query the manager account that performed the imports.
+
+  Args:
+      customer_id: Google Ads customer ID used for the imports.
+      conversion_action_ids: Optional conversion action numeric IDs to filter
+          to.
+      clients: Optional client filters such as `GOOGLE_ADS_API`.
+      statuses: Optional status filters such as `EXCELLENT`,
+          `NEEDS_ATTENTION`, or `NO_RECENT_UPLOADS`.
+      limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing conversion-action-level offline upload diagnostic rows
+      plus completeness metadata.
+  """
+  validate_limit(limit)
+  summary = "offline_conversion_upload_conversion_action_summary"
+  where_conditions = _summary_filter_conditions(
+      summary,
+      clients=clients,
+      statuses=statuses,
+  )
+  if conversion_action_ids:
+    where_conditions.append(
+        f"{summary}.conversion_action_id IN "
+        f"({quote_int_values(conversion_action_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        {summary}.conversion_action_id,
+        {summary}.conversion_action_name,
+        {summary}.client,
+        {summary}.alerts,
+        {summary}.daily_summaries,
+        {summary}.job_summaries,
+        {summary}.last_upload_date_time,
+        {summary}.pending_event_count,
+        {summary}.status,
+        {summary}.successful_event_count,
+        {summary}.total_event_count
+      FROM {summary}
+      {build_where_clause(where_conditions)}
+      ORDER BY
+        {summary}.last_upload_date_time DESC,
+        {summary}.conversion_action_name ASC,
+        {summary}.client ASC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "offline_conversion_upload_conversion_action_summaries",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 @conversion_upload_tool

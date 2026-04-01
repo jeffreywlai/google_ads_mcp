@@ -5,7 +5,7 @@
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 68 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 70 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **68 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 🔧 **70 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -30,9 +30,10 @@
 - 🚫 **Negative Keywords** — Full shared set and campaign-level negative keyword management
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
 - 📤 **Conversion Uploads** — Upload offline click and call conversions with partial failure handling
+- 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (68)
+## 📋 Available Tools (70)
 
 ### 🔍 Query & Discovery
 
@@ -180,10 +181,12 @@
 | `suggest_smart_campaign_ad` | Get AI-suggested headlines and descriptions |
 | `suggest_smart_campaign_budget` | Get low/recommended/high budget options |
 
-### 📤 Conversion Uploads
+### 📤 Conversion Uploads & Diagnostics
 
 | Tool | Description |
 |------|-------------|
+| `list_offline_conversion_upload_client_summaries` | Account-level offline upload diagnostics grouped by import client |
+| `list_offline_conversion_upload_conversion_action_summaries` | Conversion-action-level offline upload diagnostics with recent job and daily summaries |
 | `upload_click_conversions` | Upload offline click conversions (gclid/gbraid/wbraid) |
 | `upload_call_conversions` | Upload offline call conversions |
 

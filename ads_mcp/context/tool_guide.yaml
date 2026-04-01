@@ -43,6 +43,8 @@ categories:
   conversions:
     summary: Raw conversion upload testing and diagnostics.
     tools:
+      list_offline_conversion_upload_client_summaries: Account-level offline upload health by import client, including alerts and recent daily/job summaries.
+      list_offline_conversion_upload_conversion_action_summaries: Conversion-action-level offline upload health, alerts, and recent daily/job summaries.
       upload_click_conversions: Low-level ClickConversion uploads that preserve results and partial-failure details.
       upload_call_conversions: Low-level CallConversion uploads that preserve results and partial-failure details.
 

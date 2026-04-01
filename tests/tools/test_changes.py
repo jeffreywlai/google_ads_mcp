@@ -54,6 +54,9 @@ def test_list_change_statuses_builds_query():
 
 
 def test_list_change_events_builds_query():
+  start_date = (date.today() - timedelta(days=10)).isoformat()
+  end_date = (date.today() - timedelta(days=3)).isoformat()
+
   with mock.patch(
       "ads_mcp.tools.changes.run_gaql_query_page",
       return_value={
@@ -66,16 +69,16 @@ def test_list_change_events_builds_query():
         CUSTOMER_ID,
         resource_change_operations=["update"],
         change_resource_types=["campaign"],
-        start_date="2026-03-01",
-        end_date="2026-03-08",
+        start_date=start_date,
+        end_date=end_date,
     )
 
   query = mock_query.call_args.kwargs["query"]
   assert "FROM change_event" in query
   assert "change_event.resource_change_operation IN (UPDATE)" in query
   assert "change_event.change_resource_type IN (CAMPAIGN)" in query
-  assert "'2026-03-01 00:00:00'" in query
-  assert "'2026-03-08 23:59:59'" in query
+  assert f"'{start_date} 00:00:00'" in query
+  assert f"'{end_date} 23:59:59'" in query
   assert "change_event.old_resource" not in query
   assert "change_event.new_resource" not in query
   assert "LIMIT 10000" in query
@@ -114,7 +117,7 @@ def test_list_change_events_rejects_dates_older_than_30_days():
 
 
 def test_list_change_events_defaults_end_date_to_today():
-  start_date = "2026-03-01"
+  start_date = (date.today() - timedelta(days=5)).isoformat()
 
   with mock.patch(
       "ads_mcp.tools.changes.run_gaql_query_page",

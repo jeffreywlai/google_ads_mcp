@@ -88,6 +88,121 @@ def test_upload_click_conversions_builds_request(mock_ads_client):
   assert request.conversions[0].consent.ad_user_data.name == "GRANTED"
 
 
+def test_list_offline_conversion_upload_client_summaries_builds_query():
+  with mock.patch("ads_mcp.tools.conversions.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+
+    result = conversions.list_offline_conversion_upload_client_summaries(
+        CUSTOMER_ID,
+        clients=["google_ads_api"],
+        statuses=["needs_attention"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM offline_conversion_upload_client_summary" in query
+  assert "offline_conversion_upload_client_summary.alerts" in query
+  assert "offline_conversion_upload_client_summary.daily_summaries" in query
+  assert "offline_conversion_upload_client_summary.job_summaries" in query
+  assert "offline_conversion_upload_client_summary.client IN" in query
+  assert "GOOGLE_ADS_API" in query
+  assert "offline_conversion_upload_client_summary.status IN" in query
+  assert "NEEDS_ATTENTION" in query
+  assert result["returned_count"] == 0
+  assert result["total_count"] == 0
+
+
+def test_list_offline_conversion_upload_client_summaries_passes_paging():
+  with mock.patch("ads_mcp.tools.conversions.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [
+            {
+                "customer.id": CUSTOMER_ID,
+                "offline_conversion_upload_client_summary.client": (
+                    "GOOGLE_ADS_API"
+                ),
+            }
+        ],
+        "next_page_token": "next-page",
+        "total_results_count": 101,
+    }
+
+    result = conversions.list_offline_conversion_upload_client_summaries(
+        CUSTOMER_ID,
+        limit=25,
+        page_token="current-page",
+        login_customer_id="999",
+    )
+
+  assert mock_run.call_args.kwargs["page_size"] == 25
+  assert mock_run.call_args.kwargs["page_token"] == "current-page"
+  assert mock_run.call_args.kwargs["login_customer_id"] == "999"
+  assert result == {
+      "offline_conversion_upload_client_summaries": [
+          {
+              "customer.id": CUSTOMER_ID,
+              "offline_conversion_upload_client_summary.client": (
+                  "GOOGLE_ADS_API"
+              ),
+          }
+      ],
+      "returned_count": 1,
+      "total_count": 101,
+      "total_page_count": 5,
+      "truncated": True,
+      "next_page_token": "next-page",
+      "page_size": 25,
+  }
+
+
+def test_list_offline_conversion_upload_conversion_action_summaries_builds_query():
+  with mock.patch("ads_mcp.tools.conversions.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+
+    result = (
+        conversions.list_offline_conversion_upload_conversion_action_summaries(
+            CUSTOMER_ID,
+            conversion_action_ids=["111", "222"],
+            clients=["google_ads_api"],
+            statuses=["excellent"],
+        )
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM offline_conversion_upload_conversion_action_summary" in query
+  assert (
+      "offline_conversion_upload_conversion_action_summary."
+      "conversion_action_id"
+  ) in query
+  assert (
+      "offline_conversion_upload_conversion_action_summary.daily_summaries"
+      in query
+  )
+  assert (
+      "offline_conversion_upload_conversion_action_summary.job_summaries"
+      in query
+  )
+  assert "conversion_action_id IN (111, 222)" in query
+  assert "GOOGLE_ADS_API" in query
+  assert "EXCELLENT" in query
+  assert result["returned_count"] == 0
+
+
+def test_list_offline_conversion_upload_conversion_action_summaries_validates_limit():
+  with pytest.raises(ToolError, match="limit must be greater than 0"):
+    conversions.list_offline_conversion_upload_conversion_action_summaries(
+        CUSTOMER_ID,
+        limit=0,
+    )
+
+
 def test_upload_call_conversions_returns_partial_failure(mock_ads_client):
   mock_service = mock_ads_client.get_service.return_value
   mock_response = mock_service.upload_call_conversions.return_value
