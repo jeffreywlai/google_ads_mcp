@@ -136,6 +136,7 @@ mcp_server = FastMCP(
         " Requires a configured google-ads.yaml credentials file."
     ),
     mask_error_details=False,
+    client_log_level="error",
     transforms=[
         NonMutationVisibleSearchTransform(
             max_results=8,
