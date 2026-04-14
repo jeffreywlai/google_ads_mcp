@@ -27,6 +27,7 @@ from unittest import mock
 
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
+from ads_mcp.tools import audiences
 from ads_mcp.tools import campaigns
 from ads_mcp.tools import docs
 from ads_mcp.tools import keywords
@@ -51,9 +52,7 @@ class TestGaqlCompactCompleteness:
 
   @pytest.fixture(autouse=True)
   def load_docs(self):
-    compact_path = os.path.join(
-        docs.MODULE_DIR, "context/GAQL_compact.md"
-    )
+    compact_path = os.path.join(docs.MODULE_DIR, "context/GAQL_compact.md")
     full_path = os.path.join(docs.MODULE_DIR, "context/GAQL.md")
     with open(compact_path, "r", encoding="utf-8") as f:
       self.compact = f.read()
@@ -64,6 +63,7 @@ class TestGaqlCompactCompleteness:
 
   def test_grammar_bnf_identical(self):
     """The grammar BNF block must be identical in both docs."""
+
     def extract_grammar(text):
       start = text.index("Query            ->")
       end = text.index("```", start)
@@ -74,12 +74,25 @@ class TestGaqlCompactCompleteness:
   def test_all_operators_present(self):
     """Every operator from the full doc must be in the compact doc."""
     operators = [
-        "=", "!=", ">", ">=", "<", "<=",
-        "IN", "NOT IN", "LIKE", "NOT LIKE",
-        "CONTAINS ANY", "CONTAINS ALL", "CONTAINS NONE",
-        "IS NULL", "IS NOT NULL",
-        "DURING", "BETWEEN",
-        "REGEXP_MATCH", "NOT REGEXP_MATCH",
+        "=",
+        "!=",
+        ">",
+        ">=",
+        "<",
+        "<=",
+        "IN",
+        "NOT IN",
+        "LIKE",
+        "NOT LIKE",
+        "CONTAINS ANY",
+        "CONTAINS ALL",
+        "CONTAINS NONE",
+        "IS NULL",
+        "IS NOT NULL",
+        "DURING",
+        "BETWEEN",
+        "REGEXP_MATCH",
+        "NOT REGEXP_MATCH",
     ]
     for op in operators:
       assert op in self.compact, f"Operator '{op}' missing from compact doc"
@@ -87,16 +100,23 @@ class TestGaqlCompactCompleteness:
   def test_all_date_functions_present(self):
     """All DURING function constants must be in the compact doc."""
     functions = [
-        "LAST_14_DAYS", "LAST_30_DAYS", "LAST_7_DAYS",
-        "LAST_BUSINESS_WEEK", "LAST_MONTH",
-        "LAST_WEEK_MON_SUN", "LAST_WEEK_SUN_SAT",
-        "THIS_MONTH", "THIS_WEEK_MON_TODAY", "THIS_WEEK_SUN_TODAY",
-        "TODAY", "YESTERDAY",
+        "LAST_14_DAYS",
+        "LAST_30_DAYS",
+        "LAST_7_DAYS",
+        "LAST_BUSINESS_WEEK",
+        "LAST_MONTH",
+        "LAST_WEEK_MON_SUN",
+        "LAST_WEEK_SUN_SAT",
+        "THIS_MONTH",
+        "THIS_WEEK_MON_TODAY",
+        "THIS_WEEK_SUN_TODAY",
+        "TODAY",
+        "YESTERDAY",
     ]
     for func in functions:
-      assert func in self.compact, (
-          f"Date function '{func}' missing from compact doc"
-      )
+      assert (
+          func in self.compact
+      ), f"Date function '{func}' missing from compact doc"
 
   # --- Rules coverage ---
 
@@ -122,24 +142,23 @@ class TestGaqlCompactCompleteness:
 
   def test_core_date_segments_listed(self):
     segments = [
-        "segments.date", "segments.week", "segments.month",
-        "segments.quarter", "segments.year",
+        "segments.date",
+        "segments.week",
+        "segments.month",
+        "segments.quarter",
+        "segments.year",
     ]
     for seg in segments:
-      assert seg in self.compact, (
-          f"Core date segment '{seg}' missing from compact doc"
-      )
+      assert (
+          seg in self.compact
+      ), f"Core date segment '{seg}' missing from compact doc"
 
   def test_core_date_segment_where_rule(self):
     """If a core date segment is selected, WHERE must filter it."""
-    assert "finite range" in self.compact or (
-        "must filter" in self.compact
-    )
+    assert "finite range" in self.compact or ("must filter" in self.compact)
 
   def test_non_selectable_fields_rule(self):
-    assert "Selectable" in self.compact or (
-        "Non-selectable" in self.compact
-    )
+    assert "Selectable" in self.compact or ("Non-selectable" in self.compact)
 
   def test_repeated_fields_rule(self):
     assert "isRepeated" in self.compact or "repeated" in self.compact
@@ -244,14 +263,19 @@ class TestDocsToolRouting:
     """The views list should contain common view names."""
     result = docs.get_reporting_view_doc()
     expected = [
-        "campaign", "ad_group", "ad_group_ad", "keyword_view",
-        "campaign_budget", "campaign_criterion", "search_term_view",
-        "click_view", "customer", "label",
+        "campaign",
+        "ad_group",
+        "ad_group_ad",
+        "keyword_view",
+        "campaign_budget",
+        "campaign_criterion",
+        "search_term_view",
+        "click_view",
+        "customer",
+        "label",
     ]
     for view in expected:
-      assert f"- {view}\n" in result, (
-          f"View '{view}' missing from views list"
-      )
+      assert f"- {view}\n" in result, f"View '{view}' missing from views list"
 
   def test_views_list_much_smaller_than_full_doc(self):
     """Views list should be much smaller than the full reporting doc."""
@@ -420,9 +444,7 @@ class TestSetKeywordStatusConsolidated:
     mock_response = mock_service.mutate_ad_group_criteria.return_value
     mock_response.results = [mock.Mock(resource_name="x")]
 
-    result = keywords.set_keyword_status(
-        CUSTOMER_ID, "111", "222", "PAUSED"
-    )
+    result = keywords.set_keyword_status(CUSTOMER_ID, "111", "222", "PAUSED")
     assert result == {"resource_name": "x"}
 
   @mock.patch("ads_mcp.tools.keywords.get_ads_client")
@@ -433,9 +455,7 @@ class TestSetKeywordStatusConsolidated:
     mock_response = mock_service.mutate_ad_group_criteria.return_value
     mock_response.results = [mock.Mock(resource_name="x")]
 
-    result = keywords.set_keyword_status(
-        CUSTOMER_ID, "111", "222", "ENABLED"
-    )
+    result = keywords.set_keyword_status(CUSTOMER_ID, "111", "222", "ENABLED")
     assert result == {"resource_name": "x"}
 
   @mock.patch("ads_mcp.tools.keywords.get_ads_client")
@@ -476,9 +496,7 @@ class TestManageCampaignLabelsConsolidated:
       return mock_label_svc
 
     client.get_service.side_effect = get_service
-    mock_response = (
-        mock_campaign_label_svc.mutate_campaign_labels.return_value
-    )
+    mock_response = mock_campaign_label_svc.mutate_campaign_labels.return_value
     mock_response.results = [mock.Mock(resource_name="result/1")]
 
     result = labels.manage_campaign_labels(
@@ -513,9 +531,7 @@ class TestManageCampaignLabelsConsolidated:
     mock_response.results = [mock.Mock(resource_name="x")]
 
     # Should work with lowercase
-    labels.manage_campaign_labels(
-        CUSTOMER_ID, "111", ["222"], "remove"
-    )
+    labels.manage_campaign_labels(CUSTOMER_ID, "111", ["222"], "remove")
 
   @mock.patch("ads_mcp.tools.labels.get_ads_client")
   def test_invalid_action(self, mock_get):
@@ -523,9 +539,7 @@ class TestManageCampaignLabelsConsolidated:
     mock_get.return_value = client
 
     with pytest.raises(ToolError, match="Invalid action"):
-      labels.manage_campaign_labels(
-          CUSTOMER_ID, "111", ["222"], "DELETE"
-      )
+      labels.manage_campaign_labels(CUSTOMER_ID, "111", ["222"], "DELETE")
 
   @mock.patch("ads_mcp.tools.labels.get_ads_client")
   def test_multiple_campaigns(self, mock_get):
@@ -545,9 +559,7 @@ class TestManageCampaignLabelsConsolidated:
       return mock_label_svc
 
     client.get_service.side_effect = get_service
-    mock_response = (
-        mock_campaign_label_svc.mutate_campaign_labels.return_value
-    )
+    mock_response = mock_campaign_label_svc.mutate_campaign_labels.return_value
     mock_response.results = [
         mock.Mock(resource_name=f"r/{i}") for i in range(3)
     ]
@@ -575,9 +587,7 @@ class TestManageCampaignLabelsConsolidated:
     mock_service.mutate_campaign_labels.side_effect = exc
 
     with pytest.raises(ToolError, match="Label error"):
-      labels.manage_campaign_labels(
-          CUSTOMER_ID, "111", ["222"], "REMOVE"
-      )
+      labels.manage_campaign_labels(CUSTOMER_ID, "111", ["222"], "REMOVE")
 
 
 class TestManageAdGroupLabelsConsolidated:
@@ -628,9 +638,7 @@ class TestManageAdGroupLabelsConsolidated:
     mock_get.return_value = client
 
     with pytest.raises(ToolError, match="Invalid action"):
-      labels.manage_ad_group_labels(
-          CUSTOMER_ID, "111", ["333"], "ATTACH"
-      )
+      labels.manage_ad_group_labels(CUSTOMER_ID, "111", ["333"], "ATTACH")
 
 
 # =========================================================================
@@ -683,9 +691,7 @@ class TestConsolidatedStatusNoPollution:
     mock_response = mock_service.mutate_ad_group_ads.return_value
     mock_response.results = [mock.Mock(resource_name="x")]
 
-    ads.set_ad_status(
-        CUSTOMER_ID, "1", "2", "PAUSED", login_customer_id="777"
-    )
+    ads.set_ad_status(CUSTOMER_ID, "1", "2", "PAUSED", login_customer_id="777")
     mock_get.assert_called_with("777")
 
     ads.set_ad_status(CUSTOMER_ID, "1", "2", "ENABLED")
@@ -721,9 +727,7 @@ class TestConsolidatedStatusNoPollution:
     )
     mock_get.assert_called_with("555")
 
-    labels.manage_campaign_labels(
-        CUSTOMER_ID, "1", ["2"], "REMOVE"
-    )
+    labels.manage_campaign_labels(CUSTOMER_ID, "1", ["2"], "REMOVE")
     mock_get.assert_called_with(None)
 
 
@@ -800,6 +804,18 @@ class TestNewToolNamesExist:
 
   def test_update_campaign_budget_still_exists(self):
     assert callable(campaigns.update_campaign_budget)
+
+  def test_create_audience_exists(self):
+    assert callable(audiences.create_audience)
+
+  def test_update_campaign_targeting_setting_exists(self):
+    assert callable(campaigns.update_campaign_targeting_setting)
+
+  def test_add_campaign_audiences_exists(self):
+    assert callable(campaigns.add_campaign_audiences)
+
+  def test_remove_campaign_audiences_exists(self):
+    assert callable(campaigns.remove_campaign_audiences)
 
   def test_update_ad_group_bid_still_exists(self):
     assert callable(ad_groups.update_ad_group_bid)

@@ -73,10 +73,18 @@ categories:
       set_recommendation_subscription_status: Pause or enable a subscription.
 
   campaigns:
-    summary: Direct campaign and budget changes.
+    summary: Direct campaign, audience, and budget changes.
     tools:
       set_campaign_status: Pause or enable a campaign.
       update_campaign_budget: Change daily budget amount.
+      update_campaign_targeting_setting: Replace campaign targeting restrictions for dimensions like AUDIENCE or KEYWORD.
+      add_campaign_audiences: Add supported campaign audience criteria with partial failure enabled.
+      remove_campaign_audiences: Remove campaign audience criteria by criterion ID.
+
+  audiences:
+    summary: Create modern AudienceService audience resources.
+    tools:
+      create_audience: Create a customer-scope audience resource with AND/OR include logic and optional user-list exclusions.
 
   ad_groups:
     summary: Direct ad group changes.

@@ -5,7 +5,7 @@
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 70 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 74 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **70 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, and more
+- 🔧 **74 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -27,13 +27,14 @@
 - 🏎️ **Performance Max** — Asset diagnostics, top combinations, and placement insights
 - 🔑 **Keyword Research** — Generate keyword ideas with search volume and competition data
 - 🏷️ **Label Management** — Create, apply, and remove labels across campaigns and ad groups
+- 👥 **Audience Creation** — Build modern AudienceService audience resources with include/exclude logic
 - 🚫 **Negative Keywords** — Full shared set and campaign-level negative keyword management
 - 💡 **Smart Campaigns** — Get AI-suggested keyword themes, ad copy, and budget recommendations
 - 📤 **Conversion Uploads** — Upload offline click and call conversions with partial failure handling
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (70)
+## 📋 Available Tools (74)
 
 ### 🔍 Query & Discovery
 
@@ -125,6 +126,17 @@
 |------|-------------|
 | `set_campaign_status` | Set a campaign to PAUSED or ENABLED |
 | `update_campaign_budget` | Change a campaign's daily budget |
+| `update_campaign_targeting_setting` | Replace campaign targeting restrictions such as AUDIENCE, KEYWORD, or PLACEMENT |
+| `add_campaign_audiences` | Add supported campaign audience criteria with partial failure handling |
+| `remove_campaign_audiences` | Remove campaign audience criteria by criterion ID |
+
+### 👥 Audience Management
+
+| Tool | Description |
+|------|-------------|
+| `create_audience` | Create a modern `audience` resource with AND/OR include logic and optional user-list exclusions |
+
+Note: `create_audience` creates the modern `audience` resource, not legacy `combined_audience` rows. The current campaign attachment tool still targets the campaign criterion types exposed by `CampaignCriterion`, so it does not accept `type="AUDIENCE"`.
 
 ### 👥 Ad Group Management
 
@@ -384,7 +396,8 @@ google_ads_mcp/
 │   ├── tools/
 │   │   ├── api.py             # Core: execute_gaql, list_accessible_accounts
 │   │   ├── docs.py            # GAQL & reporting docs, tool guide, visibility controls
-│   │   ├── campaigns.py       # Pause, resume, update budget
+│   │   ├── audiences.py       # AudienceService audience creation
+│   │   ├── campaigns.py       # Campaign status, budget, targeting, audiences
 │   │   ├── ad_groups.py       # Pause, enable, update bid
 │   │   ├── ads.py             # Pause, enable ads
 │   │   ├── keywords.py        # Pause, enable, update bid
