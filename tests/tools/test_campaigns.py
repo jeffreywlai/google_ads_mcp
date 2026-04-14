@@ -173,6 +173,50 @@ class TestUpdateCampaignTargetingSetting:
           ],
       )
 
+  def test_rejects_non_numeric_campaign_id_for_targeting_read(
+      self, mock_ads_client
+  ):
+    with pytest.raises(
+        ToolError, match="campaign_id must be an integer string"
+    ):
+      campaigns.update_campaign_targeting_setting(
+          CUSTOMER_ID,
+          "111 OR 1=1",
+          [{"targeting_dimension": "AUDIENCE", "bid_only": False}],
+      )
+
+  def test_skips_current_restrictions_read_when_warning_is_not_possible(
+      self, mock_ads_client
+  ):
+    campaign_service = mock.Mock()
+    google_ads_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "CampaignService": campaign_service,
+        "GoogleAdsService": google_ads_service,
+    }[name]
+    campaign_service.campaign_path.return_value = "customers/123/campaigns/111"
+    response = campaign_service.mutate_campaigns.return_value
+    response.results = [mock.Mock(resource_name="customers/123/campaigns/111")]
+
+    operation = mock.Mock()
+    operation.update = mock.Mock()
+    operation.update_mask.paths = []
+    mock_ads_client.get_type.return_value = operation
+
+    result = campaigns.update_campaign_targeting_setting(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        [{"targeting_dimension": "KEYWORD", "bid_only": True}],
+    )
+
+    assert result == {
+        "campaign_resource_name": "customers/123/campaigns/111",
+        "updated_restrictions": [
+            {"targeting_dimension": "KEYWORD", "bid_only": True}
+        ],
+    }
+    google_ads_service.search_stream.assert_not_called()
+
 
 class TestAddCampaignAudiences:
 

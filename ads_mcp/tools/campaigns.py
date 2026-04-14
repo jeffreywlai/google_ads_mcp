@@ -123,6 +123,14 @@ def _validate_target_restrictions(
   return validated
 
 
+def _validate_numeric_id(value: str, field_name: str) -> str:
+  """Validates that an ID-like input can be safely treated as an integer."""
+  try:
+    return str(int(value))
+  except (TypeError, ValueError) as exc:
+    raise ToolError(f"{field_name} must be an integer string.") from exc
+
+
 def _get_campaign_target_restrictions(
     ads_client: Any,
     customer_id: str,
@@ -130,11 +138,12 @@ def _get_campaign_target_restrictions(
 ) -> dict[str, bool]:
   """Returns current target restrictions keyed by targeting dimension."""
   ads_service = ads_client.get_service("GoogleAdsService")
+  normalized_campaign_id = _validate_numeric_id(campaign_id, "campaign_id")
   query = f"""
       SELECT
         campaign.targeting_setting.target_restrictions
       FROM campaign
-      WHERE campaign.id = {campaign_id}
+      WHERE campaign.id = {normalized_campaign_id}
       LIMIT 1
   """
 
@@ -317,10 +326,16 @@ def update_campaign_targeting_setting(
   """
   validated_restrictions = _validate_target_restrictions(target_restrictions)
   ads_client = get_ads_client(login_customer_id)
-  current_restrictions = _get_campaign_target_restrictions(
-      ads_client, customer_id, campaign_id
-  )
   campaign_service = ads_client.get_service("CampaignService")
+  next_restrictions = {
+      restriction["targeting_dimension"]: restriction["bid_only"]
+      for restriction in validated_restrictions
+  }
+  current_restrictions = {}
+  if next_restrictions.get("AUDIENCE") is False:
+    current_restrictions = _get_campaign_target_restrictions(
+        ads_client, customer_id, campaign_id
+    )
 
   operation = ads_client.get_type("CampaignOperation")
   campaign = operation.update
@@ -350,10 +365,6 @@ def update_campaign_targeting_setting(
       "updated_restrictions": validated_restrictions,
   }
 
-  next_restrictions = {
-      restriction["targeting_dimension"]: restriction["bid_only"]
-      for restriction in validated_restrictions
-  }
   if (
       current_restrictions.get("AUDIENCE") is True
       and next_restrictions.get("AUDIENCE") is False
