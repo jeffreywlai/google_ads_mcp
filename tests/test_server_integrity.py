@@ -35,6 +35,7 @@ from ads_mcp.tooling import compact_search_result_serializer
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
+from ads_mcp.tools import audiences
 from ads_mcp.tools import campaigns
 from ads_mcp.tools import changes
 from ads_mcp.tools import conversions
@@ -58,9 +59,15 @@ TOOL_MODULES = {
         "export_gaql_csv",
         "list_accessible_accounts",
     ],
+    audiences: [
+        "create_audience",
+    ],
     campaigns: [
         "set_campaign_status",
         "update_campaign_budget",
+        "update_campaign_targeting_setting",
+        "add_campaign_audiences",
+        "remove_campaign_audiences",
     ],
     ad_groups: [
         "set_ad_group_status",
@@ -161,15 +168,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 70 tools exist as callable functions
+# 1. Tool registration: all 74 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_70(self):
+  def test_total_tool_count_is_74(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 70, f"Expected 70 tools, found {total}"
+    assert total == 74, f"Expected 74 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -467,6 +474,25 @@ class TestMutationFieldIntegrity:
     assert op.update_mask.paths == ["amount_micros"]
     p.stop()
 
+  def test_campaign_targeting_setting_only_sets_target_restrictions(self):
+    p, op = self._make_mock("ads_mcp.tools.campaigns")
+    client = campaigns.get_ads_client(None)
+    google_ads_service = mock.Mock()
+    google_ads_service.search_stream.return_value = []
+    client.get_service.side_effect = lambda name: (
+        google_ads_service
+        if name == "GoogleAdsService"
+        else client.get_service.return_value
+    )
+
+    campaigns.update_campaign_targeting_setting(
+        "123",
+        "456",
+        [{"targeting_dimension": "AUDIENCE", "bid_only": True}],
+    )
+    assert op.update_mask.paths == ["targeting_setting.target_restrictions"]
+    p.stop()
+
   def test_ad_group_status_only_sets_status(self):
     p, op = self._make_mock("ads_mcp.tools.ad_groups")
     ad_groups.set_ad_group_status("123", "456", "ENABLED")
@@ -511,7 +537,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 70
+    assert len(registered_tools) == 74
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"

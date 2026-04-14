@@ -43,6 +43,7 @@ _WORKFLOW_TAG_PRIORITY = [
     "gaql",
     "optimization",
     "campaigns",
+    "audiences",
     "ad_groups",
     "ads",
     "keywords",
