@@ -144,10 +144,9 @@ def get_ads_client(
     return client
 
   if not _ADS_CLIENT:
-    _ADS_CLIENT = GoogleAdsClient.load_from_storage(credentials_path)
-    _ADS_CLIENT.use_proto_plus = (
-        True  # Forced enable proto plus to avoid attribute issues.
-    )
+    ads_config = dict(_load_ads_config(credentials_path))
+    ads_config["use_proto_plus"] = True
+    _ADS_CLIENT = GoogleAdsClient.load_from_dict(ads_config)
     _DEFAULT_LOGIN_CUSTOMER_ID = getattr(
         _ADS_CLIENT, "login_customer_id", None
     )

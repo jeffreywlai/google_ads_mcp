@@ -93,11 +93,13 @@ def test_format_value():
   assert api.format_value(123) == 123
 
 
+@mock.patch("ads_mcp.tools.api._load_ads_config", return_value={})
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_list_accessible_accounts(mock_google_ads_client, _):
+def test_list_accessible_accounts(mock_google_ads_client, _, mock_load_config):
   """Tests the list_accessible_accounts function."""
-  mock_client_instance = mock_google_ads_client.load_from_storage.return_value
+  del mock_load_config
+  mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_service = mock_client_instance.get_service.return_value
   mock_service.list_accessible_customers.return_value.resource_names = [
       "customers/123",
@@ -106,11 +108,13 @@ def test_list_accessible_accounts(mock_google_ads_client, _):
   assert api.list_accessible_accounts() == ["123", "456"]
 
 
+@mock.patch("ads_mcp.tools.api._load_ads_config", return_value={})
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_execute_gaql(mock_google_ads_client, _):
+def test_execute_gaql(mock_google_ads_client, _, mock_load_config):
   """Tests the execute_gaql function."""
-  mock_client_instance = mock_google_ads_client.load_from_storage.return_value
+  del mock_load_config
+  mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_ads_service = mock_client_instance.get_service.return_value
   mock_ads_service.search_stream.return_value = [
       mock.Mock(
@@ -355,18 +359,68 @@ def test_get_ads_client_caches_yaml_config_for_access_token(
 @mock.patch("ads_mcp.tools.api.get_access_token", return_value=None)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_get_ads_client_enables_proto_plus_for_storage_client(
+def test_get_ads_client_forces_proto_plus_before_storage_client_init(
     mock_google_ads_client,
     mock_isfile_unused,
     mock_get_access_token_unused,
 ):
   del mock_isfile_unused, mock_get_access_token_unused
-  mock_client_instance = mock_google_ads_client.load_from_storage.return_value
+  mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_client_instance.login_customer_id = "default-login"
 
-  client = api.get_ads_client()
+  with mock.patch(
+      "ads_mcp.tools.api._load_ads_config",
+      return_value={
+          "developer_token": "dev-token",
+          "refresh_token": "refresh",
+          "client_id": "client-id",
+          "client_secret": "client-secret",
+          "use_proto_plus": False,
+          "login_customer_id": "default-login",
+      },
+  ) as mock_load_config:
+    client = api.get_ads_client()
 
   assert client is mock_client_instance
-  assert client.use_proto_plus is True
+  mock_load_config.assert_called_once()
+  mock_google_ads_client.load_from_dict.assert_called_once_with(
+      {
+          "developer_token": "dev-token",
+          "refresh_token": "refresh",
+          "client_id": "client-id",
+          "client_secret": "client-secret",
+          "use_proto_plus": True,
+          "login_customer_id": "default-login",
+      }
+  )
   assert client.login_customer_id == "default-login"
-  mock_google_ads_client.load_from_storage.assert_called_once()
+
+
+@mock.patch("ads_mcp.tools.api.get_access_token", return_value=None)
+@mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
+@mock.patch("ads_mcp.tools.api.GoogleAdsClient")
+def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
+    mock_google_ads_client,
+    mock_isfile_unused,
+    mock_get_access_token_unused,
+):
+  del mock_isfile_unused, mock_get_access_token_unused
+  mock_client_instance = mock_google_ads_client.load_from_dict.return_value
+  mock_client_instance.login_customer_id = "default-login"
+
+  with mock.patch(
+      "ads_mcp.tools.api._load_ads_config",
+      return_value={
+          "use_proto_plus": False,
+          "login_customer_id": "default-login",
+      },
+  ):
+    client = api.get_ads_client()
+    second_client = api.get_ads_client()
+
+  assert client is mock_client_instance
+  assert second_client is mock_client_instance
+  assert client.login_customer_id == "default-login"
+  mock_google_ads_client.load_from_dict.assert_called_once_with(
+      {"use_proto_plus": True, "login_customer_id": "default-login"}
+  )
