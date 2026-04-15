@@ -20,6 +20,7 @@ from ads_mcp.scripts.generate_views import update_views_yaml
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
+from ads_mcp.tools import audiences
 from ads_mcp.tools import campaigns
 from ads_mcp.tools import changes
 from ads_mcp.tools import conversions
@@ -44,6 +45,7 @@ tools = [
     ad_groups,
     ads,
     api,
+    audiences,
     campaigns,
     changes,
     conversions,
