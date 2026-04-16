@@ -327,6 +327,9 @@ def test_export_gaql_csv_applies_max_rows(tmp_path):
 
 @mock.patch("ads_mcp.tools.api.Credentials")
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
+@mock.patch(
+    "ads_mcp.tools.api._default_ads_assistant", return_value="assistant-tag"
+)
 @mock.patch("ads_mcp.tools.api.get_access_token")
 @mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
@@ -334,10 +337,15 @@ def test_get_ads_client_caches_yaml_config_for_access_token(
     mock_isfile_unused,
     mock_getmtime_unused,
     mock_get_access_token,
+    mock_default_ads_assistant_unused,
     mock_google_ads_client,
     mock_credentials,
 ):
-  del mock_isfile_unused, mock_getmtime_unused
+  del (
+      mock_isfile_unused,
+      mock_getmtime_unused,
+      mock_default_ads_assistant_unused,
+  )
   mock_get_access_token.return_value = mock.Mock(token="access-token")
   mock_credentials.return_value = mock.Mock()
 
@@ -354,8 +362,12 @@ def test_get_ads_client_caches_yaml_config_for_access_token(
   constructor_kwargs = mock_google_ads_client.call_args.kwargs
   assert constructor_kwargs["developer_token"] == "dev-token"
   assert constructor_kwargs["use_proto_plus"] is True
+  assert constructor_kwargs["ads_assistant"] == "assistant-tag"
 
 
+@mock.patch(
+    "ads_mcp.tools.api._default_ads_assistant", return_value="assistant-tag"
+)
 @mock.patch("ads_mcp.tools.api.get_access_token", return_value=None)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
@@ -363,8 +375,13 @@ def test_get_ads_client_forces_proto_plus_before_storage_client_init(
     mock_google_ads_client,
     mock_isfile_unused,
     mock_get_access_token_unused,
+    mock_default_ads_assistant_unused,
 ):
-  del mock_isfile_unused, mock_get_access_token_unused
+  del (
+      mock_isfile_unused,
+      mock_get_access_token_unused,
+      mock_default_ads_assistant_unused,
+  )
   mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_client_instance.login_customer_id = "default-login"
 
@@ -391,11 +408,15 @@ def test_get_ads_client_forces_proto_plus_before_storage_client_init(
           "client_secret": "client-secret",
           "use_proto_plus": True,
           "login_customer_id": "default-login",
+          "ads_assistant": "assistant-tag",
       }
   )
   assert client.login_customer_id == "default-login"
 
 
+@mock.patch(
+    "ads_mcp.tools.api._default_ads_assistant", return_value="assistant-tag"
+)
 @mock.patch("ads_mcp.tools.api.get_access_token", return_value=None)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
@@ -403,8 +424,13 @@ def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
     mock_google_ads_client,
     mock_isfile_unused,
     mock_get_access_token_unused,
+    mock_default_ads_assistant_unused,
 ):
-  del mock_isfile_unused, mock_get_access_token_unused
+  del (
+      mock_isfile_unused,
+      mock_get_access_token_unused,
+      mock_default_ads_assistant_unused,
+  )
   mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_client_instance.login_customer_id = "default-login"
 
@@ -422,5 +448,18 @@ def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
   assert second_client is mock_client_instance
   assert client.login_customer_id == "default-login"
   mock_google_ads_client.load_from_dict.assert_called_once_with(
-      {"use_proto_plus": True, "login_customer_id": "default-login"}
+      {
+          "use_proto_plus": True,
+          "login_customer_id": "default-login",
+          "ads_assistant": "assistant-tag",
+      }
   )
+
+
+def test_apply_ads_client_defaults_preserves_explicit_assistant():
+  assert api._apply_ads_client_defaults(  # pylint: disable=protected-access
+      {"use_proto_plus": False, "ads_assistant": "yaml-tag"}
+  ) == {
+      "use_proto_plus": True,
+      "ads_assistant": "yaml-tag",
+  }

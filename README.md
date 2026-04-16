@@ -274,6 +274,19 @@ Add to your Gemini configuration:
 uv run -m ads_mcp.server
 ```
 
+#### Hosted Auth / Transport Options
+
+When running the HTTP server with Google OAuth enabled, these optional env vars
+control the new hardening and resumability behavior:
+
+- `FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS`: Comma-separated redirect
+  URI allowlist. Required for non-localhost OAuth base URLs.
+- `FASTMCP_SERVER_PING_INTERVAL_MS`: Ping cadence for long-lived HTTP sessions.
+- `FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS`: Suggested retry interval for
+  resumable streamable-http reconnects.
+- `GOOGLE_ADS_ADS_ASSISTANT`: Override the Google Ads request tag. By default,
+  the server sends a compact `google-ads-mcp-<version>` tag automatically.
+
 ## 💬 Usage Examples
 
 Once connected, just talk naturally:
