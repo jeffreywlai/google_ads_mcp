@@ -14,6 +14,8 @@
 
 """Tests for the API tools."""
 
+# pylint: disable=protected-access
+
 from unittest import mock
 import os
 
@@ -29,10 +31,12 @@ def reset_ads_client():
   api._ADS_CLIENT = None  # pylint: disable=protected-access
   api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
   api._PAGED_QUERY_CACHE = api.OrderedDict()  # pylint: disable=protected-access
+  api._package_ads_assistant.cache_clear()  # pylint: disable=protected-access
   yield
   api._ADS_CLIENT = None  # pylint: disable=protected-access
   api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
   api._PAGED_QUERY_CACHE = api.OrderedDict()  # pylint: disable=protected-access
+  api._package_ads_assistant.cache_clear()  # pylint: disable=protected-access
 
 
 @pytest.mark.parametrize(
@@ -463,3 +467,14 @@ def test_apply_ads_client_defaults_preserves_explicit_assistant():
       "use_proto_plus": True,
       "ads_assistant": "yaml-tag",
   }
+
+
+def test_default_ads_assistant_caches_package_lookup():
+  with mock.patch(
+      "ads_mcp.tools.api.importlib.metadata.version",
+      return_value="0.6.3",
+  ) as mock_version:
+    assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
+    assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
+
+  mock_version.assert_called_once_with("google-ads-mcp")

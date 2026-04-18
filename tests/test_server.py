@@ -118,7 +118,7 @@ def test_build_auth_provider_requires_allowlist_for_remote_base_url():
   """Rejects remote OAuth setups without an explicit redirect allowlist."""
   with pytest.raises(
       ValueError,
-      match="FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS",
+      match="non-empty comma-separated list",
   ):
     server._build_auth_provider()
 
@@ -137,6 +137,25 @@ def test_build_auth_provider_uses_google_token_verifier(
   """Uses GoogleTokenVerifier when access-token verification is enabled."""
   assert server._build_auth_provider() == "token-verifier"
   mock_token_verifier.assert_called_once_with()
+
+
+@mock.patch.dict(
+    os.environ,
+    {
+        "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID": "client-id",
+        "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET": "client-secret",
+        "FASTMCP_SERVER_BASE_URL": "https://ads.example.com",
+        "FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS": " , ",
+    },
+    clear=True,
+)
+def test_build_auth_provider_rejects_empty_explicit_allowlist():
+  """Rejects explicitly empty redirect allowlists for remote deployments."""
+  with pytest.raises(
+      ValueError,
+      match="non-empty comma-separated list",
+  ):
+    server._build_auth_provider()
 
 
 @mock.patch("ads_mcp.server.mcp_server")
@@ -179,6 +198,28 @@ def test_ensure_ping_middleware_dedupes_existing_instance(mock_mcp_server):
 
   assert existing.interval_ms == 45000
   mock_mcp_server.add_middleware.assert_not_called()
+
+
+def test_ensure_ping_middleware_rejects_invalid_interval():
+  """Rejects invalid ping interval env values with a clear message."""
+  with mock.patch.dict(
+      os.environ, {"FASTMCP_SERVER_PING_INTERVAL_MS": "abc"}, clear=True
+  ):
+    with pytest.raises(ValueError, match="FASTMCP_SERVER_PING_INTERVAL_MS"):
+      server._ensure_ping_middleware()
+
+
+def test_get_retry_interval_ms_rejects_invalid_interval():
+  """Rejects invalid retry interval env values with a clear message."""
+  with mock.patch.dict(
+      os.environ,
+      {"FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS": "abc"},
+      clear=True,
+  ):
+    with pytest.raises(
+        ValueError, match="FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS"
+    ):
+      server._get_retry_interval_ms()
 
 
 @mock.patch("ads_mcp.server.uvicorn.Server")

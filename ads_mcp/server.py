@@ -92,15 +92,16 @@ def _get_allowed_client_redirect_uris(base_url: str) -> list[str]:
   configured_uris = _parse_csv_env(
       "FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS"
   )
-  if configured_uris is not None:
+  if configured_uris:
     return configured_uris
 
   if _is_loopback_base_url(base_url):
     return list(DEFAULT_LOCALHOST_PATTERNS)
 
   raise ValueError(
-      "Set FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS when "
-      "FASTMCP_SERVER_BASE_URL is not loopback."
+      "Set FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS to a "
+      "non-empty comma-separated list when FASTMCP_SERVER_BASE_URL is "
+      "not loopback."
   )
 
 
@@ -128,9 +129,32 @@ def _build_auth_provider():
   return auth_provider
 
 
+def _get_positive_int_env(
+    env_var: str,
+    *,
+    default: int | None = None,
+) -> int | None:
+  """Parses an optional positive integer env var with clear errors."""
+  raw_value = os.getenv(env_var)
+  if raw_value is None:
+    return default
+
+  try:
+    parsed_value = int(raw_value)
+  except ValueError as e:
+    raise ValueError(f"{env_var} must be a positive integer.") from e
+
+  if parsed_value <= 0:
+    raise ValueError(f"{env_var} must be a positive integer.")
+
+  return parsed_value
+
+
 def _ensure_ping_middleware() -> None:
   """Adds a single PingMiddleware instance for streamable-http sessions."""
-  interval_ms = int(os.getenv("FASTMCP_SERVER_PING_INTERVAL_MS", "30000"))
+  interval_ms = _get_positive_int_env(
+      "FASTMCP_SERVER_PING_INTERVAL_MS", default=30000
+  )
   for middleware in mcp_server.middleware:
     if isinstance(middleware, PingMiddleware):
       middleware.interval_ms = interval_ms
@@ -141,16 +165,7 @@ def _ensure_ping_middleware() -> None:
 
 def _get_retry_interval_ms() -> int | None:
   """Returns an optional streamable-http retry interval from env."""
-  raw_value = os.getenv("FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS")
-  if raw_value is None:
-    return None
-
-  retry_interval_ms = int(raw_value)
-  if retry_interval_ms <= 0:
-    raise ValueError(
-        "FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS must be positive."
-    )
-  return retry_interval_ms
+  return _get_positive_int_env("FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS")
 
 
 def _build_streamable_http_app():

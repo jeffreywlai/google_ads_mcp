@@ -17,6 +17,7 @@
 from collections import OrderedDict
 import csv
 from copy import deepcopy
+import functools
 import importlib.metadata
 import json
 import math
@@ -85,6 +86,17 @@ _EXPORT_GAQL_CSV_OUTPUT_SCHEMA = {
 }
 
 
+@functools.lru_cache(maxsize=1)
+def _package_ads_assistant() -> str:
+  """Returns the process-wide default Google Ads assistant tag."""
+  try:
+    version = importlib.metadata.version("google-ads-mcp")
+  except importlib.metadata.PackageNotFoundError:
+    return "google-ads-mcp"
+
+  return f"google-ads-mcp-{version}"
+
+
 def _default_ads_assistant() -> str | None:
   """Returns the default Google Ads assistant request tag."""
   configured_tag = os.getenv("GOOGLE_ADS_ADS_ASSISTANT")
@@ -92,12 +104,7 @@ def _default_ads_assistant() -> str | None:
     configured_tag = configured_tag.strip()
     return configured_tag or None
 
-  try:
-    version = importlib.metadata.version("google-ads-mcp")
-  except importlib.metadata.PackageNotFoundError:
-    return "google-ads-mcp"
-
-  return f"google-ads-mcp-{version}"
+  return _package_ads_assistant()
 
 
 def _apply_ads_client_defaults(ads_config: dict[str, Any]) -> dict[str, Any]:
