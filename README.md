@@ -280,7 +280,7 @@ When running the HTTP server with Google OAuth enabled, these optional env vars
 control the new hardening and resumability behavior:
 
 - `FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS`: Comma-separated redirect
-  URI allowlist. Required for non-localhost OAuth base URLs.
+  URI allowlist. Required for non-loopback OAuth base URLs.
 - `FASTMCP_SERVER_PING_INTERVAL_MS`: Ping cadence for long-lived HTTP sessions.
 - `FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS`: Suggested retry interval for
   resumable streamable-http reconnects.
