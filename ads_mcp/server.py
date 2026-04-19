@@ -83,7 +83,10 @@ def _parse_csv_env(env_var: str) -> list[str] | None:
 
 def _is_loopback_base_url(base_url: str) -> bool:
   """Returns whether a base URL points at a loopback/local dev host."""
-  hostname = urlparse(base_url).hostname
+  parsed_url = urlparse(base_url)
+  hostname = parsed_url.hostname
+  if hostname is None:
+    hostname = urlparse(f"http://{base_url}").hostname
   return hostname in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 

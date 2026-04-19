@@ -84,6 +84,28 @@ def test_build_auth_provider_uses_localhost_redirect_allowlist(
     {
         "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID": "client-id",
         "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET": "client-secret",
+        "FASTMCP_SERVER_BASE_URL": "localhost:8000",
+    },
+    clear=True,
+)
+@mock.patch("ads_mcp.server.GoogleProvider", return_value="provider")
+def test_build_auth_provider_accepts_scheme_less_localhost_base_url(
+    mock_google_provider,
+):
+  """Treats scheme-less localhost base URLs as loopback for auth setup."""
+  assert server._build_auth_provider() == "provider"
+
+  provider_kwargs = mock_google_provider.call_args.kwargs
+  assert provider_kwargs["allowed_client_redirect_uris"] == list(
+      DEFAULT_LOCALHOST_PATTERNS
+  )
+
+
+@mock.patch.dict(
+    os.environ,
+    {
+        "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID": "client-id",
+        "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET": "client-secret",
         "FASTMCP_SERVER_BASE_URL": "https://ads.example.com",
         "FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS": (
             "https://app.example.com/callback, https://app.example.com/auth/*"

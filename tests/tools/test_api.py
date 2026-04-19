@@ -470,11 +470,12 @@ def test_apply_ads_client_defaults_preserves_explicit_assistant():
 
 
 def test_default_ads_assistant_caches_package_lookup():
-  with mock.patch(
-      "ads_mcp.tools.api.importlib.metadata.version",
-      return_value="0.6.3",
-  ) as mock_version:
-    assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
-    assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
+  with mock.patch.dict(os.environ, {}, clear=True):
+    with mock.patch(
+        "ads_mcp.tools.api.importlib.metadata.version",
+        return_value="0.6.3",
+    ) as mock_version:
+      assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
+      assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
 
-  mock_version.assert_called_once_with("google-ads-mcp")
+    mock_version.assert_called_once_with("google-ads-mcp")
