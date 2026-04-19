@@ -90,6 +90,23 @@ def _is_loopback_base_url(base_url: str) -> bool:
   return hostname in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
+def _default_loopback_redirect_uris(base_url: str) -> list[str]:
+  """Builds safe local redirect patterns for the configured loopback host."""
+  parsed_url = urlparse(base_url)
+  scheme = parsed_url.scheme or "http"
+  hostname = parsed_url.hostname
+  if hostname is None:
+    parsed_url = urlparse(f"http://{base_url}")
+    scheme = parsed_url.scheme or "http"
+    hostname = parsed_url.hostname
+
+  patterns = list(DEFAULT_LOCALHOST_PATTERNS)
+  if hostname and hostname not in {"localhost", "127.0.0.1"}:
+    redirect_host = f"[{hostname}]" if ":" in hostname else hostname
+    patterns.append(f"{scheme}://{redirect_host}:*")
+  return patterns
+
+
 def _get_allowed_client_redirect_uris(base_url: str) -> list[str]:
   """Builds the OAuth redirect allowlist for GoogleProvider."""
   configured_uris = _parse_csv_env(
@@ -99,7 +116,7 @@ def _get_allowed_client_redirect_uris(base_url: str) -> list[str]:
     return configured_uris
 
   if _is_loopback_base_url(base_url):
-    return list(DEFAULT_LOCALHOST_PATTERNS)
+    return _default_loopback_redirect_uris(base_url)
 
   raise ValueError(
       "Set FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS to a "
