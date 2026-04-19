@@ -210,8 +210,10 @@ def test_apply_recommendations_builds_operations(mock_ads_client):
       ]
   }
   call_kwargs = mock_service.apply_recommendation.call_args.kwargs
-  assert call_kwargs["customer_id"] == CUSTOMER_ID
-  assert call_kwargs["operations"] == [
+  request = call_kwargs["request"]
+  assert request["customer_id"] == CUSTOMER_ID
+  assert request["partial_failure"] is False
+  assert request["operations"] == [
       {
           "resource_name": "customers/123/recommendations/1",
           "campaign_budget": {"new_budget_amount_micros": 20_000_000},
@@ -246,9 +248,12 @@ def test_dismiss_recommendations_calls_service(mock_ads_client):
   )
 
   assert result == {"resource_names": ["customers/123/recommendations/1"]}
-  assert mock_service.dismiss_recommendation.call_args.kwargs[
-      "operations"
-  ] == [{"resource_name": "customers/123/recommendations/1"}]
+  request = mock_service.dismiss_recommendation.call_args.kwargs["request"]
+  assert request["customer_id"] == CUSTOMER_ID
+  assert request["partial_failure"] is False
+  assert request["operations"] == [
+      {"resource_name": "customers/123/recommendations/1"}
+  ]
 
 
 def test_create_recommendation_subscription_defaults_to_paused(
