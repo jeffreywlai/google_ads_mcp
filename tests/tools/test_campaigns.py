@@ -257,8 +257,8 @@ class TestAddCampaignAudiences:
         CAMPAIGN_ID,
         [
             {
-                "type": "USER_LIST",
-                "resource_name": "customers/123/userLists/456",
+                "type": "USER_INTEREST",
+                "resource_name": "customers/123/userInterests/90206",
                 "bid_modifier": 1.5,
             },
             {
@@ -277,15 +277,16 @@ class TestAddCampaignAudiences:
     }
     criterion_service.mutate_campaign_criteria.assert_called_once()
     call_args = criterion_service.mutate_campaign_criteria.call_args.kwargs
-    assert call_args["customer_id"] == CUSTOMER_ID
-    assert call_args["partial_failure"] is True
-    assert len(call_args["operations"]) == 2
+    request = call_args["request"]
+    assert request["customer_id"] == CUSTOMER_ID
+    assert request["partial_failure"] is True
+    assert len(request["operations"]) == 2
 
     assert operations[0].create.campaign == "customers/123/campaigns/111"
     assert operations[0].create.bid_modifier == 1.5
     assert (
-        operations[0].create.user_list.user_list
-        == "customers/123/userLists/456"
+        operations[0].create.user_interest.user_interest_category
+        == "customers/123/userInterests/90206"
     )
     assert (
         operations[1].create.custom_audience.custom_audience

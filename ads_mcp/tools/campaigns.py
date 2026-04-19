@@ -422,9 +422,11 @@ def add_campaign_audiences(
 
   try:
     response = campaign_criterion_service.mutate_campaign_criteria(
-        customer_id=customer_id,
-        operations=operations,
-        partial_failure=True,
+        request={
+            "customer_id": customer_id,
+            "operations": operations,
+            "partial_failure": True,
+        }
     )
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
