@@ -323,9 +323,11 @@ def apply_recommendations(
 
   try:
     response = recommendation_service.apply_recommendation(
-        customer_id=customer_id,
-        operations=operations,
-        partial_failure=partial_failure,
+        request={
+            "customer_id": customer_id,
+            "operations": operations,
+            "partial_failure": partial_failure,
+        }
     )
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
@@ -370,9 +372,11 @@ def dismiss_recommendations(
 
   try:
     response = recommendation_service.dismiss_recommendation(
-        customer_id=customer_id,
-        operations=operations,
-        partial_failure=partial_failure,
+        request={
+            "customer_id": customer_id,
+            "operations": operations,
+            "partial_failure": partial_failure,
+        }
     )
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
