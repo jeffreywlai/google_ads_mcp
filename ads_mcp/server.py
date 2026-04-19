@@ -15,6 +15,7 @@
 """The server for the Google Ads API MCP."""
 import asyncio
 import os
+from urllib.parse import urlparse
 
 from ads_mcp.coordinator import mcp_server
 from ads_mcp.scripts.generate_views import update_views_yaml
@@ -38,8 +39,13 @@ from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
 
 import dotenv
+import fastmcp
+from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
 from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.server.auth.providers.google import GoogleTokenVerifier
+from fastmcp.server.event_store import EventStore
+from fastmcp.server.middleware.ping import PingMiddleware
+import uvicorn
 
 
 dotenv.load_dotenv()
@@ -66,30 +72,154 @@ tools = [
     smart_campaigns,
 ]
 
-if os.getenv("USE_GOOGLE_OAUTH_ACCESS_TOKEN"):
-  mcp_server.auth = GoogleTokenVerifier()
 
-if os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID") and os.getenv(
-    "FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET"
-):
-  base_url = os.getenv("FASTMCP_SERVER_BASE_URL", "http://localhost:8000")
-  mcp_server.auth = GoogleProvider(
-      client_id=os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID"),
-      client_secret=os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET"),
-      base_url=base_url,
-      required_scopes=["https://www.googleapis.com/auth/adwords"],
+def _parse_csv_env(env_var: str) -> list[str] | None:
+  """Parses a comma-separated env var into a compact list."""
+  raw_value = os.getenv(env_var)
+  if raw_value is None:
+    return None
+  return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def _is_loopback_base_url(base_url: str) -> bool:
+  """Returns whether a base URL points at a loopback/local dev host."""
+  parsed_url = urlparse(base_url)
+  hostname = parsed_url.hostname
+  if hostname is None:
+    hostname = urlparse(f"http://{base_url}").hostname
+  return hostname in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _default_loopback_redirect_uris(base_url: str) -> list[str]:
+  """Builds safe local redirect patterns for the configured loopback host."""
+  parsed_url = urlparse(base_url)
+  scheme = parsed_url.scheme or "http"
+  hostname = parsed_url.hostname
+  if hostname is None:
+    parsed_url = urlparse(f"http://{base_url}")
+    scheme = parsed_url.scheme or "http"
+    hostname = parsed_url.hostname
+
+  patterns = list(DEFAULT_LOCALHOST_PATTERNS)
+  if hostname and hostname not in {"localhost", "127.0.0.1"}:
+    redirect_host = f"[{hostname}]" if ":" in hostname else hostname
+    patterns.append(f"{scheme}://{redirect_host}:*")
+  return patterns
+
+
+def _get_allowed_client_redirect_uris(base_url: str) -> list[str]:
+  """Builds the OAuth redirect allowlist for GoogleProvider."""
+  configured_uris = _parse_csv_env(
+      "FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS"
   )
+  if configured_uris:
+    return configured_uris
+
+  if _is_loopback_base_url(base_url):
+    return _default_loopback_redirect_uris(base_url)
+
+  raise ValueError(
+      "Set FASTMCP_SERVER_AUTH_ALLOWED_CLIENT_REDIRECT_URIS to a "
+      "non-empty comma-separated list when FASTMCP_SERVER_BASE_URL is "
+      "not loopback."
+  )
+
+
+def _build_auth_provider():
+  """Builds the configured auth provider, if any."""
+  auth_provider = None
+  if os.getenv("USE_GOOGLE_OAUTH_ACCESS_TOKEN"):
+    auth_provider = GoogleTokenVerifier()
+
+  client_id = os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID")
+  client_secret = os.getenv("FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET")
+  if client_id and client_secret:
+    base_url = os.getenv("FASTMCP_SERVER_BASE_URL", "http://localhost:8000")
+    auth_provider = GoogleProvider(
+        client_id=client_id,
+        client_secret=client_secret,
+        base_url=base_url,
+        required_scopes=["https://www.googleapis.com/auth/adwords"],
+        allowed_client_redirect_uris=_get_allowed_client_redirect_uris(
+            base_url
+        ),
+        forward_resource=True,
+    )
+
+  return auth_provider
+
+
+def _get_positive_int_env(
+    env_var: str,
+    *,
+    default: int | None = None,
+) -> int | None:
+  """Parses an optional positive integer env var with clear errors."""
+  raw_value = os.getenv(env_var)
+  if raw_value is None:
+    return default
+
+  try:
+    parsed_value = int(raw_value)
+  except ValueError as e:
+    raise ValueError(f"{env_var} must be a positive integer.") from e
+
+  if parsed_value <= 0:
+    raise ValueError(f"{env_var} must be a positive integer.")
+
+  return parsed_value
+
+
+def _ensure_ping_middleware() -> None:
+  """Adds a single PingMiddleware instance for streamable-http sessions."""
+  interval_ms = _get_positive_int_env(
+      "FASTMCP_SERVER_PING_INTERVAL_MS", default=30000
+  )
+  for middleware in mcp_server.middleware:
+    if isinstance(middleware, PingMiddleware):
+      middleware.interval_ms = interval_ms
+      return
+
+  mcp_server.add_middleware(PingMiddleware(interval_ms=interval_ms))
+
+
+def _get_retry_interval_ms() -> int | None:
+  """Returns an optional streamable-http retry interval from env."""
+  return _get_positive_int_env("FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS")
+
+
+def _build_streamable_http_app():
+  """Builds a resumable streamable-http app with compact defaults."""
+  _ensure_ping_middleware()
+  return mcp_server.http_app(
+      transport="streamable-http",
+      event_store=EventStore(),
+      retry_interval=_get_retry_interval_ms(),
+  )
+
+
+def _serve_streamable_http_app(app) -> None:
+  """Serves the FastMCP streamable-http app via uvicorn."""
+  config = uvicorn.Config(
+      app,
+      host=fastmcp.settings.host,
+      port=fastmcp.settings.port,
+      timeout_graceful_shutdown=2,
+      lifespan="on",
+      ws="websockets-sansio",
+      log_level=fastmcp.settings.log_level.lower(),
+  )
+  uvicorn.Server(config).run()
 
 
 def main():
   """Initializes and runs the MCP server."""
   asyncio.run(update_views_yaml())  # Check and update docs resource
   api.get_ads_client()  # Check Google Ads credentials
+  mcp_server.auth = _build_auth_provider()
   print("mcp server starting...")
-  mcp_server.run(
-      transport="streamable-http",
-      show_banner=False,
-  )  # Initialize and run the server
+  app = _build_streamable_http_app()
+  _serve_streamable_http_app(app)
 
 
 if __name__ == "__main__":

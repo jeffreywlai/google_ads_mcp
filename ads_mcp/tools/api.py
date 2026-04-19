@@ -17,6 +17,8 @@
 from collections import OrderedDict
 import csv
 from copy import deepcopy
+import functools
+import importlib.metadata
 import json
 import math
 import os
@@ -84,6 +86,39 @@ _EXPORT_GAQL_CSV_OUTPUT_SCHEMA = {
 }
 
 
+@functools.lru_cache(maxsize=1)
+def _package_ads_assistant() -> str:
+  """Returns the process-wide default Google Ads assistant tag."""
+  try:
+    version = importlib.metadata.version("google-ads-mcp")
+  except importlib.metadata.PackageNotFoundError:
+    return "google-ads-mcp"
+
+  return f"google-ads-mcp-{version}"
+
+
+def _default_ads_assistant() -> str | None:
+  """Returns the default Google Ads assistant request tag."""
+  configured_tag = os.getenv("GOOGLE_ADS_ADS_ASSISTANT")
+  if configured_tag is not None:
+    configured_tag = configured_tag.strip()
+    return configured_tag or None
+
+  return _package_ads_assistant()
+
+
+def _apply_ads_client_defaults(ads_config: dict[str, Any]) -> dict[str, Any]:
+  """Applies compact default client settings for this MCP server."""
+  normalized_config = dict(ads_config)
+  normalized_config["use_proto_plus"] = True
+
+  ads_assistant = _default_ads_assistant()
+  if ads_assistant and not normalized_config.get("ads_assistant"):
+    normalized_config["ads_assistant"] = ads_assistant
+
+  return normalized_config
+
+
 def _load_ads_config(credentials_path: str) -> dict[str, Any]:
   """Loads the Google Ads YAML config with mtime-based caching."""
   cache_mtime = os.path.getmtime(credentials_path)
@@ -133,19 +168,19 @@ def get_ads_client(
 
   if access_token:
     credentials = Credentials(access_token)
-    ads_config = _load_ads_config(credentials_path)
+    ads_config = _apply_ads_client_defaults(_load_ads_config(credentials_path))
     client = GoogleAdsClient(
         credentials,
         developer_token=ads_config.get("developer_token"),
         use_proto_plus=True,
+        ads_assistant=ads_config.get("ads_assistant"),
     )
     if login_customer_id:
       client.login_customer_id = login_customer_id
     return client
 
   if not _ADS_CLIENT:
-    ads_config = dict(_load_ads_config(credentials_path))
-    ads_config["use_proto_plus"] = True
+    ads_config = _apply_ads_client_defaults(_load_ads_config(credentials_path))
     _ADS_CLIENT = GoogleAdsClient.load_from_dict(ads_config)
     _DEFAULT_LOGIN_CUSTOMER_ID = getattr(
         _ADS_CLIENT, "login_customer_id", None
