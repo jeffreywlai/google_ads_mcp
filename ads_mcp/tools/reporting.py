@@ -99,6 +99,8 @@ def _validate_quality_score(min_quality_score: int | None) -> None:
 
 def _validate_non_negative(value: int | float, field_name: str) -> None:
   """Validates non-negative numeric threshold inputs."""
+  if isinstance(value, bool) or not isinstance(value, (int, float)):
+    raise ToolError(f"{field_name} must be a number.")
   if value < 0:
     raise ToolError(f"{field_name} must be non-negative.")
 
@@ -1283,7 +1285,8 @@ def compare_biddable_vs_all_cart_value(
   """
   validate_limit(limit)
 
-  where_conditions = [_date_range_condition(date_range)]
+  normalized_date_range = validate_date_range(date_range)
+  where_conditions = [_date_range_condition(normalized_date_range)]
   if campaign_ids:
     where_conditions.append(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"
@@ -1321,7 +1324,7 @@ def compare_biddable_vs_all_cart_value(
     comparisons.append(enriched_row)
 
   return {
-      "date_range": date_range,
+      "date_range": normalized_date_range,
       "cart_value_comparisons": comparisons,
       "returned_count": len(comparisons),
       "limit": limit,

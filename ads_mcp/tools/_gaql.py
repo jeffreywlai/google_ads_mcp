@@ -59,7 +59,15 @@ def validate_date_range(date_range: str) -> str:
 
 def quote_int_values(values: list[str]) -> str:
   """Formats integer-like values for an IN clause."""
-  return ", ".join(str(int(value)) for value in values)
+  quoted_values = []
+  for value in values:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+      raise ToolError(f"Invalid integer value: {value}.")
+    try:
+      quoted_values.append(str(int(value)))
+    except (TypeError, ValueError) as exc:
+      raise ToolError(f"Invalid integer value: {value}.") from exc
+  return ", ".join(quoted_values)
 
 
 def quote_string_values(values: list[str]) -> str:

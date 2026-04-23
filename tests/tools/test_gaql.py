@@ -15,6 +15,7 @@
 """Tests for shared GAQL helper functions."""
 
 from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_date_range
 from fastmcp.exceptions import ToolError
 import pytest
@@ -27,6 +28,11 @@ def test_quote_enum_values_normalizes_names():
 def test_quote_enum_values_rejects_malformed_names():
   with pytest.raises(ToolError, match="Invalid enum value"):
     quote_enum_values(["ENABLED) OR campaign.id > 0"])
+
+
+def test_quote_int_values_rejects_malformed_ids():
+  with pytest.raises(ToolError, match="Invalid integer value"):
+    quote_int_values(["123 OR metrics.clicks > 0"])
 
 
 def test_validate_date_range_normalizes_supported_function():

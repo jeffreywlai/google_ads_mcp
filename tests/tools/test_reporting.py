@@ -167,12 +167,14 @@ def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
       result = reporting.compare_biddable_vs_all_cart_value(
           CUSTOMER_ID,
           campaign_ids=["111"],
+          date_range="last_30_days",
       )
 
   query = mock_run.call_args.args[0]
   assert "FROM cart_data_sales_view" in query
   assert "metrics.gross_profit_micros" in query
   assert "metrics.all_gross_profit_micros" in query
+  assert result["date_range"] == "LAST_30_DAYS"
   comparison = result["cart_value_comparisons"][0]
   assert comparison["non_biddable_revenue_micros"] == 5_000_000
   assert comparison["non_biddable_gross_profit_micros"] == 3_000_000
@@ -470,6 +472,11 @@ def test_list_location_interest_performance_builds_matched_query():
 def test_list_campaign_search_terms_rejects_negative_threshold():
   with pytest.raises(ToolError, match="min_clicks must be non-negative"):
     reporting.list_campaign_search_terms(CUSTOMER_ID, min_clicks=-1)
+
+
+def test_list_campaign_search_terms_rejects_non_numeric_threshold():
+  with pytest.raises(ToolError, match="min_clicks must be a number"):
+    reporting.list_campaign_search_terms(CUSTOMER_ID, min_clicks="1")
 
 
 def test_summarize_shopping_product_status_builds_compact_summary():
