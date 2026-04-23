@@ -39,6 +39,7 @@ categories:
       list_rsa_ad_strength: Responsive search ad strength diagnostics.
       list_conversion_actions: Conversion action configuration.
       list_audience_performance: Campaign or ad-group audience performance.
+      list_video_enhancements: Video Enhancement rows with source, title, duration, and video-view metrics.
 
   conversions:
     summary: Raw conversion upload testing and diagnostics.
