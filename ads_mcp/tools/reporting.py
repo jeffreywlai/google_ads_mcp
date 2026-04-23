@@ -16,6 +16,7 @@
 
 from collections import Counter
 import math
+import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -67,6 +68,25 @@ def _normalize_choices(
     seen.add(normalized_value)
     normalized_choices.append(normalized_value)
   return normalized_choices
+
+
+def _normalize_enum_filters(values: list[str], field_name: str) -> list[str]:
+  """Normalizes GAQL enum filters while rejecting malformed values."""
+  normalized_values: list[str] = []
+  seen: set[str] = set()
+  for value in values:
+    if not isinstance(value, str):
+      raise ToolError(f"{field_name} values must be strings.")
+    normalized_value = value.upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", normalized_value):
+      raise ToolError(
+          f"Invalid {field_name}: {value}. Use Google Ads enum names."
+      )
+    if normalized_value in seen:
+      continue
+    seen.add(normalized_value)
+    normalized_values.append(normalized_value)
+  return normalized_values
 
 
 def _validate_quality_score(min_quality_score: int | None) -> None:
@@ -1378,12 +1398,16 @@ def list_shopping_attribution_breakdown(
         segments.product_item_id,
         segments.product_title,
         segments.product_brand,
-        metrics.impressions,
-        metrics.clicks,
         metrics.conversions,
         metrics.conversions_value,
         metrics.all_conversions,
-        metrics.all_conversions_value
+        metrics.all_conversions_value,
+        metrics.revenue_micros,
+        metrics.all_revenue_micros,
+        metrics.gross_profit_micros,
+        metrics.all_gross_profit_micros,
+        metrics.units_sold,
+        metrics.all_units_sold
       FROM shopping_performance_view
       {build_where_clause(where_conditions)}
       ORDER BY metrics.all_conversions_value DESC
@@ -1435,6 +1459,10 @@ def list_campaign_view_through_optimization(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"
     )
   if advertising_channel_types:
+    advertising_channel_types = _normalize_enum_filters(
+        advertising_channel_types,
+        "advertising_channel_types",
+    )
     where_conditions.append(
         "campaign.advertising_channel_type IN "
         f"({quote_enum_values(advertising_channel_types)})"
@@ -1648,6 +1676,7 @@ def summarize_shopping_product_status(
         f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
     )
   if statuses:
+    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
@@ -1760,6 +1789,7 @@ def list_shopping_product_status(
         f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
     )
   if statuses:
+    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
@@ -1825,6 +1855,7 @@ def list_travel_feed_asset_sets(
 
   where_conditions = ["asset_set.type = TRAVEL_FEED"]
   if statuses:
+    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"asset_set.status IN ({quote_enum_values(statuses)})"
     )

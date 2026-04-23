@@ -192,6 +192,10 @@ def test_list_shopping_attribution_breakdown_includes_event_type():
   assert "FROM shopping_performance_view" in query
   assert "segments.conversion_attribution_event_type" in query
   assert "segments.product_item_id" in query
+  assert "metrics.impressions" not in query
+  assert "metrics.clicks" not in query
+  assert "metrics.all_revenue_micros" in query
+  assert "metrics.all_gross_profit_micros" in query
   assert "campaign.id IN (111)" in query
 
 
@@ -211,6 +215,14 @@ def test_list_campaign_view_through_optimization_includes_v24_field():
   assert "FROM campaign" in query
   assert "campaign.view_through_conversion_optimization_enabled" in query
   assert "campaign.advertising_channel_type IN (DEMAND_GEN)" in query
+
+
+def test_list_campaign_view_through_optimization_rejects_bad_enum_filter():
+  with pytest.raises(ToolError, match="Invalid advertising_channel_types"):
+    reporting.list_campaign_view_through_optimization(
+        CUSTOMER_ID,
+        advertising_channel_types=["DEMAND_GEN) OR campaign.id > 0"],
+    )
 
 
 def test_list_video_audibility_performance_includes_audible_metrics():
@@ -328,6 +340,14 @@ def test_list_shopping_product_status_builds_paginated_query():
   assert "shopping_product.issues" in query
 
 
+def test_list_shopping_product_status_rejects_bad_status_filter():
+  with pytest.raises(ToolError, match="Invalid statuses"):
+    reporting.list_shopping_product_status(
+        CUSTOMER_ID,
+        statuses=["NOT_ELIGIBLE) OR metrics.clicks > 0"],
+    )
+
+
 def test_list_travel_feed_asset_sets_builds_config_query():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
@@ -346,6 +366,14 @@ def test_list_travel_feed_asset_sets_builds_config_query():
   assert "asset_set.status IN (ENABLED)" in query
   assert "asset_set.travel_feed_data.merchant_center_id" in query
   assert "asset_set.travel_feed_data.partner_center_id" in query
+
+
+def test_list_travel_feed_asset_sets_rejects_bad_status_filter():
+  with pytest.raises(ToolError, match="Invalid statuses"):
+    reporting.list_travel_feed_asset_sets(
+        CUSTOMER_ID,
+        statuses=["ENABLED) OR asset_set.id > 0"],
+    )
 
 
 def test_list_retail_filter_shared_criteria_builds_query():
