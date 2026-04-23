@@ -103,14 +103,13 @@ _CART_ALL_METRICS = [
     "metrics.all_cost_of_goods_sold_micros",
     "metrics.all_gross_profit_micros",
     "metrics.all_gross_profit_margin",
-    "metrics.all_orders",
     "metrics.all_units_sold",
-    "metrics.all_average_order_value_micros",
-    "metrics.all_average_cart_size",
     "metrics.all_lead_revenue_micros",
+    "metrics.all_lead_cost_of_goods_sold_micros",
     "metrics.all_lead_gross_profit_micros",
     "metrics.all_lead_units_sold",
     "metrics.all_cross_sell_revenue_micros",
+    "metrics.all_cross_sell_cost_of_goods_sold_micros",
     "metrics.all_cross_sell_gross_profit_micros",
     "metrics.all_cross_sell_units_sold",
 ]
@@ -119,16 +118,21 @@ _CART_BIDDABLE_METRICS = [
     "metrics.cost_of_goods_sold_micros",
     "metrics.gross_profit_micros",
     "metrics.gross_profit_margin",
-    "metrics.orders",
     "metrics.units_sold",
-    "metrics.average_order_value_micros",
-    "metrics.average_cart_size",
+    "metrics.lead_revenue_micros",
+    "metrics.lead_cost_of_goods_sold_micros",
+    "metrics.lead_gross_profit_micros",
+    "metrics.lead_units_sold",
+    "metrics.cross_sell_revenue_micros",
+    "metrics.cross_sell_cost_of_goods_sold_micros",
+    "metrics.cross_sell_gross_profit_micros",
+    "metrics.cross_sell_units_sold",
 ]
 _CART_OUTLIER_SORT_FIELDS = {
     "GROSS_PROFIT": "metrics.all_gross_profit_micros",
     "GROSS_PROFIT_MARGIN": "metrics.all_gross_profit_margin",
     "REVENUE": "metrics.all_revenue_micros",
-    "ORDERS": "metrics.all_orders",
+    "UNITS_SOLD": "metrics.all_units_sold",
     "CROSS_SELL_GROSS_PROFIT": ("metrics.all_cross_sell_gross_profit_micros"),
 }
 _VERTICAL_ADS_FIELDS = {
@@ -140,6 +144,21 @@ _VERTICAL_ADS_FIELDS = {
     "REGION": "segments.vertical_ads_listing_region",
     "PARTNER_ACCOUNT": "segments.vertical_ads_partner_account",
 }
+
+
+def _issue_field(issue: Any, field_name: str) -> Any:
+  """Returns a field from a shopping product issue dict/proto-like value."""
+  if isinstance(issue, dict):
+    return issue.get(field_name)
+  return getattr(issue, field_name, None)
+
+
+def _issue_label(issue: Any, field_name: str) -> str:
+  """Returns a stable issue label for compact counters."""
+  value = _issue_field(issue, field_name)
+  if value in (None, ""):
+    return "UNKNOWN"
+  return str(value)
 
 
 def _cart_group_fields(group_by: str) -> list[str]:
@@ -1225,10 +1244,10 @@ def compare_biddable_vs_all_cart_value(
         "metrics.all_gross_profit_micros",
         "metrics.gross_profit_micros",
     )
-    enriched_row["non_biddable_orders"] = _numeric_delta(
+    enriched_row["non_biddable_units_sold"] = _numeric_delta(
         row,
-        "metrics.all_orders",
-        "metrics.orders",
+        "metrics.all_units_sold",
+        "metrics.units_sold",
     )
     comparisons.append(enriched_row)
 
@@ -1262,7 +1281,7 @@ def list_cart_profit_outliers(
   Args:
       customer_id: Google Ads customer ID.
       group_by: Cart grouping such as SOLD_ITEM, SOLD_BRAND, or CAMPAIGN.
-      sort_by: GROSS_PROFIT, GROSS_PROFIT_MARGIN, REVENUE, ORDERS, or
+      sort_by: GROSS_PROFIT, GROSS_PROFIT_MARGIN, REVENUE, UNITS_SOLD, or
           CROSS_SELL_GROSS_PROFIT.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
@@ -1485,7 +1504,8 @@ def list_video_audibility_performance(
         campaign.status,
         campaign.advertising_channel_type,
         metrics.impressions,
-        metrics.video_views,
+        metrics.video_trueview_views,
+        metrics.video_trueview_view_rate,
         metrics.video_watch_time_duration_millis,
         metrics.average_video_watch_time_duration_millis,
         metrics.active_view_audibility_measurable_impressions,
@@ -1585,3 +1605,318 @@ def list_vertical_ads_performance(
   )
   result["segment_by"] = normalized_segment_by
   return result
+
+
+@reporting_tool
+def summarize_shopping_product_status(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    statuses: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    row_limit: int = 5000,
+    top_issue_products_limit: int = 25,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Summarizes Shopping product status and issues compactly.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      statuses: Optional Shopping product statuses such as ELIGIBLE,
+          LIMITED, NOT_ELIGIBLE, or PENDING.
+      date_range: GAQL date range used for product performance context.
+      row_limit: Maximum Shopping product rows to analyze.
+      top_issue_products_limit: Maximum issue-bearing products to return.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A compact dict with status and issue distributions plus top products
+      with issues ordered by recent cost.
+  """
+  validate_limit(row_limit)
+  validate_limit(top_issue_products_limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+  if statuses:
+    where_conditions.append(
+        f"shopping_product.status IN ({quote_enum_values(statuses)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        shopping_product.item_id,
+        shopping_product.title,
+        shopping_product.brand,
+        shopping_product.merchant_center_id,
+        shopping_product.status,
+        shopping_product.issues,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value
+      FROM shopping_product
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.cost_micros DESC
+      LIMIT {row_limit}
+  """
+  rows = run_gaql_query(query, customer_id, login_customer_id)
+  status_counts: Counter[Any] = Counter()
+  issue_type_counts: Counter[Any] = Counter()
+  issue_severity_counts: Counter[Any] = Counter()
+  issue_products = []
+
+  for row in rows:
+    status_counts[row.get("shopping_product.status")] += 1
+    issues = row.get("shopping_product.issues") or []
+    if not issues:
+      continue
+    for issue in issues:
+      issue_type_counts[_issue_label(issue, "type")] += 1
+      issue_severity_counts[_issue_label(issue, "severity")] += 1
+    if len(issue_products) < top_issue_products_limit:
+      issue_products.append(row)
+
+  return {
+      "date_range": date_range,
+      "analyzed_row_count": len(rows),
+      "row_limit": row_limit,
+      "truncated": len(rows) >= row_limit,
+      "status_distribution": _distribution(
+          status_counts,
+          "status",
+          "product_count",
+      ),
+      "issue_type_distribution": _distribution(
+          issue_type_counts,
+          "issue_type",
+          "issue_count",
+      ),
+      "issue_severity_distribution": _distribution(
+          issue_severity_counts,
+          "issue_severity",
+          "issue_count",
+      ),
+      "top_issue_products": issue_products,
+      "top_issue_products_limit": top_issue_products_limit,
+      "campaign_context": get_campaign_context(
+          customer_id,
+          _campaign_ids_from_rows(rows),
+          login_customer_id,
+      ),
+  }
+
+
+@reporting_tool
+def list_shopping_product_status(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    statuses: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists Shopping products with status, issues, and performance context.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      statuses: Optional Shopping product statuses such as ELIGIBLE,
+          LIMITED, NOT_ELIGIBLE, or PENDING.
+      date_range: GAQL date range used for product performance context.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing Shopping product health rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+  if statuses:
+    where_conditions.append(
+        f"shopping_product.status IN ({quote_enum_values(statuses)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        shopping_product.item_id,
+        shopping_product.title,
+        shopping_product.brand,
+        shopping_product.merchant_center_id,
+        shopping_product.status,
+        shopping_product.issues,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value
+      FROM shopping_product
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.cost_micros DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "shopping_product_status",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_travel_feed_asset_sets(
+    customer_id: str,
+    statuses: list[str] | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists v24 travel feed asset sets and their linked feed IDs.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      statuses: Optional asset set statuses to filter to.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing travel feed asset set configuration rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = ["asset_set.type = TRAVEL_FEED"]
+  if statuses:
+    where_conditions.append(
+        f"asset_set.status IN ({quote_enum_values(statuses)})"
+    )
+
+  query = f"""
+      SELECT
+        asset_set.resource_name,
+        asset_set.id,
+        asset_set.name,
+        asset_set.status,
+        asset_set.type,
+        asset_set.travel_feed_data.travel_feed_vertical_type,
+        asset_set.travel_feed_data.hotel_center_account_id,
+        asset_set.travel_feed_data.merchant_center_id,
+        asset_set.travel_feed_data.partner_center_id,
+        asset_set.travel_feed_data.subset_id
+      FROM asset_set
+      {build_where_clause(where_conditions)}
+      ORDER BY asset_set.name ASC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "travel_feed_asset_sets",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_retail_filter_shared_criteria(
+    customer_id: str,
+    shared_set_ids: list[str] | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists v24 tag-based retail filter shared criteria.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      shared_set_ids: Optional shared set IDs to filter to.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing retail filter shared criteria rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = ["shared_set.type = RETAIL_FILTER"]
+  if shared_set_ids:
+    where_conditions.append(
+        f"shared_set.id IN ({quote_int_values(shared_set_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        shared_set.resource_name,
+        shared_set.id,
+        shared_set.name,
+        shared_set.status,
+        shared_set.type,
+        shared_criterion.resource_name,
+        shared_criterion.criterion_id,
+        shared_criterion.type,
+        shared_criterion.retail_filter.expression.name,
+        shared_criterion.retail_filter.tag.expression_name,
+        shared_criterion.retail_filter.tag.value
+      FROM shared_criterion
+      {build_where_clause(where_conditions)}
+      ORDER BY shared_set.name ASC, shared_criterion.criterion_id ASC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "retail_filter_shared_criteria",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )

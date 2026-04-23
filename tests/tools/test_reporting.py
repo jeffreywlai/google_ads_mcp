@@ -119,8 +119,8 @@ def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
           "metrics.revenue_micros": 15_000_000,
           "metrics.all_gross_profit_micros": 8_000_000,
           "metrics.gross_profit_micros": 5_000_000,
-          "metrics.all_orders": 6.0,
-          "metrics.orders": 4.0,
+          "metrics.all_units_sold": 6.0,
+          "metrics.units_sold": 4.0,
       }
   ]
   with mock.patch(
@@ -143,7 +143,7 @@ def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
   comparison = result["cart_value_comparisons"][0]
   assert comparison["non_biddable_revenue_micros"] == 5_000_000
   assert comparison["non_biddable_gross_profit_micros"] == 3_000_000
-  assert comparison["non_biddable_orders"] == 2.0
+  assert comparison["non_biddable_units_sold"] == 2.0
 
 
 def test_list_cart_profit_outliers_builds_paginated_query():
@@ -225,7 +225,9 @@ def test_list_video_audibility_performance_includes_audible_metrics():
   query = mock_run.call_args.kwargs["query"]
   assert "metrics.active_view_audible_impressions_rate" in query
   assert "metrics.active_view_audible_two_seconds_impressions" in query
+  assert "metrics.video_trueview_views" in query
   assert "metrics.video_watch_time_duration_millis" in query
+  assert "metrics.video_views" not in query
 
 
 def test_list_vertical_ads_performance_builds_segment_query():
@@ -250,6 +252,119 @@ def test_list_vertical_ads_performance_builds_segment_query():
 def test_list_vertical_ads_performance_rejects_invalid_segment():
   with pytest.raises(ToolError, match="Invalid segment_by"):
     reporting.list_vertical_ads_performance(CUSTOMER_ID, segment_by="device")
+
+
+def test_summarize_shopping_product_status_builds_compact_summary():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Shopping",
+          "shopping_product.item_id": "sku-1",
+          "shopping_product.status": "LIMITED",
+          "shopping_product.issues": [
+              {"type": "PRICE_MISMATCH", "severity": "WARNING"}
+          ],
+          "metrics.cost_micros": 5_000_000,
+      },
+      {
+          "campaign.id": "111",
+          "campaign.name": "Shopping",
+          "shopping_product.item_id": "sku-2",
+          "shopping_product.status": "ELIGIBLE",
+          "shopping_product.issues": [],
+          "metrics.cost_micros": 2_000_000,
+      },
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "Shopping"}},
+    ):
+      result = reporting.summarize_shopping_product_status(
+          CUSTOMER_ID,
+          statuses=["LIMITED", "ELIGIBLE"],
+          row_limit=500,
+          top_issue_products_limit=5,
+      )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM shopping_product" in query
+  assert "shopping_product.status IN (LIMITED, ELIGIBLE)" in query
+  assert "shopping_product.issues" in query
+  assert "LIMIT 500" in query
+  assert result["analyzed_row_count"] == 2
+  assert result["status_distribution"] == [
+      {"status": "ELIGIBLE", "product_count": 1},
+      {"status": "LIMITED", "product_count": 1},
+  ]
+  assert result["issue_type_distribution"] == [
+      {"issue_type": "PRICE_MISMATCH", "issue_count": 1}
+  ]
+  assert result["top_issue_products"] == [rows[0]]
+
+
+def test_list_shopping_product_status_builds_paginated_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_shopping_product_status(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+        statuses=["NOT_ELIGIBLE"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM shopping_product" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+  assert "shopping_product.status IN (NOT_ELIGIBLE)" in query
+  assert "shopping_product.issues" in query
+
+
+def test_list_travel_feed_asset_sets_builds_config_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_travel_feed_asset_sets(
+        CUSTOMER_ID,
+        statuses=["ENABLED"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM asset_set" in query
+  assert "asset_set.type = TRAVEL_FEED" in query
+  assert "asset_set.status IN (ENABLED)" in query
+  assert "asset_set.travel_feed_data.merchant_center_id" in query
+  assert "asset_set.travel_feed_data.partner_center_id" in query
+
+
+def test_list_retail_filter_shared_criteria_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_retail_filter_shared_criteria(
+        CUSTOMER_ID,
+        shared_set_ids=["333"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM shared_criterion" in query
+  assert "shared_set.type = RETAIL_FILTER" in query
+  assert "shared_set.id IN (333)" in query
+  assert "shared_criterion.retail_filter.tag.value" in query
 
 
 def test_list_impression_share_includes_share_metrics():

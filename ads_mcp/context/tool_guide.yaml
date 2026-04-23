@@ -40,13 +40,17 @@ categories:
       list_conversion_actions: Conversion action configuration.
       list_audience_performance: Campaign or ad-group audience performance.
       list_video_enhancements: Video Enhancement rows with source, title, duration, and video-view metrics.
-      summarize_cart_data_sales: Compact v24 cart-data revenue, profit, order, and lead/cross-sell summary.
+      summarize_cart_data_sales: Compact v24 cart-data revenue, profit, units-sold, and lead/cross-sell summary.
       compare_biddable_vs_all_cart_value: Compare biddable cart metrics with all cart metrics to find value outside optimization goals.
       list_cart_profit_outliers: Highest or lowest cart-data profit outliers by campaign, product, brand, or category.
       list_shopping_attribution_breakdown: Shopping product performance split by conversion attribution event type.
       list_campaign_view_through_optimization: Campaign view-through conversion optimization settings.
       list_video_audibility_performance: Video audibility and watch-time diagnostics.
       list_vertical_ads_performance: Vertical ads performance by listing, brand, location, partner account, or vertical.
+      summarize_shopping_product_status: Compact Shopping product eligibility and issue distribution.
+      list_shopping_product_status: Shopping product status, issues, and recent performance rows.
+      list_travel_feed_asset_sets: Travel feed asset set configuration and linked feed IDs.
+      list_retail_filter_shared_criteria: Tag-based retail filter shared criteria.
 
   conversions:
     summary: Raw conversion upload testing and diagnostics.
