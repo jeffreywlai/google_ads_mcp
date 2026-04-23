@@ -1,6 +1,6 @@
 # Google Ads MCP Server
 
-Python MCP server (FastMCP) bridging LLMs with the Google Ads API. Uses Google Ads API v23.
+Python MCP server (FastMCP) bridging LLMs with the Google Ads API. Uses Google Ads API v24.
 
 ## Commands
 
@@ -69,5 +69,5 @@ uv run pylint ads_mcp tests      # Lint
 ## Dependencies
 
 - Managed with `uv` (see `pyproject.toml`)
-- `google-ads==29.1.0` (Google Ads API v23)
-- `fastmcp>=3.0.2`
+- `google-ads>=30.1.0,<31.0.0` (Google Ads API v24)
+- `fastmcp>=3.2.2`
