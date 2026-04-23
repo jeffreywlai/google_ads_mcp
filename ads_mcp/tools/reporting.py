@@ -51,6 +51,20 @@ def _normalize_choice(
   return normalized_value
 
 
+def _normalize_choices(
+    values: list[str],
+    field_name: str,
+    allowed_values: set[str],
+) -> list[str]:
+  """Normalizes and deduplicates a list of enum-like input values."""
+  return list(
+      dict.fromkeys(
+          _normalize_choice(value, field_name, allowed_values)
+          for value in values
+      )
+  )
+
+
 def _validate_quality_score(min_quality_score: int | None) -> None:
   if min_quality_score is None:
     return
@@ -913,4 +927,104 @@ def list_audience_performance(
       next_page_token=page["next_page_token"],
   )
   result["scope"] = normalized_scope
+  return result
+
+
+@reporting_tool
+def list_video_enhancements(
+    customer_id: str,
+    sources: list[str] | None = None,
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists Video Enhancement rows with performance metrics.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      sources: Optional source filters such as ADVERTISER or
+          ENHANCED_BY_GOOGLE_ADS.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing Video Enhancement rows and pagination metadata.
+  """
+  validate_limit(limit)
+
+  normalized_sources = None
+  if sources:
+    normalized_sources = _normalize_choices(
+        sources,
+        "sources",
+        {
+            "ADVERTISER",
+            "ENHANCED_BY_GOOGLE_ADS",
+            "UNKNOWN",
+            "UNSPECIFIED",
+        },
+    )
+
+  where_conditions = [_date_range_condition(date_range)]
+  if normalized_sources:
+    where_conditions.append(
+        "video_enhancement.source IN "
+        f"({quote_enum_values(normalized_sources)})"
+    )
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.advertising_channel_type,
+        ad_group.id,
+        ad_group.name,
+        video_enhancement.resource_name,
+        video_enhancement.title,
+        video_enhancement.source,
+        video_enhancement.duration_millis,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.video_trueview_views,
+        metrics.video_trueview_view_rate,
+        metrics.video_watch_time_duration_millis
+      FROM video_enhancement
+      {build_where_clause(where_conditions)}
+      ORDER BY
+        metrics.impressions DESC,
+        campaign.id ASC,
+        ad_group.id ASC,
+        video_enhancement.title ASC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "video_enhancements",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  if normalized_sources:
+    result["sources"] = normalized_sources
   return result

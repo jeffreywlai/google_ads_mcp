@@ -163,20 +163,21 @@ TOOL_MODULES = {
         "list_rsa_ad_strength",
         "list_conversion_actions",
         "list_audience_performance",
+        "list_video_enhancements",
     ],
 }
 
 
 # ===================================================================
-# 1. Tool registration: all 74 tools exist as callable functions
+# 1. Tool registration: all 75 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_74(self):
+  def test_total_tool_count_is_75(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 74, f"Expected 74 tools, found {total}"
+    assert total == 75, f"Expected 75 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -537,7 +538,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 74
+    assert len(registered_tools) == 75
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -618,6 +619,7 @@ class TestFastMcpConfiguration:
         public_tool_names
     )
     assert "list_device_performance" in public_tool_names
+    assert "list_video_enhancements" in public_tool_names
     assert "summarize_keyword_quality_scores" in public_tool_names
     assert "export_gaql_csv" in public_tool_names
     assert "get_resource_metadata" in public_tool_names

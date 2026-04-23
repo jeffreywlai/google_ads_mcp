@@ -460,3 +460,77 @@ def test_list_audience_performance_rejects_ad_group_ids_for_campaign_scope():
         scope="campaign",
         ad_group_ids=["222"],
     )
+
+
+def test_list_video_enhancements_builds_filtered_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_video_enhancements(
+        CUSTOMER_ID,
+        sources=["advertiser", "enhanced_by_google_ads"],
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+        date_range="LAST_14_DAYS",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM video_enhancement" in query
+  assert (
+      "video_enhancement.source IN "
+      "(ADVERTISER, ENHANCED_BY_GOOGLE_ADS)" in query
+  )
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+  assert "segments.date DURING LAST_14_DAYS" in query
+  assert "metrics.video_trueview_views" in query
+  assert "metrics.video_watch_time_duration_millis" in query
+  assert "video_enhancement.title ASC" in query
+  assert result["returned_count"] == 0
+  assert result["sources"] == [
+      "ADVERTISER",
+      "ENHANCED_BY_GOOGLE_ADS",
+  ]
+
+
+def test_list_video_enhancements_rejects_invalid_source():
+  with pytest.raises(ToolError, match="Invalid sources"):
+    reporting.list_video_enhancements(CUSTOMER_ID, sources=["google_magic"])
+
+
+def test_list_video_enhancements_returns_pagination_metadata():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Demand Gen",
+          "video_enhancement.resource_name": (
+              "customers/123/videoEnhancements/999"
+          ),
+      }
+  ]
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": rows,
+        "next_page_token": "next-page",
+        "total_results_count": 5,
+    }
+    result = reporting.list_video_enhancements(
+        CUSTOMER_ID,
+        limit=1,
+        page_token="current-page",
+    )
+
+  assert mock_run.call_args.kwargs["page_size"] == 1
+  assert mock_run.call_args.kwargs["page_token"] == "current-page"
+  assert result == {
+      "video_enhancements": rows,
+      "returned_count": 1,
+      "total_count": 5,
+      "total_page_count": 5,
+      "truncated": True,
+      "next_page_token": "next-page",
+      "page_size": 1,
+  }
