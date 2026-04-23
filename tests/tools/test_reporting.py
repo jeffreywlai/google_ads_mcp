@@ -511,6 +511,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
       result = reporting.summarize_shopping_product_status(
           CUSTOMER_ID,
           statuses=["LIMITED", "ELIGIBLE"],
+          date_range="last_30_days",
           row_limit=500,
           top_issue_products_limit=5,
       )
@@ -520,6 +521,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
   assert "shopping_product.status IN (LIMITED, ELIGIBLE)" in query
   assert "shopping_product.issues" in query
   assert "LIMIT 500" in query
+  assert result["date_range"] == "LAST_30_DAYS"
   assert result["analyzed_row_count"] == 2
   assert result["status_distribution"] == [
       {"status": "ELIGIBLE", "product_count": 1},

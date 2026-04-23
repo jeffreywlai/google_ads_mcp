@@ -17,6 +17,7 @@
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_date_range
+from ads_mcp.tools._gaql import validate_limit
 from fastmcp.exceptions import ToolError
 import pytest
 
@@ -33,6 +34,11 @@ def test_quote_enum_values_rejects_malformed_names():
 def test_quote_int_values_rejects_malformed_ids():
   with pytest.raises(ToolError, match="Invalid integer value"):
     quote_int_values(["123 OR metrics.clicks > 0"])
+
+
+def test_validate_limit_rejects_non_integer_values():
+  with pytest.raises(ToolError, match="limit must be an integer"):
+    validate_limit("25")
 
 
 def test_validate_date_range_normalizes_supported_function():

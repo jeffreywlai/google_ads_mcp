@@ -2189,7 +2189,8 @@ def summarize_shopping_product_status(
   validate_limit(row_limit)
   validate_limit(top_issue_products_limit)
 
-  where_conditions = [_date_range_condition(date_range)]
+  normalized_date_range = validate_date_range(date_range)
+  where_conditions = [_date_range_condition(normalized_date_range)]
   if campaign_ids:
     where_conditions.append(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"
@@ -2244,7 +2245,7 @@ def summarize_shopping_product_status(
       issue_products.append(row)
 
   return {
-      "date_range": date_range,
+      "date_range": normalized_date_range,
       "analyzed_row_count": len(rows),
       "row_limit": row_limit,
       "truncated": len(rows) >= row_limit,

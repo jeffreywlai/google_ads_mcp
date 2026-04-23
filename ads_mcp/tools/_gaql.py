@@ -39,6 +39,8 @@ DATE_RANGE_FUNCTIONS = {
 
 def validate_limit(limit: int) -> None:
   """Validates that a tool limit is positive."""
+  if isinstance(limit, bool) or not isinstance(limit, int):
+    raise ToolError("limit must be an integer.")
   if limit <= 0:
     raise ToolError("limit must be greater than 0.")
 
