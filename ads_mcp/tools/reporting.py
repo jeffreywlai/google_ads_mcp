@@ -57,12 +57,15 @@ def _normalize_choices(
     allowed_values: set[str],
 ) -> list[str]:
   """Normalizes and deduplicates a list of enum-like input values."""
-  return list(
-      dict.fromkeys(
-          _normalize_choice(value, field_name, allowed_values)
-          for value in values
-      )
-  )
+  normalized_choices: list[str] = []
+  seen: set[str] = set()
+  for value in values:
+    normalized_value = _normalize_choice(value, field_name, allowed_values)
+    if normalized_value in seen:
+      continue
+    seen.add(normalized_value)
+    normalized_choices.append(normalized_value)
+  return normalized_choices
 
 
 def _validate_quality_score(min_quality_score: int | None) -> None:
@@ -945,8 +948,8 @@ def list_video_enhancements(
 
   Args:
       customer_id: Google Ads customer ID.
-      sources: Optional source filters such as ADVERTISER or
-          ENHANCED_BY_GOOGLE_ADS.
+      sources: Optional source filters. Accepted values are ADVERTISER,
+          ENHANCED_BY_GOOGLE_ADS, UNKNOWN, and UNSPECIFIED.
       campaign_ids: Optional campaign IDs to filter to.
       ad_group_ids: Optional ad group IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
@@ -1009,7 +1012,9 @@ def list_video_enhancements(
         metrics.impressions DESC,
         campaign.id ASC,
         ad_group.id ASC,
-        video_enhancement.title ASC
+        video_enhancement.title ASC,
+        video_enhancement.source ASC,
+        video_enhancement.duration_millis ASC
   """
   page = run_gaql_query_page(
       query=query,

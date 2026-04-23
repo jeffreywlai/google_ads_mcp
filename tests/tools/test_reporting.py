@@ -489,11 +489,30 @@ def test_list_video_enhancements_builds_filtered_query():
   assert "metrics.video_trueview_views" in query
   assert "metrics.video_watch_time_duration_millis" in query
   assert "video_enhancement.title ASC" in query
+  assert "video_enhancement.source ASC" in query
+  assert "video_enhancement.duration_millis ASC" in query
   assert result["returned_count"] == 0
   assert result["sources"] == [
       "ADVERTISER",
       "ENHANCED_BY_GOOGLE_ADS",
   ]
+
+
+def test_list_video_enhancements_deduplicates_sources_preserving_order():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_video_enhancements(
+        CUSTOMER_ID,
+        sources=["advertiser", "ADVERTISER", "unknown"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "video_enhancement.source IN (ADVERTISER, UNKNOWN)" in query
+  assert result["sources"] == ["ADVERTISER", "UNKNOWN"]
 
 
 def test_list_video_enhancements_rejects_invalid_source():
