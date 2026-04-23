@@ -266,6 +266,179 @@ def test_list_vertical_ads_performance_rejects_invalid_segment():
     reporting.list_vertical_ads_performance(CUSTOMER_ID, segment_by="device")
 
 
+def test_list_campaign_search_terms_builds_compact_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_campaign_search_terms(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        min_clicks=5,
+        min_cost_micros=1_000_000,
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign_search_term_view" in query
+  assert "campaign_search_term_view.search_term" in query
+  assert "segments.search_term_targeting_status" in query
+  assert "metrics.cost_per_conversion" in query
+  assert "campaign.id IN (111)" in query
+  assert "metrics.clicks >= 5" in query
+  assert "metrics.cost_micros >= 1000000" in query
+
+
+def test_list_ai_max_search_term_ad_combinations_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_ai_max_search_term_ad_combinations(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+        min_impressions=10,
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM ai_max_search_term_ad_combination_view" in query
+  assert "ai_max_search_term_ad_combination_view.search_term" in query
+  assert "ai_max_search_term_ad_combination_view.headline" in query
+  assert "ai_max_search_term_ad_combination_view.landing_page" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+  assert "metrics.impressions >= 10" in query
+
+
+def test_list_final_url_expansion_assets_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_final_url_expansion_assets(
+        CUSTOMER_ID,
+        asset_group_ids=["222"],
+        statuses=["ENABLED"],
+        field_types=["FINAL_URL"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM final_url_expansion_asset_view" in query
+  assert "final_url_expansion_asset_view.final_url" in query
+  assert "final_url_expansion_asset_view.status IN (ENABLED)" in query
+  assert "final_url_expansion_asset_view.field_type IN (FINAL_URL)" in query
+  assert "asset_group.id IN (222)" in query
+
+
+def test_list_targeting_expansion_performance_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_targeting_expansion_performance(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM targeting_expansion_view" in query
+  assert "targeting_expansion_view.resource_name" in query
+  assert "metrics.value_per_conversion" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+
+
+def test_list_content_suitability_placements_builds_group_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_content_suitability_placements(
+        CUSTOMER_ID,
+        placement_view="group",
+        placement_types=["YOUTUBE_VIDEO"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM group_content_suitability_placement_view" in query
+  assert "group_content_suitability_placement_view.placement" in query
+  assert (
+      "group_content_suitability_placement_view.placement_type IN "
+      "(YOUTUBE_VIDEO)"
+  ) in query
+  assert result["placement_view"] == "GROUP"
+
+
+def test_list_content_suitability_placements_builds_detail_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_content_suitability_placements(
+        CUSTOMER_ID,
+        placement_view="detail",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM detail_content_suitability_placement_view" in query
+  assert "detail_content_suitability_placement_view.target_url" in query
+  assert result["placement_view"] == "DETAIL"
+
+
+def test_list_location_interest_performance_builds_location_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_location_interest_performance(
+        CUSTOMER_ID,
+        interest_view="location_interest",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM location_interest_view" in query
+  assert "ad_group_criterion.location.geo_target_constant" in query
+  assert result["interest_view"] == "LOCATION_INTEREST"
+
+
+def test_list_location_interest_performance_builds_matched_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_location_interest_performance(
+        CUSTOMER_ID,
+        interest_view="matched_location_interest",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM matched_location_interest_view" in query
+  assert "segments.geo_target_most_specific_location" in query
+  assert result["interest_view"] == "MATCHED_LOCATION_INTEREST"
+
+
+def test_list_campaign_search_terms_rejects_negative_threshold():
+  with pytest.raises(ToolError, match="min_clicks must be non-negative"):
+    reporting.list_campaign_search_terms(CUSTOMER_ID, min_clicks=-1)
+
+
 def test_summarize_shopping_product_status_builds_compact_summary():
   rows = [
       {

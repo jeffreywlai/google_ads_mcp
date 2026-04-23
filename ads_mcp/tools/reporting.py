@@ -96,6 +96,12 @@ def _validate_quality_score(min_quality_score: int | None) -> None:
     raise ToolError("min_quality_score must be between 1 and 10.")
 
 
+def _validate_non_negative(value: int | float, field_name: str) -> None:
+  """Validates non-negative numeric threshold inputs."""
+  if value < 0:
+    raise ToolError(f"{field_name} must be non-negative.")
+
+
 def _campaign_ids_from_rows(rows: list[dict[str, Any]]) -> list[str]:
   """Returns unique campaign IDs present in GAQL result rows."""
   campaign_ids = {
@@ -163,6 +169,40 @@ _VERTICAL_ADS_FIELDS = {
     "COUNTRY": "segments.vertical_ads_listing_country",
     "REGION": "segments.vertical_ads_listing_region",
     "PARTNER_ACCOUNT": "segments.vertical_ads_partner_account",
+}
+_CONTENT_SUITABILITY_VIEW_FIELDS = {
+    "DETAIL": (
+        "detail_content_suitability_placement_view",
+        [
+            "detail_content_suitability_placement_view.display_name",
+            "detail_content_suitability_placement_view.placement",
+            "detail_content_suitability_placement_view.placement_type",
+            "detail_content_suitability_placement_view.target_url",
+        ],
+    ),
+    "GROUP": (
+        "group_content_suitability_placement_view",
+        [
+            "group_content_suitability_placement_view.display_name",
+            "group_content_suitability_placement_view.placement",
+            "group_content_suitability_placement_view.placement_type",
+            "group_content_suitability_placement_view.target_url",
+        ],
+    ),
+}
+_LOCATION_INTEREST_VIEW_FIELDS = {
+    "LOCATION_INTEREST": (
+        "location_interest_view",
+        ["ad_group_criterion.location.geo_target_constant"],
+    ),
+    "MATCHED_LOCATION_INTEREST": (
+        "matched_location_interest_view",
+        [
+            "segments.geo_target_most_specific_location",
+            "segments.geo_target_region",
+            "segments.geo_target_city",
+        ],
+    ),
 }
 
 
@@ -1632,6 +1672,477 @@ def list_vertical_ads_performance(
       next_page_token=page["next_page_token"],
   )
   result["segment_by"] = normalized_segment_by
+  return result
+
+
+@reporting_tool
+def list_campaign_search_terms(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    min_clicks: int = 0,
+    min_cost_micros: int = 0,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists campaign-level search terms with compact cost metrics.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      min_clicks: Optional minimum clicks filter.
+      min_cost_micros: Optional minimum cost filter.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing campaign search term rows.
+  """
+  validate_limit(limit)
+  _validate_non_negative(min_clicks, "min_clicks")
+  _validate_non_negative(min_cost_micros, "min_cost_micros")
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if min_clicks:
+    where_conditions.append(f"metrics.clicks >= {min_clicks}")
+  if min_cost_micros:
+    where_conditions.append(f"metrics.cost_micros >= {min_cost_micros}")
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign_search_term_view.search_term,
+        segments.search_term_match_source,
+        segments.search_term_match_type,
+        segments.search_term_targeting_status,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.ctr,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.cost_per_conversion,
+        metrics.conversions_value
+      FROM campaign_search_term_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.cost_micros DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "campaign_search_terms",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_ai_max_search_term_ad_combinations(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    min_impressions: int = 0,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists AI Max search term, headline, and landing-page combinations.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      min_impressions: Optional minimum impressions filter.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing AI Max combination rows.
+  """
+  validate_limit(limit)
+  _validate_non_negative(min_impressions, "min_impressions")
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+  if min_impressions:
+    where_conditions.append(f"metrics.impressions >= {min_impressions}")
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        ai_max_search_term_ad_combination_view.search_term,
+        ai_max_search_term_ad_combination_view.headline,
+        ai_max_search_term_ad_combination_view.landing_page,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value
+      FROM ai_max_search_term_ad_combination_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.conversions_value DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "ai_max_search_term_ad_combinations",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_final_url_expansion_assets(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    asset_group_ids: list[str] | None = None,
+    statuses: list[str] | None = None,
+    field_types: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists final URL expansion assets with recent performance.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      asset_group_ids: Optional asset group IDs to filter to.
+      statuses: Optional final URL expansion asset statuses.
+      field_types: Optional final URL expansion field types.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing final URL expansion asset rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if asset_group_ids:
+    where_conditions.append(
+        f"asset_group.id IN ({quote_int_values(asset_group_ids)})"
+    )
+  if statuses:
+    statuses = _normalize_enum_filters(statuses, "statuses")
+    where_conditions.append(
+        "final_url_expansion_asset_view.status IN "
+        f"({quote_enum_values(statuses)})"
+    )
+  if field_types:
+    field_types = _normalize_enum_filters(field_types, "field_types")
+    where_conditions.append(
+        "final_url_expansion_asset_view.field_type IN "
+        f"({quote_enum_values(field_types)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        asset_group.id,
+        asset_group.name,
+        final_url_expansion_asset_view.final_url,
+        final_url_expansion_asset_view.field_type,
+        final_url_expansion_asset_view.status,
+        metrics.impressions,
+        metrics.conversions,
+        metrics.conversions_value
+      FROM final_url_expansion_asset_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.impressions DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "final_url_expansion_assets",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_targeting_expansion_performance(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists automated targeting expansion performance.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing targeting expansion performance rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        targeting_expansion_view.resource_name,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.ctr,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value,
+        metrics.value_per_conversion
+      FROM targeting_expansion_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.conversions_value DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "targeting_expansion_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_content_suitability_placements(
+    customer_id: str,
+    placement_view: str = "GROUP",
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    placement_types: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists content-suitability placements by grouped or detailed view.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      placement_view: GROUP or DETAIL.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      placement_types: Optional placement type filters.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing content-suitability placement rows.
+  """
+  validate_limit(limit)
+  normalized_view = _normalize_choice(
+      placement_view,
+      "placement_view",
+      set(_CONTENT_SUITABILITY_VIEW_FIELDS),
+  )
+  from_resource, placement_fields = _CONTENT_SUITABILITY_VIEW_FIELDS[
+      normalized_view
+  ]
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+  if placement_types:
+    placement_types = _normalize_enum_filters(
+        placement_types,
+        "placement_types",
+    )
+    where_conditions.append(
+        f"{from_resource}.placement_type IN "
+        f"({quote_enum_values(placement_types)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        {", ".join(placement_fields)},
+        metrics.impressions
+      FROM {from_resource}
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.impressions DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "content_suitability_placements",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["placement_view"] = normalized_view
+  return result
+
+
+@reporting_tool
+def list_location_interest_performance(
+    customer_id: str,
+    interest_view: str = "LOCATION_INTEREST",
+    campaign_ids: list[str] | None = None,
+    ad_group_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists location-interest performance for geo optimization.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      interest_view: LOCATION_INTEREST or MATCHED_LOCATION_INTEREST.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing location-interest performance rows.
+  """
+  validate_limit(limit)
+  normalized_view = _normalize_choice(
+      interest_view,
+      "interest_view",
+      set(_LOCATION_INTEREST_VIEW_FIELDS),
+  )
+  from_resource, location_fields = _LOCATION_INTEREST_VIEW_FIELDS[
+      normalized_view
+  ]
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if ad_group_ids:
+    where_conditions.append(
+        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        {", ".join(location_fields)},
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value
+      FROM {from_resource}
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.conversions_value DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "location_interest_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["interest_view"] = normalized_view
   return result
 
 

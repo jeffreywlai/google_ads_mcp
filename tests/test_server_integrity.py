@@ -172,6 +172,12 @@ TOOL_MODULES = {
         "list_campaign_view_through_optimization",
         "list_video_audibility_performance",
         "list_vertical_ads_performance",
+        "list_campaign_search_terms",
+        "list_ai_max_search_term_ad_combinations",
+        "list_final_url_expansion_assets",
+        "list_targeting_expansion_performance",
+        "list_content_suitability_placements",
+        "list_location_interest_performance",
         "summarize_shopping_product_status",
         "list_shopping_product_status",
         "list_travel_feed_asset_sets",
@@ -181,15 +187,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 87 tools exist as callable functions
+# 1. Tool registration: all 93 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_87(self):
+  def test_total_tool_count_is_93(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 87, f"Expected 87 tools, found {total}"
+    assert total == 93, f"Expected 93 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -562,7 +568,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 87
+    assert len(registered_tools) == 93
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"

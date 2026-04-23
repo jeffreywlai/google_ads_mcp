@@ -156,11 +156,25 @@ class TestGaqlGrammarFidelity:
   def test_all_operators_in_grammar(self):
     """Every operator in the grammar is also in the compact doc."""
     operators = [
-        "=", "!=", ">", ">=", "<", "<=",
-        "IN", "NOT IN", "LIKE", "NOT LIKE",
-        "CONTAINS ANY", "CONTAINS ALL", "CONTAINS NONE",
-        "IS NULL", "IS NOT NULL", "DURING", "BETWEEN",
-        "REGEXP_MATCH", "NOT REGEXP_MATCH",
+        "=",
+        "!=",
+        ">",
+        ">=",
+        "<",
+        "<=",
+        "IN",
+        "NOT IN",
+        "LIKE",
+        "NOT LIKE",
+        "CONTAINS ANY",
+        "CONTAINS ALL",
+        "CONTAINS NONE",
+        "IS NULL",
+        "IS NOT NULL",
+        "DURING",
+        "BETWEEN",
+        "REGEXP_MATCH",
+        "NOT REGEXP_MATCH",
     ]
     grammar = self._extract_grammar(self.compact_doc)
     for op in operators:
@@ -169,14 +183,24 @@ class TestGaqlGrammarFidelity:
   def test_all_date_functions_in_grammar(self):
     """Every date function is in the compact grammar."""
     functions = [
-        "LAST_14_DAYS", "LAST_30_DAYS", "LAST_7_DAYS",
-        "LAST_BUSINESS_WEEK", "LAST_MONTH", "LAST_WEEK_MON_SUN",
-        "LAST_WEEK_SUN_SAT", "THIS_MONTH", "THIS_WEEK_MON_TODAY",
-        "THIS_WEEK_SUN_TODAY", "TODAY", "YESTERDAY",
+        "LAST_14_DAYS",
+        "LAST_30_DAYS",
+        "LAST_7_DAYS",
+        "LAST_BUSINESS_WEEK",
+        "LAST_MONTH",
+        "LAST_WEEK_MON_SUN",
+        "LAST_WEEK_SUN_SAT",
+        "THIS_MONTH",
+        "THIS_WEEK_MON_TODAY",
+        "THIS_WEEK_SUN_TODAY",
+        "TODAY",
+        "YESTERDAY",
     ]
     grammar = self._extract_grammar(self.compact_doc)
     for fn in functions:
-      assert fn in grammar, f"Date function '{fn}' missing from compact grammar"
+      assert (
+          fn in grammar
+      ), f"Date function '{fn}' missing from compact grammar"
 
 
 # ===================================================================
@@ -190,14 +214,11 @@ class TestPreprocessGaql:
   def test_adds_parameters_to_bare_query(self):
     query = "SELECT campaign.id FROM campaign"
     result = preprocess_gaql(query)
-    assert result.endswith(
-        "PARAMETERS omit_unselected_resource_names=true"
-    )
+    assert result.endswith("PARAMETERS omit_unselected_resource_names=true")
 
   def test_appends_with_comma_when_parameters_exists(self):
     query = (
-        "SELECT campaign.id FROM campaign "
-        "PARAMETERS include_drafts=true"
+        "SELECT campaign.id FROM campaign " "PARAMETERS include_drafts=true"
     )
     result = preprocess_gaql(query)
     assert ", omit_unselected_resource_names=true" in result
@@ -235,9 +256,7 @@ class TestPreprocessGaql:
     result = preprocess_gaql(query)
     # Original query should be intact, with PARAMETERS appended
     assert query in result
-    assert result.endswith(
-        "PARAMETERS omit_unselected_resource_names=true"
-    )
+    assert result.endswith("PARAMETERS omit_unselected_resource_names=true")
 
 
 # ===================================================================
@@ -449,9 +468,29 @@ class TestDocsEdgeCases:
         continue
       name = line.lstrip("- ").strip()
       if name:
-        assert pattern.match(name), (
-            f"View '{name}' doesn't match ResourceName pattern"
-        )
+        assert pattern.match(
+            name
+        ), f"View '{name}' doesn't match ResourceName pattern"
+
+  def test_views_yaml_includes_v24_query_builder_manifest_additions(self):
+    result = docs._get_views_list()
+    expected_resources = [
+        "ai_max_search_term_ad_combination_view",
+        "app_top_combination_view",
+        "applied_incentive",
+        "campaign_goal_config",
+        "campaign_search_term_view",
+        "detail_content_suitability_placement_view",
+        "final_url_expansion_asset_view",
+        "goal",
+        "group_content_suitability_placement_view",
+        "location_interest_view",
+        "matched_location_interest_view",
+        "targeting_expansion_view",
+        "you_tube_video_upload",
+    ]
+    for resource in expected_resources:
+      assert f"- {resource}" in result
 
 
 # ===================================================================

@@ -14,6 +14,8 @@
 
 """Internal helpers for building GAQL-based tools."""
 
+import re
+
 from fastmcp.exceptions import ToolError
 
 from ads_mcp.tools.api import gaql_quote_string
@@ -37,7 +39,17 @@ def quote_string_values(values: list[str]) -> str:
 
 def quote_enum_values(values: list[str]) -> str:
   """Formats enum names for an IN clause."""
-  return ", ".join(value.upper() for value in values)
+  quoted_values = []
+  for value in values:
+    if not isinstance(value, str):
+      raise ToolError("enum values must be strings.")
+    normalized_value = value.upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", normalized_value):
+      raise ToolError(
+          f"Invalid enum value: {value}. Use Google Ads enum names."
+      )
+    quoted_values.append(normalized_value)
+  return ", ".join(quoted_values)
 
 
 def build_where_clause(conditions: list[str]) -> str:
