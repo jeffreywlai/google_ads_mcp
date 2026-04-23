@@ -44,6 +44,8 @@ def _normalize_choice(
     field_name: str,
     allowed_values: set[str],
 ) -> str:
+  if not isinstance(value, str) or not value:
+    raise ToolError(f"{field_name} must be a non-empty string.")
   normalized_value = value.upper()
   if normalized_value not in allowed_values:
     allowed_values_text = ", ".join(sorted(allowed_values))
@@ -226,6 +228,8 @@ def _issue_label(issue: Any, field_name: str) -> str:
 
 def _cart_group_fields(group_by: str) -> list[str]:
   """Returns select fields for a cart-data grouping."""
+  if not isinstance(group_by, str) or not group_by:
+    raise ToolError("group_by must be a non-empty string.")
   normalized_group_by = group_by.upper()
   if normalized_group_by not in _CART_GROUP_FIELDS:
     raise ToolError(
@@ -1223,8 +1227,8 @@ def summarize_cart_data_sales(
       A compact dict containing grouped all-conversion cart profitability.
   """
   validate_limit(top_limit)
+  group_fields = _cart_group_fields(group_by)
   normalized_group_by = group_by.upper()
-  group_fields = _cart_group_fields(normalized_group_by)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:
