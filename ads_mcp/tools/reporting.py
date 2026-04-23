@@ -40,10 +40,12 @@ def _date_range_condition(date_range: str) -> str:
 
 
 def _normalize_choice(
-    value: str,
+    value: object,
     field_name: str,
     allowed_values: set[str],
 ) -> str:
+  if not isinstance(value, str) or not value:
+    raise ToolError(f"{field_name} must be a non-empty string.")
   normalized_value = value.upper()
   if normalized_value not in allowed_values:
     allowed_values_text = ", ".join(sorted(allowed_values))
@@ -224,15 +226,17 @@ def _issue_label(issue: Any, field_name: str) -> str:
   return str(value)
 
 
-def _cart_group_fields(group_by: str) -> list[str]:
-  """Returns select fields for a cart-data grouping."""
+def _cart_group_fields(group_by: object) -> tuple[str, list[str]]:
+  """Returns a normalized cart-data grouping and its select fields."""
+  if not isinstance(group_by, str) or not group_by:
+    raise ToolError("group_by must be a non-empty string.")
   normalized_group_by = group_by.upper()
   if normalized_group_by not in _CART_GROUP_FIELDS:
     raise ToolError(
         "Invalid group_by. Use one of: "
         + ", ".join(sorted(_CART_GROUP_FIELDS))
     )
-  return _CART_GROUP_FIELDS[normalized_group_by]
+  return normalized_group_by, _CART_GROUP_FIELDS[normalized_group_by]
 
 
 def _numeric_delta(row: dict[str, Any], lhs: str, rhs: str) -> int | float:
@@ -1223,8 +1227,7 @@ def summarize_cart_data_sales(
       A compact dict containing grouped all-conversion cart profitability.
   """
   validate_limit(top_limit)
-  normalized_group_by = group_by.upper()
-  group_fields = _cart_group_fields(normalized_group_by)
+  normalized_group_by, group_fields = _cart_group_fields(group_by)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:
@@ -1366,7 +1369,7 @@ def list_cart_profit_outliers(
       A paginated dict containing cart-data profit outlier rows.
   """
   validate_limit(limit)
-  group_fields = _cart_group_fields(group_by)
+  normalized_group_by, group_fields = _cart_group_fields(group_by)
   normalized_sort_by = _normalize_choice(
       sort_by,
       "sort_by",
@@ -1406,7 +1409,7 @@ def list_cart_profit_outliers(
       page_size=limit,
       next_page_token=page["next_page_token"],
   )
-  result["group_by"] = group_by.upper()
+  result["group_by"] = normalized_group_by
   result["sort_by"] = normalized_sort_by
   result["direction"] = normalized_direction
   return result

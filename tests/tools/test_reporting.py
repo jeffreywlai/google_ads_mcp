@@ -71,6 +71,20 @@ def test_list_geographic_performance_rejects_invalid_view():
     reporting.list_geographic_performance(CUSTOMER_ID, location_view="city")
 
 
+def test_list_geographic_performance_rejects_non_string_view():
+  with pytest.raises(
+      ToolError, match="location_view must be a non-empty string"
+  ):
+    reporting.list_geographic_performance(CUSTOMER_ID, location_view=1)
+
+
+def test_list_geographic_performance_rejects_empty_string_view():
+  with pytest.raises(
+      ToolError, match="location_view must be a non-empty string"
+  ):
+    reporting.list_geographic_performance(CUSTOMER_ID, location_view="")
+
+
 def test_summarize_cart_data_sales_builds_v24_cart_query():
   with mock.patch(
       "ads_mcp.tools.reporting.run_gaql_query",
@@ -141,6 +155,16 @@ def test_summarize_cart_data_sales_rejects_invalid_date_range():
 def test_summarize_cart_data_sales_rejects_invalid_group():
   with pytest.raises(ToolError, match="Invalid group_by"):
     reporting.summarize_cart_data_sales(CUSTOMER_ID, group_by="query")
+
+
+def test_summarize_cart_data_sales_rejects_non_string_group():
+  with pytest.raises(ToolError, match="group_by must be a non-empty string"):
+    reporting.summarize_cart_data_sales(CUSTOMER_ID, group_by=1)
+
+
+def test_summarize_cart_data_sales_rejects_empty_group():
+  with pytest.raises(ToolError, match="group_by must be a non-empty string"):
+    reporting.summarize_cart_data_sales(CUSTOMER_ID, group_by="")
 
 
 def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
