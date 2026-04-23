@@ -65,6 +65,7 @@ TOOL_MODULES = {
     campaigns: [
         "set_campaign_status",
         "update_campaign_budget",
+        "set_campaign_view_through_conversion_optimization",
         "update_campaign_targeting_setting",
         "add_campaign_audiences",
         "remove_campaign_audiences",
@@ -164,20 +165,27 @@ TOOL_MODULES = {
         "list_conversion_actions",
         "list_audience_performance",
         "list_video_enhancements",
+        "summarize_cart_data_sales",
+        "compare_biddable_vs_all_cart_value",
+        "list_cart_profit_outliers",
+        "list_shopping_attribution_breakdown",
+        "list_campaign_view_through_optimization",
+        "list_video_audibility_performance",
+        "list_vertical_ads_performance",
     ],
 }
 
 
 # ===================================================================
-# 1. Tool registration: all 75 tools exist as callable functions
+# 1. Tool registration: all 83 tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_75(self):
+  def test_total_tool_count_is_83(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 75, f"Expected 75 tools, found {total}"
+    assert total == 83, f"Expected 83 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -475,6 +483,18 @@ class TestMutationFieldIntegrity:
     assert op.update_mask.paths == ["amount_micros"]
     p.stop()
 
+  def test_campaign_view_through_optimization_only_sets_field(self):
+    p, op = self._make_mock("ads_mcp.tools.campaigns")
+    campaigns.set_campaign_view_through_conversion_optimization(
+        "123",
+        "456",
+        True,
+    )
+    assert op.update_mask.paths == [
+        "view_through_conversion_optimization_enabled"
+    ]
+    p.stop()
+
   def test_campaign_targeting_setting_only_sets_target_restrictions(self):
     p, op = self._make_mock("ads_mcp.tools.campaigns")
     client = campaigns.get_ads_client(None)
@@ -538,7 +558,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 75
+    assert len(registered_tools) == 83
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"

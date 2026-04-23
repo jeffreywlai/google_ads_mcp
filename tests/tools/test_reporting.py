@@ -71,6 +71,187 @@ def test_list_geographic_performance_rejects_invalid_view():
     reporting.list_geographic_performance(CUSTOMER_ID, location_view="city")
 
 
+def test_summarize_cart_data_sales_builds_v24_cart_query():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[
+          {
+              "campaign.id": "111",
+              "metrics.all_gross_profit_micros": 12_000_000,
+          }
+      ],
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "Shopping"}},
+    ):
+      result = reporting.summarize_cart_data_sales(
+          CUSTOMER_ID,
+          group_by="campaign",
+          campaign_ids=["111"],
+          date_range="LAST_7_DAYS",
+          top_limit=10,
+      )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM cart_data_sales_view" in query
+  assert "campaign.id" in query
+  assert "metrics.all_revenue_micros" in query
+  assert "metrics.all_cross_sell_gross_profit_micros" in query
+  assert "campaign.id IN (111)" in query
+  assert "segments.date DURING LAST_7_DAYS" in query
+  assert "LIMIT 10" in query
+  assert result["group_by"] == "CAMPAIGN"
+  assert result["returned_count"] == 1
+
+
+def test_summarize_cart_data_sales_rejects_invalid_group():
+  with pytest.raises(ToolError, match="Invalid group_by"):
+    reporting.summarize_cart_data_sales(CUSTOMER_ID, group_by="query")
+
+
+def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "PMax",
+          "metrics.all_revenue_micros": 20_000_000,
+          "metrics.revenue_micros": 15_000_000,
+          "metrics.all_gross_profit_micros": 8_000_000,
+          "metrics.gross_profit_micros": 5_000_000,
+          "metrics.all_orders": 6.0,
+          "metrics.orders": 4.0,
+      }
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "PMax"}},
+    ):
+      result = reporting.compare_biddable_vs_all_cart_value(
+          CUSTOMER_ID,
+          campaign_ids=["111"],
+      )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM cart_data_sales_view" in query
+  assert "metrics.gross_profit_micros" in query
+  assert "metrics.all_gross_profit_micros" in query
+  comparison = result["cart_value_comparisons"][0]
+  assert comparison["non_biddable_revenue_micros"] == 5_000_000
+  assert comparison["non_biddable_gross_profit_micros"] == 3_000_000
+  assert comparison["non_biddable_orders"] == 2.0
+
+
+def test_list_cart_profit_outliers_builds_paginated_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_cart_profit_outliers(
+        CUSTOMER_ID,
+        group_by="sold_brand",
+        sort_by="gross_profit_margin",
+        direction="desc",
+        page_token="25",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM cart_data_sales_view" in query
+  assert "segments.product_sold_brand" in query
+  assert "ORDER BY metrics.all_gross_profit_margin" in query
+  assert "DESC" in query
+  assert mock_run.call_args.kwargs["page_token"] == "25"
+  assert result["group_by"] == "SOLD_BRAND"
+  assert result["sort_by"] == "GROSS_PROFIT_MARGIN"
+
+
+def test_list_cart_profit_outliers_rejects_invalid_direction():
+  with pytest.raises(ToolError, match="Invalid direction"):
+    reporting.list_cart_profit_outliers(CUSTOMER_ID, direction="sideways")
+
+
+def test_list_shopping_attribution_breakdown_includes_event_type():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_shopping_attribution_breakdown(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM shopping_performance_view" in query
+  assert "segments.conversion_attribution_event_type" in query
+  assert "segments.product_item_id" in query
+  assert "campaign.id IN (111)" in query
+
+
+def test_list_campaign_view_through_optimization_includes_v24_field():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_campaign_view_through_optimization(
+        CUSTOMER_ID,
+        advertising_channel_types=["DEMAND_GEN"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign" in query
+  assert "campaign.view_through_conversion_optimization_enabled" in query
+  assert "campaign.advertising_channel_type IN (DEMAND_GEN)" in query
+
+
+def test_list_video_audibility_performance_includes_audible_metrics():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_video_audibility_performance(CUSTOMER_ID)
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "metrics.active_view_audible_impressions_rate" in query
+  assert "metrics.active_view_audible_two_seconds_impressions" in query
+  assert "metrics.video_watch_time_duration_millis" in query
+
+
+def test_list_vertical_ads_performance_builds_segment_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_vertical_ads_performance(
+        CUSTOMER_ID,
+        segment_by="brand",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign" in query
+  assert "segments.vertical_ads_listing_brand" in query
+  assert "metrics.conversions_value" in query
+  assert result["segment_by"] == "BRAND"
+
+
+def test_list_vertical_ads_performance_rejects_invalid_segment():
+  with pytest.raises(ToolError, match="Invalid segment_by"):
+    reporting.list_vertical_ads_performance(CUSTOMER_ID, segment_by="device")
+
+
 def test_list_impression_share_includes_share_metrics():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {

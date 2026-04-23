@@ -297,6 +297,12 @@ A campaign simulation. Supported combinations of advertising channel type, simul
 
 A carrier criterion that can be used in campaign targeting.
 
+### cart\_data\_sales\_view
+
+Cart data sales view. Provides information about products purchased when
+conversions with cart data are implemented, including revenue, gross profit,
+lead and cross-sell metrics, and Merchant Center product dimensions.
+
 ### change\_event
 
 Describes the granular change of returned resources of certain resource types. Changes made through the UI or API in the past 30 days are included. Previous and new values of the changed fields are shown. ChangeEvent could have up to 3 minutes delay to reflect a new change.

@@ -3,7 +3,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
-[![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
+[![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
 **A powerful MCP server that bridges LLMs with the Google Ads API — 75 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
@@ -467,4 +467,4 @@ Questions, suggestions, or feedback? [Open an issue](../../issues).
 
 ---
 
-**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v23](https://developers.google.com/google-ads/api/docs/start)**
+**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v24](https://developers.google.com/google-ads/api/docs/start)**

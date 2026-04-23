@@ -18,11 +18,11 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v23.common.types.targeting_setting import (
+from google.ads.googleads.v24.common.types.targeting_setting import (
     TargetRestriction,
     TargetingSetting,
 )
-from google.ads.googleads.v23.enums.types.targeting_dimension import (
+from google.ads.googleads.v24.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
 
@@ -194,7 +194,7 @@ def _validate_audience_payload(
       raise ToolError(
           "audiences"
           f"[{index}].type AUDIENCE is not supported by CampaignCriterion "
-          "in Google Ads API v23."
+          "in Google Ads API v24."
       )
     if audience_type not in _AUDIENCE_FIELD_BY_TYPE:
       invalid_audience_type = audience["type"]
@@ -302,6 +302,56 @@ def update_campaign_budget(
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
+
+
+@campaign_tool
+def set_campaign_view_through_conversion_optimization(
+    customer_id: str,
+    campaign_id: str,
+    enabled: bool,
+    login_customer_id: str | None = None,
+) -> dict[str, str | bool]:
+  """Enables or disables view-through conversion optimization.
+
+  This setting is only supported by eligible campaign types in Google Ads.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_id: Campaign ID to update.
+      enabled: Whether view-through conversion optimization should be enabled.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with the updated campaign resource name and requested state.
+  """
+  if not isinstance(enabled, bool):
+    raise ToolError("enabled must be a boolean.")
+
+  ads_client = get_ads_client(login_customer_id)
+  campaign_service = ads_client.get_service("CampaignService")
+
+  operation = ads_client.get_type("CampaignOperation")
+  campaign = operation.update
+  campaign.resource_name = campaign_service.campaign_path(
+      customer_id,
+      campaign_id,
+  )
+  campaign.view_through_conversion_optimization_enabled = enabled
+  operation.update_mask.paths.append(
+      "view_through_conversion_optimization_enabled"
+  )
+
+  try:
+    response = campaign_service.mutate_campaigns(
+        customer_id=customer_id, operations=[operation]
+    )
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+  return {
+      "resource_name": response.results[0].resource_name,
+      "view_through_conversion_optimization_enabled": enabled,
+  }
 
 
 @campaign_tool

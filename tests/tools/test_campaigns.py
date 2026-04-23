@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v23.enums.types.targeting_dimension import (
+from google.ads.googleads.v24.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
 from ads_mcp.tools import campaigns
@@ -94,6 +94,42 @@ class TestUpdateCampaignBudget:
     )
     assert result == {"resource_name": "customers/123/campaignBudgets/222"}
     assert mock_op.update.amount_micros == 50_000_000
+
+
+class TestSetCampaignViewThroughConversionOptimization:
+
+  def test_sets_view_through_optimization(self, mock_ads_client):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_service.campaign_path.return_value = "customers/123/campaigns/111"
+    mock_op = mock_ads_client.get_type.return_value
+    mock_op.update_mask.paths = []
+    mock_response = mock_service.mutate_campaigns.return_value
+    mock_response.results = [
+        mock.Mock(resource_name="customers/123/campaigns/111")
+    ]
+
+    result = campaigns.set_campaign_view_through_conversion_optimization(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        True,
+    )
+
+    assert result == {
+        "resource_name": "customers/123/campaigns/111",
+        "view_through_conversion_optimization_enabled": True,
+    }
+    assert mock_op.update.view_through_conversion_optimization_enabled is True
+    assert mock_op.update_mask.paths == [
+        "view_through_conversion_optimization_enabled"
+    ]
+
+  def test_rejects_non_bool_enabled(self, mock_ads_client):
+    with pytest.raises(ToolError, match="enabled must be a boolean"):
+      campaigns.set_campaign_view_through_conversion_optimization(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          "true",
+      )
 
 
 class TestUpdateCampaignTargetingSetting:

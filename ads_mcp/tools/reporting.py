@@ -44,9 +44,10 @@ def _normalize_choice(
 ) -> str:
   normalized_value = value.upper()
   if normalized_value not in allowed_values:
+    allowed_values_text = ", ".join(sorted(allowed_values))
     raise ToolError(
         f"Invalid {field_name}: {value}. "
-        f"Use one of: {', '.join(sorted(allowed_values))}."
+        f"Use one of: {allowed_values_text}."
     )
   return normalized_value
 
@@ -83,6 +84,78 @@ def _campaign_ids_from_rows(rows: list[dict[str, Any]]) -> list[str]:
       if row.get("campaign.id") not in (None, "")
   }
   return sorted(campaign_ids, key=int)
+
+
+_CART_GROUP_FIELDS = {
+    "CAMPAIGN": ["campaign.id", "campaign.name"],
+    "ADVERTISED_ITEM": ["segments.product_item_id", "segments.product_title"],
+    "ADVERTISED_BRAND": ["segments.product_brand"],
+    "ADVERTISED_CATEGORY": ["segments.product_category_level1"],
+    "SOLD_ITEM": [
+        "segments.product_sold_item_id",
+        "segments.product_sold_title",
+    ],
+    "SOLD_BRAND": ["segments.product_sold_brand"],
+    "SOLD_CATEGORY": ["segments.product_sold_category_level1"],
+}
+_CART_ALL_METRICS = [
+    "metrics.all_revenue_micros",
+    "metrics.all_cost_of_goods_sold_micros",
+    "metrics.all_gross_profit_micros",
+    "metrics.all_gross_profit_margin",
+    "metrics.all_orders",
+    "metrics.all_units_sold",
+    "metrics.all_average_order_value_micros",
+    "metrics.all_average_cart_size",
+    "metrics.all_lead_revenue_micros",
+    "metrics.all_lead_gross_profit_micros",
+    "metrics.all_lead_units_sold",
+    "metrics.all_cross_sell_revenue_micros",
+    "metrics.all_cross_sell_gross_profit_micros",
+    "metrics.all_cross_sell_units_sold",
+]
+_CART_BIDDABLE_METRICS = [
+    "metrics.revenue_micros",
+    "metrics.cost_of_goods_sold_micros",
+    "metrics.gross_profit_micros",
+    "metrics.gross_profit_margin",
+    "metrics.orders",
+    "metrics.units_sold",
+    "metrics.average_order_value_micros",
+    "metrics.average_cart_size",
+]
+_CART_OUTLIER_SORT_FIELDS = {
+    "GROSS_PROFIT": "metrics.all_gross_profit_micros",
+    "GROSS_PROFIT_MARGIN": "metrics.all_gross_profit_margin",
+    "REVENUE": "metrics.all_revenue_micros",
+    "ORDERS": "metrics.all_orders",
+    "CROSS_SELL_GROSS_PROFIT": ("metrics.all_cross_sell_gross_profit_micros"),
+}
+_VERTICAL_ADS_FIELDS = {
+    "VERTICAL": "segments.vertical_ads_vertical",
+    "LISTING": "segments.vertical_ads_listing",
+    "BRAND": "segments.vertical_ads_listing_brand",
+    "CITY": "segments.vertical_ads_listing_city",
+    "COUNTRY": "segments.vertical_ads_listing_country",
+    "REGION": "segments.vertical_ads_listing_region",
+    "PARTNER_ACCOUNT": "segments.vertical_ads_partner_account",
+}
+
+
+def _cart_group_fields(group_by: str) -> list[str]:
+  """Returns select fields for a cart-data grouping."""
+  normalized_group_by = group_by.upper()
+  if normalized_group_by not in _CART_GROUP_FIELDS:
+    raise ToolError(
+        "Invalid group_by. Use one of: "
+        + ", ".join(sorted(_CART_GROUP_FIELDS))
+    )
+  return _CART_GROUP_FIELDS[normalized_group_by]
+
+
+def _numeric_delta(row: dict[str, Any], lhs: str, rhs: str) -> int | float:
+  """Returns lhs - rhs while treating missing numeric metrics as zero."""
+  return (row.get(lhs) or 0) - (row.get(rhs) or 0)
 
 
 def _keyword_quality_score_query(
@@ -438,6 +511,11 @@ def get_campaign_conversion_goals(
   )
   custom_goal = None
   if custom_goal_resource:
+    quoted_custom_goal_resource = gaql_quote_string(custom_goal_resource)
+    custom_goal_resource_condition = (
+        "custom_conversion_goal.resource_name = "
+        f"{quoted_custom_goal_resource}"
+    )
     custom_goal_rows = run_gaql_query(
         f"""
         SELECT
@@ -446,7 +524,7 @@ def get_campaign_conversion_goals(
           custom_conversion_goal.status,
           custom_conversion_goal.conversion_actions
         FROM custom_conversion_goal
-        WHERE custom_conversion_goal.resource_name = {gaql_quote_string(custom_goal_resource)}
+        WHERE {custom_goal_resource_condition}
         LIMIT 1
         """,
         customer_id,
@@ -1032,4 +1110,478 @@ def list_video_enhancements(
   )
   if normalized_sources:
     result["sources"] = normalized_sources
+  return result
+
+
+@reporting_tool
+def summarize_cart_data_sales(
+    customer_id: str,
+    group_by: str = "CAMPAIGN",
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    top_limit: int = 25,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Summarizes v24 cart-data sales and profit metrics.
+
+  This uses `cart_data_sales_view`, which only returns useful rows when
+  conversions with cart data are implemented. Prefer this summary before
+  requesting detailed product rows.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      group_by: CAMPAIGN, ADVERTISED_ITEM, ADVERTISED_BRAND,
+          ADVERTISED_CATEGORY, SOLD_ITEM, SOLD_BRAND, or SOLD_CATEGORY.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      top_limit: Maximum grouped rows to return.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A compact dict containing grouped all-conversion cart profitability.
+  """
+  validate_limit(top_limit)
+  group_fields = _cart_group_fields(group_by)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        {", ".join(group_fields + _CART_ALL_METRICS)}
+      FROM cart_data_sales_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.all_gross_profit_micros DESC
+      LIMIT {top_limit}
+  """
+  rows = run_gaql_query(query, customer_id, login_customer_id)
+  return {
+      "group_by": group_by.upper(),
+      "date_range": date_range,
+      "cart_data_sales": rows,
+      "returned_count": len(rows),
+      "top_limit": top_limit,
+      "campaign_context": get_campaign_context(
+          customer_id,
+          _campaign_ids_from_rows(rows),
+          login_customer_id,
+      ),
+  }
+
+
+@reporting_tool
+def compare_biddable_vs_all_cart_value(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 25,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Compares biddable cart metrics with all cart metrics by campaign.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum campaign rows to return.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with campaign rows and deltas showing value outside biddable
+      conversion metrics.
+  """
+  validate_limit(limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        {", ".join(_CART_BIDDABLE_METRICS + _CART_ALL_METRICS)}
+      FROM cart_data_sales_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.all_gross_profit_micros DESC
+      LIMIT {limit}
+  """
+  rows = run_gaql_query(query, customer_id, login_customer_id)
+  comparisons = []
+  for row in rows:
+    enriched_row = dict(row)
+    enriched_row["non_biddable_revenue_micros"] = _numeric_delta(
+        row,
+        "metrics.all_revenue_micros",
+        "metrics.revenue_micros",
+    )
+    enriched_row["non_biddable_gross_profit_micros"] = _numeric_delta(
+        row,
+        "metrics.all_gross_profit_micros",
+        "metrics.gross_profit_micros",
+    )
+    enriched_row["non_biddable_orders"] = _numeric_delta(
+        row,
+        "metrics.all_orders",
+        "metrics.orders",
+    )
+    comparisons.append(enriched_row)
+
+  return {
+      "date_range": date_range,
+      "cart_value_comparisons": comparisons,
+      "returned_count": len(comparisons),
+      "limit": limit,
+      "campaign_context": get_campaign_context(
+          customer_id,
+          _campaign_ids_from_rows(comparisons),
+          login_customer_id,
+      ),
+  }
+
+
+@reporting_tool
+def list_cart_profit_outliers(
+    customer_id: str,
+    group_by: str = "SOLD_ITEM",
+    sort_by: str = "GROSS_PROFIT",
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    direction: str = "ASC",
+    limit: int = 25,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists highest or lowest cart-data profit outliers.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      group_by: Cart grouping such as SOLD_ITEM, SOLD_BRAND, or CAMPAIGN.
+      sort_by: GROSS_PROFIT, GROSS_PROFIT_MARGIN, REVENUE, ORDERS, or
+          CROSS_SELL_GROSS_PROFIT.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      direction: ASC for worst/lowest or DESC for best/highest.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing cart-data profit outlier rows.
+  """
+  validate_limit(limit)
+  group_fields = _cart_group_fields(group_by)
+  normalized_sort_by = _normalize_choice(
+      sort_by,
+      "sort_by",
+      set(_CART_OUTLIER_SORT_FIELDS),
+  )
+  normalized_direction = _normalize_choice(
+      direction,
+      "direction",
+      {"ASC", "DESC"},
+  )
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        {", ".join(group_fields + _CART_ALL_METRICS)}
+      FROM cart_data_sales_view
+      {build_where_clause(where_conditions)}
+      ORDER BY {_CART_OUTLIER_SORT_FIELDS[normalized_sort_by]}
+        {normalized_direction}
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "cart_profit_outliers",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["group_by"] = group_by.upper()
+  result["sort_by"] = normalized_sort_by
+  result["direction"] = normalized_direction
+  return result
+
+
+@reporting_tool
+def list_shopping_attribution_breakdown(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists Shopping performance by conversion attribution event type.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing Shopping attribution breakdown rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        segments.conversion_attribution_event_type,
+        segments.product_item_id,
+        segments.product_title,
+        segments.product_brand,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.conversions,
+        metrics.conversions_value,
+        metrics.all_conversions,
+        metrics.all_conversions_value
+      FROM shopping_performance_view
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.all_conversions_value DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "shopping_attribution_breakdown",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_campaign_view_through_optimization(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    advertising_channel_types: list[str] | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists campaign view-through conversion optimization settings.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      advertising_channel_types: Optional channel filters such as DEMAND_GEN
+          or MULTI_CHANNEL.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing view-through optimization settings.
+  """
+  validate_limit(limit)
+
+  where_conditions = []
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+  if advertising_channel_types:
+    where_conditions.append(
+        "campaign.advertising_channel_type IN "
+        f"({quote_enum_values(advertising_channel_types)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.status,
+        campaign.advertising_channel_type,
+        campaign.view_through_conversion_optimization_enabled
+      FROM campaign
+      {build_where_clause(where_conditions)}
+      ORDER BY campaign.id ASC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "campaign_view_through_optimization",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_video_audibility_performance(
+    customer_id: str,
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists video audibility and watch-time metrics by campaign.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing video audibility rows.
+  """
+  validate_limit(limit)
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.status,
+        campaign.advertising_channel_type,
+        metrics.impressions,
+        metrics.video_views,
+        metrics.video_watch_time_duration_millis,
+        metrics.average_video_watch_time_duration_millis,
+        metrics.active_view_audibility_measurable_impressions,
+        metrics.active_view_audibility_measurable_impressions_rate,
+        metrics.active_view_audible_impressions,
+        metrics.active_view_audible_impressions_rate,
+        metrics.active_view_audible_two_seconds_impressions,
+        metrics.active_view_audible_two_seconds_impressions_rate,
+        metrics.active_view_audible_thirty_seconds_impressions,
+        metrics.active_view_audible_thirty_seconds_impressions_rate
+      FROM campaign
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.impressions DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "video_audibility_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+
+
+@reporting_tool
+def list_vertical_ads_performance(
+    customer_id: str,
+    segment_by: str = "VERTICAL",
+    campaign_ids: list[str] | None = None,
+    date_range: str = "LAST_30_DAYS",
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists vertical-ads performance for travel and local inventory.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      segment_by: VERTICAL, LISTING, BRAND, CITY, COUNTRY, REGION, or
+          PARTNER_ACCOUNT.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range such as LAST_30_DAYS.
+      limit: Maximum rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing vertical-ads performance rows.
+  """
+  validate_limit(limit)
+  normalized_segment_by = _normalize_choice(
+      segment_by,
+      "segment_by",
+      set(_VERTICAL_ADS_FIELDS),
+  )
+
+  where_conditions = [_date_range_condition(date_range)]
+  if campaign_ids:
+    where_conditions.append(
+        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+    )
+
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        {_VERTICAL_ADS_FIELDS[normalized_segment_by]},
+        metrics.impressions,
+        metrics.clicks,
+        metrics.ctr,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value
+      FROM campaign
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.conversions_value DESC
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "vertical_ads_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["segment_by"] = normalized_segment_by
   return result

@@ -40,6 +40,13 @@ categories:
       list_conversion_actions: Conversion action configuration.
       list_audience_performance: Campaign or ad-group audience performance.
       list_video_enhancements: Video Enhancement rows with source, title, duration, and video-view metrics.
+      summarize_cart_data_sales: Compact v24 cart-data revenue, profit, order, and lead/cross-sell summary.
+      compare_biddable_vs_all_cart_value: Compare biddable cart metrics with all cart metrics to find value outside optimization goals.
+      list_cart_profit_outliers: Highest or lowest cart-data profit outliers by campaign, product, brand, or category.
+      list_shopping_attribution_breakdown: Shopping product performance split by conversion attribution event type.
+      list_campaign_view_through_optimization: Campaign view-through conversion optimization settings.
+      list_video_audibility_performance: Video audibility and watch-time diagnostics.
+      list_vertical_ads_performance: Vertical ads performance by listing, brand, location, partner account, or vertical.
 
   conversions:
     summary: Raw conversion upload testing and diagnostics.
@@ -79,6 +86,7 @@ categories:
       set_campaign_status: Pause or enable a campaign.
       update_campaign_budget: Change daily budget amount.
       update_campaign_targeting_setting: Replace campaign targeting restrictions for dimensions like AUDIENCE or KEYWORD.
+      set_campaign_view_through_conversion_optimization: Enable or disable view-through conversion optimization on eligible campaigns.
       add_campaign_audiences: Add supported campaign audience criteria with partial failure enabled.
       remove_campaign_audiences: Remove campaign audience criteria by criterion ID.
 

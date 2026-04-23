@@ -76,6 +76,7 @@
 - campaign_shared_set
 - campaign_simulation
 - carrier_constant
+- cart_data_sales_view
 - change_event
 - change_status
 - channel_aggregate_asset_view
