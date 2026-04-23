@@ -3,9 +3,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
-[![Google Ads API v23](https://img.shields.io/badge/Google%20Ads%20API-v23-red.svg)](https://developers.google.com/google-ads/api/docs/start)
+[![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 75 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 93 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,12 +14,12 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **75 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **93 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
-- 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, quality score summaries, conversion goals, RSA ad strength, conversion actions, audience performance, and video enhancements
+- 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, conversion goals, search terms, Shopping/cart data, landing pages, audience expansion, video, and placement diagnostics
 - 📄 **Cursor Pagination** — All list tools support `page_token` for paging through large result sets with total counts
 - ⚡ **Response Caching** — Docs, tool guide, campaign context, and paged queries are cached to reduce latency and token usage
 - 📥 **CSV Export** — Export any GAQL query to CSV for bulk extraction and downstream analysis
@@ -34,7 +34,7 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (75)
+## 📋 Available Tools (93)
 
 ### 🔍 Query & Discovery
 
@@ -120,6 +120,23 @@
 | `list_conversion_actions` | Conversion action configuration |
 | `list_audience_performance` | Audience performance at campaign or ad group scope |
 | `list_video_enhancements` | Video Enhancement rows with source, duration, and video-view metrics |
+| `summarize_cart_data_sales` | Compact cart-data revenue, profit, units-sold, and lead/cross-sell summary |
+| `compare_biddable_vs_all_cart_value` | Compare biddable cart metrics with all cart metrics |
+| `list_cart_profit_outliers` | Highest or lowest cart-data profit outliers |
+| `list_shopping_attribution_breakdown` | Shopping performance split by conversion attribution event type |
+| `list_campaign_view_through_optimization` | Campaign view-through conversion optimization settings |
+| `list_video_audibility_performance` | Video audibility and watch-time diagnostics |
+| `list_vertical_ads_performance` | Vertical ads performance by listing, brand, location, partner account, or vertical |
+| `list_campaign_search_terms` | Campaign-level search terms with compact cost and conversion metrics |
+| `list_ai_max_search_term_ad_combinations` | AI Max search term, headline, and landing-page combinations |
+| `list_final_url_expansion_assets` | Final URL expansion landing pages with recent performance |
+| `list_targeting_expansion_performance` | Automated targeting expansion performance by campaign and ad group |
+| `list_content_suitability_placements` | Grouped or detailed content-suitability placement impressions |
+| `list_location_interest_performance` | Location-interest performance for geo optimization |
+| `summarize_shopping_product_status` | Compact Shopping product eligibility and issue distribution |
+| `list_shopping_product_status` | Shopping product status, issues, and recent performance rows |
+| `list_travel_feed_asset_sets` | Travel feed asset set configuration and linked feed IDs |
+| `list_retail_filter_shared_criteria` | Tag-based retail filter shared criteria |
 
 ### 📢 Campaign Management
 
@@ -128,6 +145,7 @@
 | `set_campaign_status` | Set a campaign to PAUSED or ENABLED |
 | `update_campaign_budget` | Change a campaign's daily budget |
 | `update_campaign_targeting_setting` | Replace campaign targeting restrictions such as AUDIENCE, KEYWORD, or PLACEMENT |
+| `set_campaign_view_through_conversion_optimization` | Enable or disable view-through conversion optimization |
 | `add_campaign_audiences` | Add supported campaign audience criteria with partial failure handling |
 | `remove_campaign_audiences` | Remove campaign audience criteria by criterion ID |
 
@@ -467,4 +485,4 @@ Questions, suggestions, or feedback? [Open an issue](../../issues).
 
 ---
 
-**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v23](https://developers.google.com/google-ads/api/docs/start)**
+**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v24](https://developers.google.com/google-ads/api/docs/start)**

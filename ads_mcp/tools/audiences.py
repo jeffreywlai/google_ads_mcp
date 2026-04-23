@@ -18,10 +18,10 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v23.common.types.audiences import AudienceDimension
-from google.ads.googleads.v23.common.types.audiences import AudienceSegment
-from google.ads.googleads.v23.common.types.audiences import ExclusionSegment
-from google.ads.googleads.v23.enums.types.audience_scope import (
+from google.ads.googleads.v24.common.types.audiences import AudienceDimension
+from google.ads.googleads.v24.common.types.audiences import AudienceSegment
+from google.ads.googleads.v24.common.types.audiences import ExclusionSegment
+from google.ads.googleads.v24.enums.types.audience_scope import (
     AudienceScopeEnum,
 )
 

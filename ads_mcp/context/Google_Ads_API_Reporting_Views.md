@@ -137,6 +137,10 @@ An ad schedule view summarizes the performance of campaigns by AdSchedule criter
 
 An age range view.
 
+### ai\_max\_search\_term\_ad\_combination\_view
+
+Ai Max search term ad combination view.
+
 ### android\_privacy\_shared\_key\_google\_ad\_group
 
 An Android privacy shared key view for Google ad group key.
@@ -148,6 +152,14 @@ An Android privacy shared key view for Google campaign key.
 ### android\_privacy\_shared\_key\_google\_network\_type
 
 An Android privacy shared key view for Google network type key.
+
+### app\_top\_combination\_view
+
+A view resource in the App Top Combination Report.
+
+### applied\_incentive
+
+Represents an applied incentive.
 
 ### asset
 
@@ -273,6 +285,10 @@ A campaign draft.
 
 A campaign group.
 
+### campaign\_goal\_config
+
+A link between a campaign and a goal enabling campaign-specific optimization.
+
 ### campaign\_label
 
 Represents a relationship between a campaign and a label.
@@ -285,6 +301,10 @@ Campaign level customer lifecycle goal settings.
 
 A Campaign search term view. Historical data is available starting March 2023.
 
+### campaign\_search\_term\_view
+
+Granular campaign-level search term performance, including cost metrics for each individual search term that triggered ads.
+
 ### campaign\_shared\_set
 
 CampaignSharedSets are used for managing the shared sets associated with a campaign.
@@ -296,6 +316,12 @@ A campaign simulation. Supported combinations of advertising channel type, simul
 ### carrier\_constant
 
 A carrier criterion that can be used in campaign targeting.
+
+### cart\_data\_sales\_view
+
+Cart data sales view. Provides information about products purchased when
+conversions with cart data are implemented, including revenue, gross profit,
+lead and cross-sell metrics, and Merchant Center product dimensions.
 
 ### change\_event
 
@@ -421,6 +447,10 @@ A customizer attribute. Use CustomerCustomizer, CampaignCustomizer, AdGroupCusto
 
 Represents the data sharing connection between a Google Ads customer and another product's data.
 
+### detail\_content\_suitability\_placement\_view
+
+A detail content suitability placement view.
+
 ### detail\_placement\_view
 
 A view with metrics aggregated by ad group and URL or YouTube video.
@@ -457,6 +487,10 @@ A Google ads experiment for users to experiment changes on multiple campaigns, c
 
 A Google ads experiment for users to experiment changes on multiple campaigns, compare the performance, and apply the effective changes.
 
+### final\_url\_expansion\_asset\_view
+
+Final URL expansion asset view with landing-page performance metrics.
+
 ### gender\_view
 
 A gender view. The gender\_view resource reflects the effective serving state, rather than what criteria were added. An ad group without gender criteria by default shows to all genders, so all genders appear in gender\_view with stats.
@@ -468,6 +502,14 @@ A geo target constant.
 ### geographic\_view
 
 A geographic view. Geographic View includes all metrics aggregated at the country level, one row per country. It reports metrics at either actual physical location of the user or an area of interest. If other segment fields are used, you may get more than one row per country.
+
+### goal
+
+Representation of goals.
+
+### group\_content\_suitability\_placement\_view
+
+A group content suitability placement view.
 
 ### group\_placement\_view
 
@@ -553,6 +595,10 @@ Data from Local Services Lead Conversation. Contains details of Lead Conversatio
 
 A local services verification resource.
 
+### location\_interest\_view
+
+A location interest view summarizes the performance of ad group location interest criteria.
+
 ### location\_view
 
 A location view summarizes the performance of campaigns by a Location criterion. If no Location criterion is set, no results are returned; instead, use geographic\_view or user\_location\_view for visitor location data.
@@ -560,6 +606,10 @@ A location view summarizes the performance of campaigns by a Location criterion.
 ### managed\_placement\_view
 
 A managed placement view.
+
+### matched\_location\_interest\_view
+
+Reports metrics for locations where users showed interest and matched the advertiser's location interest targeting. This view is currently available for AI Max campaigns.
 
 ### media\_file
 
@@ -665,6 +715,10 @@ A Smart campaign search term view.
 
 Settings for configuring Smart campaigns.
 
+### targeting\_expansion\_view
+
+A targeting expansion view with metrics for automated expansion over manual targeting.
+
 ### third\_party\_app\_analytics\_link
 
 A data sharing connection, allowing the import of third party app analytics into a Google Ads Customer.
@@ -705,6 +759,14 @@ A user location view. User Location View includes all metrics aggregated at the 
 
 A video.
 
+### video\_enhancement
+
+A video enhancement.
+
 ### webpage\_view
 
 A webpage view.
+
+### you\_tube\_video\_upload
+
+A YouTube video upload resource.

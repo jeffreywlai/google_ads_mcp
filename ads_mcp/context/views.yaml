@@ -36,9 +36,12 @@
 - ad_parameter
 - ad_schedule_view
 - age_range_view
+- ai_max_search_term_ad_combination_view
 - android_privacy_shared_key_google_ad_group
 - android_privacy_shared_key_google_campaign
 - android_privacy_shared_key_google_network_type
+- app_top_combination_view
+- applied_incentive
 - asset
 - asset_field_type_view
 - asset_group
@@ -70,12 +73,15 @@
 - campaign_customizer
 - campaign_draft
 - campaign_group
+- campaign_goal_config
 - campaign_label
 - campaign_lifecycle_goal
 - campaign_search_term_insight
+- campaign_search_term_view
 - campaign_shared_set
 - campaign_simulation
 - carrier_constant
+- cart_data_sales_view
 - change_event
 - change_status
 - channel_aggregate_asset_view
@@ -107,6 +113,7 @@
 - customer_user_access_invitation
 - customizer_attribute
 - data_link
+- detail_content_suitability_placement_view
 - detail_placement_view
 - detailed_demographic
 - display_keyword_view
@@ -116,9 +123,12 @@
 - expanded_landing_page_view
 - experiment
 - experiment_arm
+- final_url_expansion_asset_view
 - gender_view
 - geo_target_constant
 - geographic_view
+- goal
+- group_content_suitability_placement_view
 - group_placement_view
 - hotel_group_view
 - hotel_performance_view
@@ -140,8 +150,10 @@
 - local_services_lead
 - local_services_lead_conversation
 - local_services_verification_artifact
+- location_interest_view
 - location_view
 - managed_placement_view
+- matched_location_interest_view
 - media_file
 - mobile_app_category_constant
 - mobile_device_constant
@@ -168,6 +180,7 @@
 - shopping_product
 - smart_campaign_search_term_view
 - smart_campaign_setting
+- targeting_expansion_view
 - third_party_app_analytics_link
 - topic_constant
 - topic_view
@@ -180,3 +193,4 @@
 - video
 - video_enhancement
 - webpage_view
+- you_tube_video_upload

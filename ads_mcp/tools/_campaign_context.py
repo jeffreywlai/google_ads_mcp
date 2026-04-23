@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 from ads_mcp.tools._gaql import quote_int_values
+from ads_mcp.tools._gaql import validate_date_range
 from ads_mcp.tools.api import run_gaql_query
 
 
@@ -84,6 +85,7 @@ def get_campaign_context(
   unique_campaign_ids = sorted(set(campaign_ids), key=int)
   if not unique_campaign_ids:
     return {}
+  spend_date_range = validate_date_range(spend_date_range)
 
   cache_key = _campaign_context_cache_key(
       customer_id,

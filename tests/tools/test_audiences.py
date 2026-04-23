@@ -17,10 +17,10 @@
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v23.enums.types.audience_scope import (
+from google.ads.googleads.v24.enums.types.audience_scope import (
     AudienceScopeEnum,
 )
-from google.ads.googleads.v23.resources.types.audience import Audience
+from google.ads.googleads.v24.resources.types.audience import Audience
 from ads_mcp.tools import audiences
 import pytest
 

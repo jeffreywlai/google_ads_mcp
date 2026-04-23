@@ -18,7 +18,7 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v23.services.types.conversion_upload_service import (
+from google.ads.googleads.v24.services.types.conversion_upload_service import (
     CallConversion,
     ClickConversion,
     UploadCallConversionsRequest,
@@ -277,7 +277,7 @@ def upload_click_conversions(
 
   Args:
       customer_id: Google Ads conversion customer ID receiving the upload.
-      conversions: List of dicts that map directly to the v23
+      conversions: List of dicts that map directly to the v24
           ClickConversion proto. Common fields include gclid, gbraid,
           wbraid, conversion_action, conversion_date_time,
           conversion_value, currency_code, order_id, consent,
@@ -338,7 +338,7 @@ def upload_call_conversions(
 
   Args:
       customer_id: Google Ads conversion customer ID receiving the upload.
-      conversions: List of dicts that map directly to the v23
+      conversions: List of dicts that map directly to the v24
           CallConversion proto. Common fields include caller_id,
           call_start_date_time, conversion_action, conversion_date_time,
           conversion_value, currency_code, custom_variables, and consent.

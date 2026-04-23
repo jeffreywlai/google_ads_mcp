@@ -31,8 +31,8 @@ from fastmcp.server.dependencies import get_access_token
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.util import get_nested_attr
-from google.ads.googleads.v23.services.services.customer_service import CustomerServiceClient
-from google.ads.googleads.v23.services.services.google_ads_service import GoogleAdsServiceClient
+from google.ads.googleads.v24.services.services.customer_service import CustomerServiceClient
+from google.ads.googleads.v24.services.services.google_ads_service import GoogleAdsServiceClient
 from google.protobuf.field_mask_pb2 import FieldMask
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtobufMessage

@@ -71,6 +71,545 @@ def test_list_geographic_performance_rejects_invalid_view():
     reporting.list_geographic_performance(CUSTOMER_ID, location_view="city")
 
 
+def test_summarize_cart_data_sales_builds_v24_cart_query():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[
+          {
+              "campaign.id": "111",
+              "metrics.all_gross_profit_micros": 12_000_000,
+          }
+      ],
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "Shopping"}},
+    ):
+      result = reporting.summarize_cart_data_sales(
+          CUSTOMER_ID,
+          group_by="campaign",
+          campaign_ids=["111"],
+          date_range="LAST_7_DAYS",
+          top_limit=10,
+      )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM cart_data_sales_view" in query
+  assert "campaign.id" in query
+  assert "metrics.all_revenue_micros" in query
+  assert "metrics.all_cross_sell_gross_profit_micros" in query
+  assert "campaign.id IN (111)" in query
+  assert "segments.date DURING LAST_7_DAYS" in query
+  assert "LIMIT 10" in query
+  assert result["group_by"] == "CAMPAIGN"
+  assert result["returned_count"] == 1
+
+
+def test_summarize_cart_data_sales_uses_filter_context_for_non_campaign_group():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[
+          {
+              "segments.product_sold_brand": "Brand",
+              "metrics.all_gross_profit_micros": 12_000_000,
+          }
+      ],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "Shopping"}},
+    ) as mock_context:
+      result = reporting.summarize_cart_data_sales(
+          CUSTOMER_ID,
+          group_by="sold_brand",
+          campaign_ids=["111"],
+      )
+
+  mock_context.assert_called_once_with(CUSTOMER_ID, ["111"], None)
+  assert result["group_by"] == "SOLD_BRAND"
+  assert result["campaign_context"] == {"111": {"campaign.name": "Shopping"}}
+
+
+def test_summarize_cart_data_sales_rejects_invalid_date_range():
+  with pytest.raises(ToolError, match="Invalid date_range"):
+    reporting.summarize_cart_data_sales(
+        CUSTOMER_ID,
+        date_range="LAST_30_DAYS OR metrics.clicks > 0",
+    )
+
+
+def test_summarize_cart_data_sales_rejects_invalid_group():
+  with pytest.raises(ToolError, match="Invalid group_by"):
+    reporting.summarize_cart_data_sales(CUSTOMER_ID, group_by="query")
+
+
+def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "PMax",
+          "metrics.all_revenue_micros": 20_000_000,
+          "metrics.revenue_micros": 15_000_000,
+          "metrics.all_gross_profit_micros": 8_000_000,
+          "metrics.gross_profit_micros": 5_000_000,
+          "metrics.all_units_sold": 6.0,
+          "metrics.units_sold": 4.0,
+      }
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "PMax"}},
+    ):
+      result = reporting.compare_biddable_vs_all_cart_value(
+          CUSTOMER_ID,
+          campaign_ids=["111"],
+          date_range="last_30_days",
+      )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM cart_data_sales_view" in query
+  assert "metrics.gross_profit_micros" in query
+  assert "metrics.all_gross_profit_micros" in query
+  assert result["date_range"] == "LAST_30_DAYS"
+  comparison = result["cart_value_comparisons"][0]
+  assert comparison["non_biddable_revenue_micros"] == 5_000_000
+  assert comparison["non_biddable_gross_profit_micros"] == 3_000_000
+  assert comparison["non_biddable_units_sold"] == 2.0
+
+
+def test_list_cart_profit_outliers_builds_paginated_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_cart_profit_outliers(
+        CUSTOMER_ID,
+        group_by="sold_brand",
+        sort_by="gross_profit_margin",
+        direction="desc",
+        page_token="25",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM cart_data_sales_view" in query
+  assert "segments.product_sold_brand" in query
+  assert "ORDER BY metrics.all_gross_profit_margin" in query
+  assert "DESC" in query
+  assert mock_run.call_args.kwargs["page_token"] == "25"
+  assert result["group_by"] == "SOLD_BRAND"
+  assert result["sort_by"] == "GROSS_PROFIT_MARGIN"
+
+
+def test_list_cart_profit_outliers_rejects_invalid_direction():
+  with pytest.raises(ToolError, match="Invalid direction"):
+    reporting.list_cart_profit_outliers(CUSTOMER_ID, direction="sideways")
+
+
+def test_list_shopping_attribution_breakdown_includes_event_type():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_shopping_attribution_breakdown(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM shopping_performance_view" in query
+  assert "segments.conversion_attribution_event_type" in query
+  assert "segments.product_item_id" in query
+  assert "metrics.impressions" not in query
+  assert "metrics.clicks" not in query
+  assert "metrics.all_revenue_micros" in query
+  assert "metrics.all_gross_profit_micros" in query
+  assert "campaign.id IN (111)" in query
+
+
+def test_list_campaign_view_through_optimization_includes_v24_field():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_campaign_view_through_optimization(
+        CUSTOMER_ID,
+        advertising_channel_types=["DEMAND_GEN"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign" in query
+  assert "campaign.view_through_conversion_optimization_enabled" in query
+  assert "campaign.advertising_channel_type IN (DEMAND_GEN)" in query
+
+
+def test_list_campaign_view_through_optimization_rejects_bad_enum_filter():
+  with pytest.raises(ToolError, match="Invalid advertising_channel_types"):
+    reporting.list_campaign_view_through_optimization(
+        CUSTOMER_ID,
+        advertising_channel_types=["DEMAND_GEN) OR campaign.id > 0"],
+    )
+
+
+def test_list_video_audibility_performance_includes_audible_metrics():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_video_audibility_performance(CUSTOMER_ID)
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "metrics.active_view_audible_impressions_rate" in query
+  assert "metrics.active_view_audible_two_seconds_impressions" in query
+  assert "metrics.video_trueview_views" in query
+  assert "metrics.video_watch_time_duration_millis" in query
+  assert "metrics.video_views" not in query
+
+
+def test_list_vertical_ads_performance_builds_segment_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_vertical_ads_performance(
+        CUSTOMER_ID,
+        segment_by="brand",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign" in query
+  assert "segments.vertical_ads_listing_brand" in query
+  assert "metrics.conversions_value" in query
+  assert result["segment_by"] == "BRAND"
+
+
+def test_list_vertical_ads_performance_rejects_invalid_segment():
+  with pytest.raises(ToolError, match="Invalid segment_by"):
+    reporting.list_vertical_ads_performance(CUSTOMER_ID, segment_by="device")
+
+
+def test_list_campaign_search_terms_builds_compact_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_campaign_search_terms(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        min_clicks=5,
+        min_cost_micros=1_000_000,
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign_search_term_view" in query
+  assert "campaign_search_term_view.search_term" in query
+  assert "segments.search_term_targeting_status" in query
+  assert "metrics.cost_per_conversion" in query
+  assert "campaign.id IN (111)" in query
+  assert "metrics.clicks >= 5" in query
+  assert "metrics.cost_micros >= 1000000" in query
+
+
+def test_list_ai_max_search_term_ad_combinations_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_ai_max_search_term_ad_combinations(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+        min_impressions=10,
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM ai_max_search_term_ad_combination_view" in query
+  assert "ai_max_search_term_ad_combination_view.search_term" in query
+  assert "ai_max_search_term_ad_combination_view.headline" in query
+  assert "ai_max_search_term_ad_combination_view.landing_page" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+  assert "metrics.impressions >= 10" in query
+
+
+def test_list_final_url_expansion_assets_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_final_url_expansion_assets(
+        CUSTOMER_ID,
+        asset_group_ids=["222"],
+        statuses=["ENABLED"],
+        field_types=["FINAL_URL"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM final_url_expansion_asset_view" in query
+  assert "final_url_expansion_asset_view.final_url" in query
+  assert "final_url_expansion_asset_view.status IN (ENABLED)" in query
+  assert "final_url_expansion_asset_view.field_type IN (FINAL_URL)" in query
+  assert "asset_group.id IN (222)" in query
+
+
+def test_list_targeting_expansion_performance_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_targeting_expansion_performance(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM targeting_expansion_view" in query
+  assert "targeting_expansion_view.resource_name" in query
+  assert "metrics.value_per_conversion" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+
+
+def test_list_content_suitability_placements_builds_group_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_content_suitability_placements(
+        CUSTOMER_ID,
+        placement_view="group",
+        placement_types=["YOUTUBE_VIDEO"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM group_content_suitability_placement_view" in query
+  assert "group_content_suitability_placement_view.placement" in query
+  assert (
+      "group_content_suitability_placement_view.placement_type IN "
+      "(YOUTUBE_VIDEO)"
+  ) in query
+  assert result["placement_view"] == "GROUP"
+
+
+def test_list_content_suitability_placements_builds_detail_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_content_suitability_placements(
+        CUSTOMER_ID,
+        placement_view="detail",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM detail_content_suitability_placement_view" in query
+  assert "detail_content_suitability_placement_view.target_url" in query
+  assert result["placement_view"] == "DETAIL"
+
+
+def test_list_location_interest_performance_builds_location_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_location_interest_performance(
+        CUSTOMER_ID,
+        interest_view="location_interest",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM location_interest_view" in query
+  assert "ad_group_criterion.location.geo_target_constant" in query
+  assert result["interest_view"] == "LOCATION_INTEREST"
+
+
+def test_list_location_interest_performance_builds_matched_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    result = reporting.list_location_interest_performance(
+        CUSTOMER_ID,
+        interest_view="matched_location_interest",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM matched_location_interest_view" in query
+  assert "segments.geo_target_most_specific_location" in query
+  assert result["interest_view"] == "MATCHED_LOCATION_INTEREST"
+
+
+def test_list_campaign_search_terms_rejects_negative_threshold():
+  with pytest.raises(ToolError, match="min_clicks must be non-negative"):
+    reporting.list_campaign_search_terms(CUSTOMER_ID, min_clicks=-1)
+
+
+def test_list_campaign_search_terms_rejects_non_numeric_threshold():
+  with pytest.raises(ToolError, match="min_clicks must be a number"):
+    reporting.list_campaign_search_terms(CUSTOMER_ID, min_clicks="1")
+
+
+def test_summarize_shopping_product_status_builds_compact_summary():
+  rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Shopping",
+          "shopping_product.item_id": "sku-1",
+          "shopping_product.status": "LIMITED",
+          "shopping_product.issues": [
+              {"type": "PRICE_MISMATCH", "severity": "WARNING"}
+          ],
+          "metrics.cost_micros": 5_000_000,
+      },
+      {
+          "campaign.id": "111",
+          "campaign.name": "Shopping",
+          "shopping_product.item_id": "sku-2",
+          "shopping_product.status": "ELIGIBLE",
+          "shopping_product.issues": [],
+          "metrics.cost_micros": 2_000_000,
+      },
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "Shopping"}},
+    ):
+      result = reporting.summarize_shopping_product_status(
+          CUSTOMER_ID,
+          statuses=["LIMITED", "ELIGIBLE"],
+          date_range="last_30_days",
+          row_limit=500,
+          top_issue_products_limit=5,
+      )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM shopping_product" in query
+  assert "shopping_product.status IN (LIMITED, ELIGIBLE)" in query
+  assert "shopping_product.issues" in query
+  assert "LIMIT 500" in query
+  assert result["date_range"] == "LAST_30_DAYS"
+  assert result["analyzed_row_count"] == 2
+  assert result["status_distribution"] == [
+      {"status": "ELIGIBLE", "product_count": 1},
+      {"status": "LIMITED", "product_count": 1},
+  ]
+  assert result["issue_type_distribution"] == [
+      {"issue_type": "PRICE_MISMATCH", "issue_count": 1}
+  ]
+  assert result["top_issue_products"] == [rows[0]]
+
+
+def test_list_shopping_product_status_builds_paginated_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_shopping_product_status(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+        statuses=["NOT_ELIGIBLE"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM shopping_product" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+  assert "shopping_product.status IN (NOT_ELIGIBLE)" in query
+  assert "shopping_product.issues" in query
+
+
+def test_list_shopping_product_status_rejects_bad_status_filter():
+  with pytest.raises(ToolError, match="Invalid statuses"):
+    reporting.list_shopping_product_status(
+        CUSTOMER_ID,
+        statuses=["NOT_ELIGIBLE) OR metrics.clicks > 0"],
+    )
+
+
+def test_list_travel_feed_asset_sets_builds_config_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_travel_feed_asset_sets(
+        CUSTOMER_ID,
+        statuses=["ENABLED"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM asset_set" in query
+  assert "asset_set.type = TRAVEL_FEED" in query
+  assert "asset_set.status IN (ENABLED)" in query
+  assert "asset_set.travel_feed_data.merchant_center_id" in query
+  assert "asset_set.travel_feed_data.partner_center_id" in query
+
+
+def test_list_travel_feed_asset_sets_rejects_bad_status_filter():
+  with pytest.raises(ToolError, match="Invalid statuses"):
+    reporting.list_travel_feed_asset_sets(
+        CUSTOMER_ID,
+        statuses=["ENABLED) OR asset_set.id > 0"],
+    )
+
+
+def test_list_retail_filter_shared_criteria_builds_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_retail_filter_shared_criteria(
+        CUSTOMER_ID,
+        shared_set_ids=["333"],
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM shared_criterion" in query
+  assert "shared_set.type = RETAIL_FILTER" in query
+  assert "shared_set.id IN (333)" in query
+  assert "shared_criterion.retail_filter.tag.value" in query
+
+
 def test_list_impression_share_includes_share_metrics():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {

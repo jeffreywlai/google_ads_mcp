@@ -18,7 +18,7 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v23.services.types.recommendation_service import (
+from google.ads.googleads.v24.services.types.recommendation_service import (
     ApplyRecommendationOperation,
 )
 
@@ -86,9 +86,10 @@ def _validate_apply_parameters(
   allowed_fields = set(message_cls.meta.fields.keys())
   invalid_fields = sorted(set(parameters) - allowed_fields)
   if invalid_fields:
+    invalid_fields_text = ", ".join(invalid_fields)
     raise ToolError(
         "Invalid apply_recommendations parameters for "
-        f"{operation_field}: {', '.join(invalid_fields)}"
+        f"{operation_field}: {invalid_fields_text}"
     )
 
 
