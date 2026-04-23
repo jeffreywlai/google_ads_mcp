@@ -105,6 +105,39 @@ def test_summarize_cart_data_sales_builds_v24_cart_query():
   assert result["returned_count"] == 1
 
 
+def test_summarize_cart_data_sales_uses_filter_context_for_non_campaign_group():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[
+          {
+              "segments.product_sold_brand": "Brand",
+              "metrics.all_gross_profit_micros": 12_000_000,
+          }
+      ],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={"111": {"campaign.name": "Shopping"}},
+    ) as mock_context:
+      result = reporting.summarize_cart_data_sales(
+          CUSTOMER_ID,
+          group_by="sold_brand",
+          campaign_ids=["111"],
+      )
+
+  mock_context.assert_called_once_with(CUSTOMER_ID, ["111"], None)
+  assert result["group_by"] == "SOLD_BRAND"
+  assert result["campaign_context"] == {"111": {"campaign.name": "Shopping"}}
+
+
+def test_summarize_cart_data_sales_rejects_invalid_date_range():
+  with pytest.raises(ToolError, match="Invalid date_range"):
+    reporting.summarize_cart_data_sales(
+        CUSTOMER_ID,
+        date_range="LAST_30_DAYS OR metrics.clicks > 0",
+    )
+
+
 def test_summarize_cart_data_sales_rejects_invalid_group():
   with pytest.raises(ToolError, match="Invalid group_by"):
     reporting.summarize_cart_data_sales(CUSTOMER_ID, group_by="query")

@@ -21,13 +21,14 @@ from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
+from ads_mcp.tools._gaql import validate_date_range
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _date_range_condition(date_range: str) -> str:
-  return f"segments.date DURING {date_range}"
+  return f"segments.date DURING {validate_date_range(date_range)}"
 
 
 performance_max_tool = ads_read_tool(mcp, tags={"performance_max"})

@@ -18,6 +18,8 @@ from collections import OrderedDict
 from unittest import mock
 
 from ads_mcp.tools import _campaign_context
+from fastmcp.exceptions import ToolError
+import pytest
 
 
 def setup_function():
@@ -78,3 +80,12 @@ def test_get_campaign_context_returns_copied_cached_values():
     second = _campaign_context.get_campaign_context("123", ["111"])
 
   assert second["111"]["campaign.name"] == "Brand"
+
+
+def test_get_campaign_context_rejects_invalid_spend_date_range():
+  with pytest.raises(ToolError, match="Invalid date_range"):
+    _campaign_context.get_campaign_context(
+        "123",
+        ["111"],
+        spend_date_range="LAST_30_DAYS OR campaign.id > 0",
+    )

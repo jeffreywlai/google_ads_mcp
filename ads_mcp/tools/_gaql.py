@@ -21,10 +21,40 @@ from fastmcp.exceptions import ToolError
 from ads_mcp.tools.api import gaql_quote_string
 
 
+DATE_RANGE_FUNCTIONS = {
+    "LAST_14_DAYS",
+    "LAST_30_DAYS",
+    "LAST_7_DAYS",
+    "LAST_BUSINESS_WEEK",
+    "LAST_MONTH",
+    "LAST_WEEK_MON_SUN",
+    "LAST_WEEK_SUN_SAT",
+    "THIS_MONTH",
+    "THIS_WEEK_MON_TODAY",
+    "THIS_WEEK_SUN_TODAY",
+    "TODAY",
+    "YESTERDAY",
+}
+
+
 def validate_limit(limit: int) -> None:
   """Validates that a tool limit is positive."""
   if limit <= 0:
     raise ToolError("limit must be greater than 0.")
+
+
+def validate_date_range(date_range: str) -> str:
+  """Validates and normalizes a GAQL DURING date range function."""
+  if not isinstance(date_range, str):
+    raise ToolError("date_range must be a string.")
+
+  normalized_date_range = date_range.upper()
+  if normalized_date_range not in DATE_RANGE_FUNCTIONS:
+    allowed_values = ", ".join(sorted(DATE_RANGE_FUNCTIONS))
+    raise ToolError(
+        f"Invalid date_range: {date_range}. Use one of: {allowed_values}."
+    )
+  return normalized_date_range
 
 
 def quote_int_values(values: list[str]) -> str:

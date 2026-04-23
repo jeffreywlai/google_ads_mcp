@@ -27,6 +27,7 @@ from ads_mcp.tools._campaign_context import get_campaign_context
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
+from ads_mcp.tools._gaql import validate_date_range
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import gaql_quote_string
@@ -35,7 +36,7 @@ from ads_mcp.tools.api import run_gaql_query_page
 
 
 def _date_range_condition(date_range: str) -> str:
-  return f"segments.date DURING {date_range}"
+  return f"segments.date DURING {validate_date_range(date_range)}"
 
 
 def _normalize_choice(
@@ -105,11 +106,11 @@ def _validate_non_negative(value: int | float, field_name: str) -> None:
 def _campaign_ids_from_rows(rows: list[dict[str, Any]]) -> list[str]:
   """Returns unique campaign IDs present in GAQL result rows."""
   campaign_ids = {
-      row["campaign.id"]
+      row.get("campaign.id")
       for row in rows
       if row.get("campaign.id") not in (None, "")
   }
-  return sorted(campaign_ids, key=int)
+  return sorted((str(campaign_id) for campaign_id in campaign_ids), key=int)
 
 
 _CART_GROUP_FIELDS = {
@@ -1220,7 +1221,8 @@ def summarize_cart_data_sales(
       A compact dict containing grouped all-conversion cart profitability.
   """
   validate_limit(top_limit)
-  group_fields = _cart_group_fields(group_by)
+  normalized_group_by = group_by.upper()
+  group_fields = _cart_group_fields(normalized_group_by)
 
   where_conditions = [_date_range_condition(date_range)]
   if campaign_ids:
@@ -1237,15 +1239,22 @@ def summarize_cart_data_sales(
       LIMIT {top_limit}
   """
   rows = run_gaql_query(query, customer_id, login_customer_id)
+  context_campaign_ids = (
+      campaign_ids
+      if campaign_ids
+      else _campaign_ids_from_rows(rows)
+      if normalized_group_by == "CAMPAIGN"
+      else []
+  )
   return {
-      "group_by": group_by.upper(),
-      "date_range": date_range,
+      "group_by": normalized_group_by,
+      "date_range": validate_date_range(date_range),
       "cart_data_sales": rows,
       "returned_count": len(rows),
       "top_limit": top_limit,
       "campaign_context": get_campaign_context(
           customer_id,
-          _campaign_ids_from_rows(rows),
+          context_campaign_ids,
           login_customer_id,
       ),
   }
