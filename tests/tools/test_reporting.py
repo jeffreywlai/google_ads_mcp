@@ -1382,6 +1382,25 @@ def test_get_ad_inventory_can_return_structure_without_metrics_or_text():
   assert result["include_metrics"] is False
 
 
+def test_get_ad_inventory_ignores_empty_string_enum_filters():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[],
+  ) as mock_run:
+    reporting.get_ad_inventory(
+        CUSTOMER_ID,
+        ad_statuses="[]",
+        ad_types="[]",
+        include_metrics=False,
+    )
+
+  query = mock_run.call_args.args[0]
+  assert "ad_group_ad.status IN ()" not in query
+  assert "ad_group_ad.ad.type IN ()" not in query
+  assert "ad_group_ad.status IN" not in query
+  assert "ad_group_ad.ad.type IN" not in query
+
+
 def test_get_ad_inventory_validates_date_range_without_metrics():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
     with pytest.raises(ToolError, match="Invalid date_range"):

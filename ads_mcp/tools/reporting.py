@@ -1728,10 +1728,12 @@ def get_ad_inventory(
       campaign_ids,
       ad_group_ids,
   )
+  ad_statuses = normalize_list_arg(ad_statuses, "ad_statuses")
   if ad_statuses:
     where_conditions.append(
         f"ad_group_ad.status IN ({quote_enum_values(ad_statuses)})"
     )
+  ad_types = normalize_list_arg(ad_types, "ad_types")
   if ad_types:
     where_conditions.append(
         f"ad_group_ad.ad.type IN ({quote_enum_values(ad_types)})"
