@@ -149,15 +149,19 @@ def list_recommendations(
   validate_limit(limit)
 
   where_conditions = []
+  recommendation_types = normalize_list_arg(
+      recommendation_types,
+      "recommendation_types",
+  )
   if recommendation_types:
     where_conditions.append(
         "recommendation.type IN "
         f"({quote_enum_values(recommendation_types)})"
     )
+  campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
   if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+    campaign_id_values = quote_int_values(campaign_ids, "campaign_ids")
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
   if not include_dismissed:
     where_conditions.append("recommendation.dismissed = FALSE")
 
@@ -441,6 +445,10 @@ def list_recommendation_subscriptions(
   validate_limit(limit)
 
   where_conditions = []
+  recommendation_types = normalize_list_arg(
+      recommendation_types,
+      "recommendation_types",
+  )
   if recommendation_types:
     where_conditions.append(
         "recommendation_subscription.type IN "

@@ -21,6 +21,7 @@ from fastmcp.exceptions import ToolError
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
@@ -95,10 +96,10 @@ def list_campaign_simulations(
       _CAMPAIGN_SIMULATION_FIELDS, simulation_type
   )
   where_conditions = []
+  campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
   if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+    campaign_id_values = quote_int_values(campaign_ids, "campaign_ids")
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
   if simulation_type:
     where_conditions.append(
         f"campaign_simulation.type = {simulation_type.strip().upper()}"
@@ -165,10 +166,10 @@ def list_ad_group_simulations(
       _AD_GROUP_SIMULATION_FIELDS, simulation_type
   )
   where_conditions = []
+  ad_group_ids = normalize_list_arg(ad_group_ids, "ad_group_ids")
   if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+    ad_group_id_values = quote_int_values(ad_group_ids, "ad_group_ids")
+    where_conditions.append(f"ad_group.id IN ({ad_group_id_values})")
   if simulation_type:
     where_conditions.append(
         f"ad_group_simulation.type = {simulation_type.strip().upper()}"
@@ -237,10 +238,11 @@ def list_ad_group_criterion_simulations(
   if ad_group_id:
     ad_group_id_filter = quote_int_value(ad_group_id, "ad_group_id")
     where_conditions.append(f"ad_group.id = {ad_group_id_filter}")
+  criterion_ids = normalize_list_arg(criterion_ids, "criterion_ids")
   if criterion_ids:
+    criterion_id_values = quote_int_values(criterion_ids, "criterion_ids")
     where_conditions.append(
-        "ad_group_criterion.criterion_id IN "
-        f"({quote_int_values(criterion_ids, "criterion_ids")})"
+        "ad_group_criterion.criterion_id IN " f"({criterion_id_values})"
     )
 
   query = f"""

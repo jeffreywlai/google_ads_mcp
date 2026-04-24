@@ -351,6 +351,27 @@ def test_compare_search_terms_returns_period_diff():
   assert result["campaign_context"] == {"111": {"campaign.name": "Brand"}}
 
 
+def test_compare_search_terms_ignores_empty_string_campaign_ids():
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query",
+      side_effect=[[], []],
+  ) as mock_query:
+    with mock.patch(
+        "ads_mcp.tools.search_terms.get_campaign_context",
+        return_value={},
+    ):
+      search_terms.compare_search_terms(
+          CUSTOMER_ID,
+          period_a={"start_date": "2026-04-13", "end_date": "2026-04-14"},
+          period_b={"start_date": "2026-04-06", "end_date": "2026-04-07"},
+          campaign_ids="[]",
+      )
+
+  first_query = mock_query.call_args_list[0].args[0]
+  assert "campaign.id IN ()" not in first_query
+  assert "campaign.id IN" not in first_query
+
+
 def test_compare_search_terms_preserves_status_and_match_type_dimensions():
   period_a_rows = [
       {

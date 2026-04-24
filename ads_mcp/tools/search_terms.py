@@ -145,10 +145,10 @@ def _search_term_period_rows(
     login_customer_id: str | None,
 ) -> list[dict[str, Any]]:
   where_conditions = [segments_date_condition(date_range)]
+  campaign_ids = merge_single_and_list_arg(None, campaign_ids, "campaign_ids")
   if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+    campaign_id_values = quote_int_values(campaign_ids, "campaign_ids")
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
   if ad_group_id:
     ad_group_id_filter = quote_int_value(ad_group_id, "ad_group_id")
     where_conditions.append(f"ad_group.id = {ad_group_id_filter}")

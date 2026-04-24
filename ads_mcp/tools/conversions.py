@@ -29,6 +29,7 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
@@ -222,10 +223,18 @@ def list_offline_conversion_upload_conversion_action_summaries(
       clients=clients,
       statuses=statuses,
   )
+  conversion_action_ids = normalize_list_arg(
+      conversion_action_ids,
+      "conversion_action_ids",
+  )
   if conversion_action_ids:
+    conversion_action_id_values = quote_int_values(
+        conversion_action_ids,
+        "conversion_action_ids",
+    )
     where_conditions.append(
         f"{summary}.conversion_action_id IN "
-        f"({quote_int_values(conversion_action_ids, "conversion_action_ids")})"
+        f"({conversion_action_id_values})"
     )
 
   query = f"""

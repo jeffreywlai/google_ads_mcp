@@ -131,3 +131,25 @@ def test_list_performance_max_placements_builds_query():
   assert mock_query.call_args.kwargs["page_size"] == 500
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
+
+
+def test_list_performance_max_placements_ignores_empty_string_filters():
+  with mock.patch(
+      "ads_mcp.tools.performance_max.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    performance_max.list_performance_max_placements(
+        CUSTOMER_ID,
+        campaign_ids="[]",
+        placement_types="[]",
+    )
+
+  query = mock_query.call_args.kwargs["query"]
+  assert "campaign.id IN ()" not in query
+  assert "placement_type IN ()" not in query
+  assert "campaign.id IN" not in query
+  assert "placement_type IN" not in query

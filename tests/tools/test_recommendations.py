@@ -51,6 +51,28 @@ def test_list_recommendations_builds_filtered_query():
   assert result["truncated"] is False
 
 
+def test_list_recommendations_ignores_empty_string_list_filters():
+  with mock.patch(
+      "ads_mcp.tools.recommendations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    recommendations.list_recommendations(
+        CUSTOMER_ID,
+        recommendation_types="[]",
+        campaign_ids="[]",
+    )
+
+  query = mock_query.call_args.kwargs["query"]
+  assert "recommendation.type IN ()" not in query
+  assert "campaign.id IN ()" not in query
+  assert "recommendation.type IN" not in query
+  assert "campaign.id IN" not in query
+
+
 def test_list_recommendation_subscriptions_returns_paging_metadata():
   with mock.patch(
       "ads_mcp.tools.recommendations.run_gaql_query_page",

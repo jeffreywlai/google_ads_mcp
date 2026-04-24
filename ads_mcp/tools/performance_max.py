@@ -20,6 +20,7 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import merge_single_and_list_arg
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import segments_date_condition
@@ -226,9 +227,9 @@ def list_performance_max_placements(
 
   where_conditions = [segments_date_condition(date_range)]
   if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+    campaign_id_values = quote_int_values(campaign_ids, "campaign_ids")
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
+  placement_types = normalize_list_arg(placement_types, "placement_types")
   if placement_types:
     where_conditions.append(
         "performance_max_placement_view.placement_type IN "

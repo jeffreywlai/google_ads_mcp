@@ -195,6 +195,24 @@ def test_list_offline_conversion_upload_conversion_action_summaries_builds_query
   assert result["returned_count"] == 0
 
 
+def test_list_offline_conversion_upload_conversion_action_summaries_ignores_empty_ids():
+  with mock.patch("ads_mcp.tools.conversions.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+
+    conversions.list_offline_conversion_upload_conversion_action_summaries(
+        CUSTOMER_ID,
+        conversion_action_ids="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "conversion_action_id IN ()" not in query
+  assert "conversion_action_id IN" not in query
+
+
 def test_list_offline_conversion_upload_conversion_action_summaries_validates_limit():
   with pytest.raises(ToolError, match="limit must be greater than 0"):
     conversions.list_offline_conversion_upload_conversion_action_summaries(

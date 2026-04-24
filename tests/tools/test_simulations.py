@@ -84,6 +84,30 @@ def test_list_campaign_simulations_without_type_stays_lightweight():
   assert "cpc_bid_point_list.points" not in query
 
 
+def test_simulation_tools_ignore_empty_string_list_filters():
+  page = {
+      "rows": [],
+      "next_page_token": None,
+      "total_results_count": 0,
+  }
+  with mock.patch(
+      "ads_mcp.tools.simulations.run_gaql_query_page",
+      return_value=page,
+  ) as mock_query:
+    simulations.list_campaign_simulations(CUSTOMER_ID, campaign_ids="[]")
+    simulations.list_ad_group_simulations(CUSTOMER_ID, ad_group_ids="[]")
+    simulations.list_ad_group_criterion_simulations(
+        CUSTOMER_ID,
+        criterion_ids="[]",
+    )
+
+  queries = [call.kwargs["query"] for call in mock_query.call_args_list]
+  assert all(" IN ()" not in query for query in queries)
+  assert "campaign.id IN" not in queries[0]
+  assert "ad_group.id IN" not in queries[1]
+  assert "ad_group_criterion.criterion_id IN" not in queries[2]
+
+
 @pytest.mark.parametrize(
     "tool_call",
     [
