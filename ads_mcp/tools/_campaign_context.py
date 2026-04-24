@@ -16,6 +16,7 @@
 
 from collections import OrderedDict
 from copy import deepcopy
+import json
 import time
 from typing import Any
 
@@ -40,14 +41,14 @@ def _campaign_context_cache_key(
     spend_date_range: str | dict[str, str],
 ) -> tuple[str, str | None, str, tuple[str, ...]]:
   """Builds a cache key for campaign context reads."""
+  if isinstance(spend_date_range, dict):
+    spend_date_range_key = json.dumps(spend_date_range, sort_keys=True)
+  else:
+    spend_date_range_key = spend_date_range
   return (
       customer_id,
       login_customer_id,
-      (
-          str(dict(spend_date_range))
-          if isinstance(spend_date_range, dict)
-          else spend_date_range
-      ),
+      spend_date_range_key,
       tuple(sorted(set(campaign_ids), key=int)),
   )
 
