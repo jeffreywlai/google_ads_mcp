@@ -882,6 +882,24 @@ def test_get_campaign_performance_rejects_bad_segment():
     reporting.get_campaign_performance(CUSTOMER_ID, segment_by="BAD")
 
 
+def test_get_campaign_performance_ignores_empty_string_list_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.get_campaign_performance(
+        CUSTOMER_ID,
+        campaign_ids="[]",
+        limit=25,
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.id IN ()" not in query
+  assert "campaign.id IN" not in query
+
+
 def test_list_keyword_quality_scores_builds_filtered_query():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
@@ -907,6 +925,26 @@ def test_list_keyword_quality_scores_builds_filtered_query():
   assert "ad_group_criterion.criterion_id ASC" in query
   assert "LIMIT" not in query
   assert mock_run.call_args.kwargs["page_size"] == 1000
+
+
+def test_list_keyword_quality_scores_ignores_empty_string_list_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_keyword_quality_scores(
+        CUSTOMER_ID,
+        campaign_ids="[]",
+        ad_group_ids="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.id IN ()" not in query
+  assert "ad_group.id IN ()" not in query
+  assert "campaign.id IN" not in query
+  assert "ad_group.id IN" not in query
 
 
 def test_list_keyword_quality_scores_rejects_invalid_score():

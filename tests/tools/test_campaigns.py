@@ -600,6 +600,39 @@ class TestAddCampaignAudiences:
     assert result["target_campaign_id"] == "222"
     assert result["missing_count"] == 1
 
+  def test_copy_audiences_uses_normalized_target_campaign_id(self):
+    diff = {
+        "source_campaign_id": "111",
+        "target_campaign_id": "222",
+        "missing_in_target": [
+            {
+                "type": "USER_INTEREST",
+                "resource_name": f"customers/{CUSTOMER_ID}/userInterests/90206",
+                "negative": False,
+            }
+        ],
+        "common_count": 0,
+        "target_only_count": 0,
+    }
+    with mock.patch(
+        "ads_mcp.tools.campaigns.diff_campaign_audiences",
+        return_value=diff,
+    ):
+      with mock.patch(
+          "ads_mcp.tools.campaigns.add_campaign_audiences",
+          return_value={"resource_names": []},
+      ) as mock_add:
+        result = campaigns.copy_audiences_between_campaigns(
+            CUSTOMER_ID,
+            " 00111 ",
+            " 00222 ",
+            dry_run=False,
+        )
+
+    assert result["source_campaign_id"] == "111"
+    assert result["target_campaign_id"] == "222"
+    assert mock_add.call_args.kwargs["campaign_id"] == "222"
+
   def test_rejects_invalid_audience_type(self, mock_ads_client):
     with pytest.raises(ToolError, match="Invalid audiences\\[0\\].type"):
       campaigns.add_campaign_audiences(

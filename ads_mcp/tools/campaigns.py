@@ -1014,9 +1014,11 @@ def copy_audiences_between_campaigns(
       login_customer_id=login_customer_id,
   )
   audiences_to_create = diff["missing_in_target"]
+  normalized_source_campaign_id = diff["source_campaign_id"]
+  normalized_target_campaign_id = diff["target_campaign_id"]
   result = {
-      "source_campaign_id": source_campaign_id,
-      "target_campaign_id": target_campaign_id,
+      "source_campaign_id": normalized_source_campaign_id,
+      "target_campaign_id": normalized_target_campaign_id,
       "dry_run": dry_run,
       "audiences_to_create": audiences_to_create,
       "create_count": len(audiences_to_create),
@@ -1028,7 +1030,7 @@ def copy_audiences_between_campaigns(
 
   result["mutation_result"] = add_campaign_audiences(
       customer_id=customer_id,
-      campaign_id=target_campaign_id,
+      campaign_id=normalized_target_campaign_id,
       audiences=audiences_to_create,
       login_customer_id=login_customer_id,
   )

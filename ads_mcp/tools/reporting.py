@@ -126,14 +126,32 @@ def _append_campaign_ad_group_filters(
     ad_group_ids: list[str] | str | None = None,
 ) -> None:
   """Appends common campaign/ad-group ID filters to GAQL conditions."""
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
+
+
+def _append_int_list_filter(
+    where_conditions: list[str],
+    gaql_field: str,
+    values: list[str] | str | None,
+    field_name: str,
+) -> None:
+  """Appends an IN filter after normalizing optional string/list args."""
+  normalized_values = normalize_list_arg(values, field_name)
+  if not normalized_values:
+    return
+  value_list = quote_int_values(normalized_values, field_name)
+  where_conditions.append(f"{gaql_field} IN ({value_list})")
 
 
 def _single_campaign_id_filter(
@@ -468,14 +486,18 @@ def _keyword_quality_score_query(
       "ad_group_criterion.type = KEYWORD",
       "ad_group_criterion.negative = FALSE",
   ]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
   if min_quality_score is not None:
     where_conditions.append(
         "ad_group_criterion.quality_info.quality_score >= "
@@ -557,10 +579,12 @@ def list_device_performance(
   validate_limit(limit)
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -627,10 +651,12 @@ def list_geographic_performance(
   )
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   if normalized_view == "GEOGRAPHIC":
     select_fields = [
@@ -715,10 +741,12 @@ def list_impression_share(
   where_conditions = [segments_date_condition(date_range)]
   if enabled_only:
     where_conditions.append("campaign.status = ENABLED")
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -1290,14 +1318,18 @@ def list_rsa_ad_strength(
       segments_date_condition(date_range),
       "ad_group_ad.ad.type = RESPONSIVE_SEARCH_AD",
   ]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -1434,10 +1466,12 @@ def list_audience_performance(
     raise ToolError("ad_group_ids can only be used when scope is AD_GROUP.")
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   if normalized_scope == "AD_GROUP":
     select_fields = [
@@ -1461,10 +1495,12 @@ def list_audience_performance(
         "metrics.conversions_value",
     ]
     from_resource = "ad_group_audience_view"
-    if ad_group_ids:
-      where_conditions.append(
-          f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-      )
+    _append_int_list_filter(
+        where_conditions,
+        "ad_group.id",
+        ad_group_ids,
+        "ad_group_ids",
+    )
   else:
     select_fields = [
         "campaign.id",
@@ -1791,14 +1827,18 @@ def list_video_enhancements(
         "video_enhancement.source IN "
         f"({quote_enum_values(normalized_sources)})"
     )
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -1939,10 +1979,12 @@ def compare_biddable_vs_all_cart_value(
 
   normalized_date_range = date_range_label(date_range)
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -2031,10 +2073,12 @@ def list_cart_profit_outliers(
   )
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -2089,10 +2133,12 @@ def list_shopping_attribution_breakdown(
   validate_limit(limit)
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -2158,10 +2204,12 @@ def list_campaign_view_through_optimization(
   validate_limit(limit)
 
   where_conditions = []
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
   if advertising_channel_types:
     advertising_channel_types = _normalize_enum_filters(
         advertising_channel_types,
@@ -2224,10 +2272,12 @@ def list_video_audibility_performance(
   validate_limit(limit)
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -2301,10 +2351,12 @@ def list_vertical_ads_performance(
   )
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -2370,10 +2422,12 @@ def list_campaign_search_terms(
   _validate_non_negative(min_cost_micros, "min_cost_micros")
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
   if min_clicks:
     where_conditions.append(f"metrics.clicks >= {min_clicks}")
   if min_cost_micros:
@@ -2444,14 +2498,18 @@ def list_ai_max_search_term_ad_combinations(
   _validate_non_negative(min_impressions, "min_impressions")
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
   if min_impressions:
     where_conditions.append(f"metrics.impressions >= {min_impressions}")
 
@@ -2535,12 +2593,12 @@ def list_final_url_expansion_assets(
   where_conditions.append(
       "campaign.advertising_channel_type = PERFORMANCE_MAX"
   )
-  if asset_group_ids:
-    asset_group_id_values = quote_int_values(
-        asset_group_ids,
-        "asset_group_ids",
-    )
-    where_conditions.append(f"asset_group.id IN ({asset_group_id_values})")
+  _append_int_list_filter(
+      where_conditions,
+      "asset_group.id",
+      asset_group_ids,
+      "asset_group_ids",
+  )
   if statuses:
     statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
@@ -2613,14 +2671,18 @@ def list_targeting_expansion_performance(
   validate_limit(limit)
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -2695,14 +2757,18 @@ def list_content_suitability_placements(
   ]
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
   if placement_types:
     placement_types = _normalize_enum_filters(
         placement_types,
@@ -2780,14 +2846,18 @@ def list_location_interest_performance(
   ]
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -3119,9 +3189,12 @@ def list_retail_filter_shared_criteria(
   validate_limit(limit)
 
   where_conditions = ["shared_set.type = RETAIL_FILTER"]
-  if shared_set_ids:
-    shared_set_id_values = quote_int_values(shared_set_ids, "shared_set_ids")
-    where_conditions.append(f"shared_set.id IN ({shared_set_id_values})")
+  _append_int_list_filter(
+      where_conditions,
+      "shared_set.id",
+      shared_set_ids,
+      "shared_set_ids",
+  )
 
   query = f"""
       SELECT
