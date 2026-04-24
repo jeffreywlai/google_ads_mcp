@@ -868,7 +868,7 @@ def test_get_campaign_performance_builds_segmented_query():
       "ORDER BY segments.date, segments.device, metrics.cost_micros DESC"
       in (query)
   )
-  assert "LIMIT 25" in query
+  assert "LIMIT 25" not in query
   assert mock_run.call_args.kwargs["page_size"] == 25
   assert mock_run.call_args.kwargs["page_token"] == "0"
   assert mock_run.call_args.kwargs["login_customer_id"] == "999"

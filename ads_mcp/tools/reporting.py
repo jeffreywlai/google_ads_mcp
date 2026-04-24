@@ -812,7 +812,6 @@ def get_campaign_performance(
       FROM campaign
       {build_where_clause(where_conditions)}
       ORDER BY {order_by}
-      LIMIT {limit}
   """
   page = run_gaql_query_page(
       query=query,
