@@ -229,7 +229,7 @@ def normalize_list_arg(value: Any, field_name: str) -> list[Any]:
         decoded_value = json.loads(stripped_value)
       except json.JSONDecodeError as exc:
         raise ToolError(
-            f"{field_name} must be an array, for example ['123']; got "
+            f'{field_name} must be an array, for example ["123"]; got '
             f"invalid JSON string {value!r}."
         ) from exc
       if not isinstance(decoded_value, list):
@@ -245,7 +245,7 @@ def normalize_list_arg(value: Any, field_name: str) -> list[Any]:
   if isinstance(value, (list, tuple, set)):
     return list(value)
   raise ToolError(
-      f"{field_name} must be an array of strings, for example ['123']; "
+      f'{field_name} must be an array of strings, for example ["123"]; '
       f"got {type(value).__name__}."
   )
 

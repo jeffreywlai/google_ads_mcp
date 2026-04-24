@@ -2214,11 +2214,11 @@ def list_campaign_view_through_optimization(
       campaign_ids,
       "campaign_ids",
   )
+  advertising_channel_types = _normalize_enum_filters(
+      advertising_channel_types,
+      "advertising_channel_types",
+  )
   if advertising_channel_types:
-    advertising_channel_types = _normalize_enum_filters(
-        advertising_channel_types,
-        "advertising_channel_types",
-    )
     where_conditions.append(
         "campaign.advertising_channel_type IN "
         f"({quote_enum_values(advertising_channel_types)})"
@@ -2773,11 +2773,11 @@ def list_content_suitability_placements(
       ad_group_ids,
       "ad_group_ids",
   )
+  placement_types = _normalize_enum_filters(
+      placement_types,
+      "placement_types",
+  )
   if placement_types:
-    placement_types = _normalize_enum_filters(
-        placement_types,
-        "placement_types",
-    )
     where_conditions.append(
         f"{from_resource}.placement_type IN "
         f"({quote_enum_values(placement_types)})"

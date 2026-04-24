@@ -389,6 +389,23 @@ def test_list_campaign_view_through_optimization_includes_v24_field():
   assert "campaign.advertising_channel_type IN (DEMAND_GEN)" in query
 
 
+def test_list_campaign_view_through_optimization_ignores_empty_channel_types():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_campaign_view_through_optimization(
+        CUSTOMER_ID,
+        advertising_channel_types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.advertising_channel_type IN ()" not in query
+  assert "campaign.advertising_channel_type IN" not in query
+
+
 def test_list_campaign_view_through_optimization_rejects_bad_enum_filter():
   with pytest.raises(ToolError, match="Invalid advertising_channel_types"):
     reporting.list_campaign_view_through_optimization(
@@ -588,6 +605,23 @@ def test_list_content_suitability_placements_builds_group_query():
       "(YOUTUBE_VIDEO)"
   ) in query
   assert result["placement_view"] == "GROUP"
+
+
+def test_list_content_suitability_placements_ignores_empty_placement_types():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_content_suitability_placements(
+        CUSTOMER_ID,
+        placement_types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "placement_type IN ()" not in query
+  assert "placement_type IN" not in query
 
 
 def test_list_content_suitability_placements_builds_detail_query():

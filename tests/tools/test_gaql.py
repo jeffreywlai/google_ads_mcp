@@ -147,6 +147,13 @@ def test_normalize_list_arg_accepts_json_string():
   ]
 
 
+def test_normalize_list_arg_uses_json_array_examples_in_errors():
+  with pytest.raises(ToolError, match=r'for example \["123"\]'):
+    normalize_list_arg("[invalid", "campaign_ids")
+  with pytest.raises(ToolError, match=r'for example \["123"\]'):
+    normalize_list_arg(123, "campaign_ids")
+
+
 @pytest.mark.parametrize(
     ("query", "expected_query"),
     [
