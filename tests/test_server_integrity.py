@@ -638,6 +638,20 @@ class TestFastMcpConfiguration:
 
     asyncio.run(_run())
 
+  def test_search_google_ads_fields_rejects_bool_limit_through_client(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        with pytest.raises(ToolError, match="Input should be a valid integer"):
+          await client.call_tool(
+              "search_google_ads_fields",
+              {
+                  "query": "SELECT name WHERE name LIKE 'campaign.%%'",
+                  "limit": True,
+              },
+          )
+
+    asyncio.run(_run())
+
   def test_bm25_search_and_default_visibility_transforms_configured(self):
     transforms = mcp_server._transforms
 

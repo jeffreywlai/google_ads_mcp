@@ -35,6 +35,7 @@ from fastmcp.server.transforms.visibility import disable_components
 from fastmcp.server.transforms.visibility import enable_components
 from fastmcp.server.transforms.visibility import get_visibility_rules
 from google.ads.googleads.errors import GoogleAdsException
+from pydantic import StrictInt
 
 
 _TEXT_FILE_CACHE: dict[str, tuple[float, str]] = {}
@@ -415,7 +416,7 @@ async def lock_mutation_tools(
 @ads_field_tool
 def search_google_ads_fields(
     query: str,
-    limit: int = 50,
+    limit: StrictInt = 50,
 ) -> dict[str, list[dict[str, Any]]]:
   """Searches live GoogleAdsField metadata to help build GAQL queries.
 
