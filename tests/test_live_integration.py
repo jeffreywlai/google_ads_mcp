@@ -714,19 +714,9 @@ def test_live_performance_max_reads_smoke():
 
 def test_live_empty_results_preserve_shape():
   customer_id = _live_customer_id()
-  tomorrow = (date.today() + timedelta(days=1)).isoformat()
 
   async def _run():
     async with Client(_live_mcp_config()) as client:
-      change_events = await client.call_tool(
-          "list_change_events",
-          {
-              "customer_id": customer_id,
-              "start_date": tomorrow,
-              "end_date": tomorrow,
-              "limit": 1,
-          },
-      )
       customer_search_terms = await client.call_tool(
           "list_customer_search_term_insights",
           {
@@ -752,15 +742,6 @@ def test_live_empty_results_preserve_shape():
           },
       )
 
-      assert change_events.structured_content == {
-          "change_events": [],
-          "returned_count": 0,
-          "total_count": 0,
-          "total_page_count": 0,
-          "truncated": False,
-          "next_page_token": None,
-          "page_size": 1,
-      }
       assert customer_search_terms.structured_content == {
           "customer_search_term_insights": [],
           "returned_count": 0,
@@ -787,5 +768,28 @@ def test_live_empty_results_preserve_shape():
       assert quality_scores.structured_content["total_row_count"] == 0
       assert quality_scores.structured_content["total_page_count"] == 0
       assert quality_scores.structured_content["next_page_token"] is None
+
+  asyncio.run(_run())
+
+
+def test_live_change_events_reject_future_dates_before_api_call():
+  customer_id = _live_customer_id()
+  tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+  async def _run():
+    async with Client(_live_mcp_config()) as client:
+      with pytest.raises(
+          ToolError,
+          match="change_event only supports dates through today",
+      ):
+        await client.call_tool(
+            "list_change_events",
+            {
+                "customer_id": customer_id,
+                "start_date": tomorrow,
+                "end_date": tomorrow,
+                "limit": 1,
+            },
+        )
 
   asyncio.run(_run())
