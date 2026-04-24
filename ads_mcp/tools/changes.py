@@ -24,6 +24,7 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import gaql_quote_string
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
@@ -224,6 +225,7 @@ def list_change_statuses(
       start_date,
       end_date,
   )
+  resource_types = normalize_list_arg(resource_types, "resource_types")
   if resource_types:
     where_conditions.append(
         "change_status.resource_type IN "
@@ -289,11 +291,19 @@ def list_change_events(
       start_date,
       end_date,
   )
+  resource_change_operations = normalize_list_arg(
+      resource_change_operations,
+      "resource_change_operations",
+  )
   if resource_change_operations:
     where_conditions.append(
         "change_event.resource_change_operation IN "
         f"({quote_enum_values(resource_change_operations)})"
     )
+  change_resource_types = normalize_list_arg(
+      change_resource_types,
+      "change_resource_types",
+  )
   if change_resource_types:
     where_conditions.append(
         "change_event.change_resource_type IN "

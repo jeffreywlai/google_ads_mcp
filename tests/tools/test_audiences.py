@@ -184,6 +184,25 @@ def test_search_user_interests_can_include_not_launched():
   assert "WHERE" not in mock_query.call_args.kwargs["query"]
 
 
+def test_search_user_interests_ignores_empty_string_taxonomy_types():
+  with mock.patch(
+      "ads_mcp.tools.audiences.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    audiences.search_user_interests(
+        customer_id=CUSTOMER_ID,
+        taxonomy_types="[]",
+    )
+
+  sent_query = mock_query.call_args.kwargs["query"]
+  assert "user_interest.taxonomy_type IN ()" not in sent_query
+  assert "user_interest.taxonomy_type IN" not in sent_query
+
+
 def test_search_user_interests_escapes_like_wildcards():
   with mock.patch(
       "ads_mcp.tools.audiences.run_gaql_query_page",

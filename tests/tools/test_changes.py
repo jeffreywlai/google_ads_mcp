@@ -87,6 +87,43 @@ def test_list_change_events_builds_query():
   assert result["truncated"] is False
 
 
+def test_change_tools_ignore_empty_string_enum_filters():
+  start_date = (date.today() - timedelta(days=10)).isoformat()
+  end_date = (date.today() - timedelta(days=3)).isoformat()
+  page = {
+      "rows": [],
+      "next_page_token": None,
+      "total_results_count": 0,
+  }
+
+  with mock.patch(
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value=page,
+  ) as mock_query:
+    changes.list_change_statuses(
+        CUSTOMER_ID,
+        resource_types="[]",
+        start_date="2026-03-01",
+        end_date="2026-03-08",
+    )
+    changes.list_change_events(
+        CUSTOMER_ID,
+        resource_change_operations="[]",
+        change_resource_types="[]",
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+  status_query = mock_query.call_args_list[0].kwargs["query"]
+  event_query = mock_query.call_args_list[1].kwargs["query"]
+  assert "change_status.resource_type IN ()" not in status_query
+  assert "change_status.resource_type IN" not in status_query
+  assert "change_event.resource_change_operation IN ()" not in event_query
+  assert "change_event.change_resource_type IN ()" not in event_query
+  assert "change_event.resource_change_operation IN" not in event_query
+  assert "change_event.change_resource_type IN" not in event_query
+
+
 def test_change_tools_flag_when_google_cap_is_reached():
   with mock.patch(
       "ads_mcp.tools.changes.run_gaql_query_page",

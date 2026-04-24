@@ -31,6 +31,7 @@ from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import gaql_like_substring_pattern
 from ads_mcp.tools._gaql import gaql_quote_string
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
@@ -90,6 +91,7 @@ def search_user_interests(
       where_conditions.append(
           "user_interest.name LIKE " f"{gaql_quote_string(name_pattern)}"
       )
+  taxonomy_types = normalize_list_arg(taxonomy_types, "taxonomy_types")
   if taxonomy_types:
     where_conditions.append(
         "user_interest.taxonomy_type IN "

@@ -1225,6 +1225,26 @@ def test_list_conversion_actions_builds_filtered_query():
   assert result["returned_count"] == 0
 
 
+def test_list_conversion_actions_ignores_empty_string_enum_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_conversion_actions(
+        CUSTOMER_ID,
+        statuses="[]",
+        types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "conversion_action.status IN ()" not in query
+  assert "conversion_action.type IN ()" not in query
+  assert "conversion_action.status IN" not in query
+  assert "conversion_action.type IN" not in query
+
+
 def test_list_audience_performance_campaign_scope_uses_campaign_view():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {

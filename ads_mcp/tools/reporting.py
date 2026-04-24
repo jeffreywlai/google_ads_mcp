@@ -1391,10 +1391,12 @@ def list_conversion_actions(
   validate_limit(limit)
 
   where_conditions = []
+  statuses = normalize_list_arg(statuses, "statuses")
   if statuses:
     where_conditions.append(
         "conversion_action.status IN " f"({quote_enum_values(statuses)})"
     )
+  types = normalize_list_arg(types, "types")
   if types:
     where_conditions.append(
         f"conversion_action.type IN ({quote_enum_values(types)})"
