@@ -147,7 +147,7 @@ def _search_term_period_rows(
   where_conditions = [segments_date_condition(date_range)]
   if campaign_ids:
     where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
     )
   if ad_group_id:
     ad_group_id_filter = quote_int_value(ad_group_id, "ad_group_id")

@@ -46,6 +46,11 @@ def test_quote_int_values_rejects_malformed_ids():
     quote_int_values(["123 OR metrics.clicks > 0"])
 
 
+def test_quote_int_values_uses_field_name_in_errors():
+  with pytest.raises(ToolError, match="campaign_ids must be an integer"):
+    quote_int_values(["123 OR metrics.clicks > 0"], "campaign_ids")
+
+
 def test_validate_limit_rejects_non_integer_values():
   with pytest.raises(ToolError, match="limit must be an integer"):
     validate_limit("25")

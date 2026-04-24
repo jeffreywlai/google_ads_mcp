@@ -225,7 +225,7 @@ def list_offline_conversion_upload_conversion_action_summaries(
   if conversion_action_ids:
     where_conditions.append(
         f"{summary}.conversion_action_id IN "
-        f"({quote_int_values(conversion_action_ids)})"
+        f"({quote_int_values(conversion_action_ids, "conversion_action_ids")})"
     )
 
   query = f"""

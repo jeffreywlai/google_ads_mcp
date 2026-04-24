@@ -211,8 +211,10 @@ def _audience_resource_name_from_payload(
 ) -> str:
   """Returns a resource name from aliases or ID."""
   resource_name = audience.get("resource_name")
-  if isinstance(resource_name, str) and resource_name:
-    return resource_name
+  if isinstance(resource_name, str):
+    resource_name = resource_name.strip()
+    if resource_name:
+      return resource_name
 
   for alias in sorted(_AUDIENCE_ALIASES_BY_TYPE[audience_type]):
     alias_value = audience.get(alias)
@@ -287,8 +289,12 @@ def _campaign_audience_query(
   normalized_campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
   if not normalized_campaign_ids:
     raise ToolError("campaign_ids must not be empty.")
+  campaign_id_values = quote_int_values(
+      normalized_campaign_ids,
+      "campaign_ids",
+  )
   where_conditions = [
-      f"campaign.id IN ({quote_int_values(normalized_campaign_ids)})",
+      f"campaign.id IN ({campaign_id_values})",
       "campaign_criterion.status != REMOVED",
       "campaign_criterion.type IN "
       f"({quote_enum_values(sorted(_CAMPAIGN_AUDIENCE_TYPES))})",
@@ -470,24 +476,99 @@ def _extract_campaign_criterion_ids(resource_names: list[str]) -> list[str]:
   return [_criterion_id_from_resource_name(name) for name in resource_names]
 
 
-def _operation_successes(resource_names: list[str]) -> list[dict[str, Any]]:
-  """Builds per-operation success entries from mutation resource names."""
-  return [
-      {
-          "index": index,
-          "resource_name": resource_name,
-          "criterion_id": _criterion_id_from_resource_name(resource_name),
-      }
-      for index, resource_name in enumerate(resource_names)
-      if resource_name
+def _partial_failure_indexes_from_value(value: Any) -> list[int]:
+  """Extracts failed operation indexes from a formatted partial failure."""
+  indexes = []
+  if isinstance(value, dict):
+    if isinstance(value.get("index"), int):
+      indexes.append(value["index"])
+    for key in ("field_path_elements", "fieldPathElements"):
+      elements = value.get(key)
+      if isinstance(elements, list):
+        for element in elements:
+          if not isinstance(element, dict):
+            continue
+          if (
+              element.get("field_name") == "operations"
+              or element.get("fieldName") == "operations"
+          ) and isinstance(element.get("index"), int):
+            indexes.append(element["index"])
+    for nested_value in value.values():
+      indexes.extend(_partial_failure_indexes_from_value(nested_value))
+  elif isinstance(value, list):
+    for item in value:
+      indexes.extend(_partial_failure_indexes_from_value(item))
+  return indexes
+
+
+def _partial_failure_indexes(partial_failure_error: Any) -> list[int]:
+  """Returns unique failed operation indexes from partial failure details."""
+  formatted = format_value(partial_failure_error)
+  indexes = _partial_failure_indexes_from_value(formatted)
+  return sorted(set(indexes))
+
+
+def _success_operation_indexes(
+    resource_names: list[str],
+    failed_indexes: list[int],
+    operation_count: int | None = None,
+) -> list[int]:
+  """Maps returned success rows back to submitted operation indexes."""
+  if operation_count is None:
+    return list(range(len(resource_names)))
+  if len(resource_names) == operation_count:
+    return [
+        index
+        for index, resource_name in enumerate(resource_names)
+        if resource_name
+    ]
+  remaining_indexes = [
+      index for index in range(operation_count) if index not in failed_indexes
   ]
+  return remaining_indexes[: len(resource_names)]
+
+
+def _operation_successes(
+    resource_names: list[str],
+    failed_indexes: list[int] | None = None,
+    operation_count: int | None = None,
+) -> list[dict[str, Any]]:
+  """Builds per-operation success entries from mutation resource names."""
+  failed_indexes = failed_indexes or []
+  success_indexes = _success_operation_indexes(
+      resource_names,
+      failed_indexes,
+      operation_count,
+  )
+  successes = []
+  success_position = 0
+  for result_index, resource_name in enumerate(resource_names):
+    if not resource_name:
+      continue
+    if len(resource_names) == operation_count:
+      operation_index = result_index
+    else:
+      operation_index = success_indexes[success_position]
+      success_position += 1
+    successes.append(
+        {
+            "index": operation_index,
+            "resource_name": resource_name,
+            "criterion_id": _criterion_id_from_resource_name(resource_name),
+        }
+    )
+  return successes
 
 
 def _failed_operation_indexes(
     resource_names: list[str],
     operation_count: int | None = None,
+    partial_failure_error: Any = None,
 ) -> list[int]:
   """Returns indexes for operations without a success resource name."""
+  partial_failure_indexes = _partial_failure_indexes(partial_failure_error)
+  if partial_failure_indexes:
+    return partial_failure_indexes
   failed_indexes = [
       index
       for index, resource_name in enumerate(resource_names)
@@ -789,6 +870,12 @@ def diff_campaign_audiences(
       include_negative=include_negative,
       login_customer_id=login_customer_id,
   )
+  source_campaign_id = quote_int_value(
+      source_campaign_id, "source_campaign_id"
+  )
+  target_campaign_id = quote_int_value(
+      target_campaign_id, "target_campaign_id"
+  )
   source_rows = [
       row for row in rows if str(row.get("campaign.id")) == source_campaign_id
   ]
@@ -873,12 +960,18 @@ def add_campaign_audiences(
   ]
   partial_failure_error = _extract_partial_failure(response)
   failed_indexes = _failed_operation_indexes(
-      raw_resource_names, len(operations)
+      raw_resource_names,
+      len(operations),
+      response.partial_failure_error,
   )
   result = {
       "created_criterion_ids": _extract_campaign_criterion_ids(resource_names),
       "resource_names": resource_names,
-      "successes": _operation_successes(raw_resource_names),
+      "successes": _operation_successes(
+          raw_resource_names,
+          failed_indexes,
+          len(operations),
+      ),
       "failures": _partial_failure_entries(
           partial_failure_error,
           failed_indexes,

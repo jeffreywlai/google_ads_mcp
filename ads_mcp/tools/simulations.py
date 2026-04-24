@@ -97,7 +97,7 @@ def list_campaign_simulations(
   where_conditions = []
   if campaign_ids:
     where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
     )
   if simulation_type:
     where_conditions.append(
@@ -167,7 +167,7 @@ def list_ad_group_simulations(
   where_conditions = []
   if ad_group_ids:
     where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
+        f"ad_group.id IN ({quote_int_values(ad_group_ids, "ad_group_ids")})"
     )
   if simulation_type:
     where_conditions.append(
@@ -240,7 +240,7 @@ def list_ad_group_criterion_simulations(
   if criterion_ids:
     where_conditions.append(
         "ad_group_criterion.criterion_id IN "
-        f"({quote_int_values(criterion_ids)})"
+        f"({quote_int_values(criterion_ids, "criterion_ids")})"
     )
 
   query = f"""

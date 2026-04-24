@@ -103,7 +103,7 @@ def get_campaign_context(
   if cached_context is not None:
     return cached_context
 
-  campaign_id_filter = quote_int_values(unique_campaign_ids)
+  campaign_id_filter = quote_int_values(unique_campaign_ids, "campaign_ids")
   status_rows = run_gaql_query(
       f"""
       SELECT

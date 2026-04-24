@@ -156,7 +156,7 @@ def list_recommendations(
     )
   if campaign_ids:
     where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
     )
   if not include_dismissed:
     where_conditions.append("recommendation.dismissed = FALSE")

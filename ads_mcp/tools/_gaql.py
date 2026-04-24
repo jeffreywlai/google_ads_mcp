@@ -964,11 +964,11 @@ def preprocess_gaql_query(query: str) -> str:
   return _append_omit_unselected_resource_names_parameter(query)
 
 
-def quote_int_values(values: list[str]) -> str:
+def quote_int_values(values: list[str], field_name: str = "values") -> str:
   """Formats integer-like values for an IN clause."""
   quoted_values = []
-  for value in normalize_list_arg(values, "values"):
-    quoted_values.append(quote_int_value(value, "values"))
+  for value in normalize_list_arg(values, field_name):
+    quoted_values.append(quote_int_value(value, field_name))
   return ", ".join(quoted_values)
 
 

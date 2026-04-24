@@ -78,13 +78,14 @@ def list_asset_group_assets(
   if date_range:
     where_conditions.append(segments_date_condition(date_range))
   if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+    campaign_id_values = quote_int_values(campaign_ids, "campaign_ids")
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
   if asset_group_ids:
-    where_conditions.append(
-        f"asset_group.id IN ({quote_int_values(asset_group_ids)})"
+    asset_group_id_values = quote_int_values(
+        asset_group_ids,
+        "asset_group_ids",
     )
+    where_conditions.append(f"asset_group.id IN ({asset_group_id_values})")
 
   query = f"""
       SELECT
@@ -157,13 +158,14 @@ def list_asset_group_top_combinations(
 
   where_conditions = []
   if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+    campaign_id_values = quote_int_values(campaign_ids, "campaign_ids")
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
   if asset_group_ids:
-    where_conditions.append(
-        f"asset_group.id IN ({quote_int_values(asset_group_ids)})"
+    asset_group_id_values = quote_int_values(
+        asset_group_ids,
+        "asset_group_ids",
     )
+    where_conditions.append(f"asset_group.id IN ({asset_group_id_values})")
 
   query = f"""
       SELECT
@@ -225,7 +227,7 @@ def list_performance_max_placements(
   where_conditions = [segments_date_condition(date_range)]
   if campaign_ids:
     where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+        f"campaign.id IN ({quote_int_values(campaign_ids, "campaign_ids")})"
     )
   if placement_types:
     where_conditions.append(

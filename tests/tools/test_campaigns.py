@@ -456,6 +456,79 @@ class TestAddCampaignAudiences:
         }
     ]
 
+  def test_adds_campaign_audiences_maps_partial_failure_indexes(
+      self, mock_ads_client
+  ):
+    campaign_service = mock.Mock()
+    criterion_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "CampaignService": campaign_service,
+        "CampaignCriterionService": criterion_service,
+    }[name]
+    campaign_service.campaign_path.return_value = "customers/123/campaigns/111"
+
+    def get_type(name):
+      assert name == "CampaignCriterionOperation"
+      operation = mock.Mock()
+      operation.create = mock.Mock()
+      return operation
+
+    mock_ads_client.get_type.side_effect = get_type
+
+    response = criterion_service.mutate_campaign_criteria.return_value
+    response.results = [
+        mock.Mock(resource_name="customers/123/campaignCriteria/111~7002")
+    ]
+    response.partial_failure_error = {
+        "code": 3,
+        "message": "Bad first audience",
+        "details": [
+            {
+                "errors": [
+                    {
+                        "location": {
+                            "fieldPathElements": [
+                                {"fieldName": "operations", "index": 0}
+                            ]
+                        }
+                    }
+                ]
+            }
+        ],
+    }
+
+    result = campaigns.add_campaign_audiences(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        [
+            {"type": "USER_INTEREST", "user_interest_id": 90206},
+            {"type": "USER_INTEREST", "user_interest_id": 90207},
+        ],
+    )
+
+    assert result["failures"] == [
+        {"code": 3, "reason": "Bad first audience", "indexes": [0]}
+    ]
+    assert result["successes"] == [
+        {
+            "index": 1,
+            "resource_name": "customers/123/campaignCriteria/111~7002",
+            "criterion_id": "7002",
+        }
+    ]
+
+  def test_adds_campaign_audiences_rejects_blank_resource_name(
+      self, mock_ads_client
+  ):
+    with pytest.raises(ToolError, match="resource_name must be a non-empty"):
+      campaigns.add_campaign_audiences(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          [{"type": "USER_INTEREST", "resource_name": "   "}],
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
   def test_diff_campaign_audiences_returns_copy_ready_payloads(self):
     rows = [
         {
@@ -492,6 +565,39 @@ class TestAddCampaignAudiences:
             "negative": False,
         }
     ]
+    assert result["missing_count"] == 1
+
+  def test_diff_campaign_audiences_normalizes_campaign_ids(self):
+    rows = [
+        {
+            "campaign.id": "111",
+            "campaign_criterion.type": "USER_INTEREST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_interest.user_interest_category": (
+                f"customers/{CUSTOMER_ID}/userInterests/90206"
+            ),
+        },
+        {
+            "campaign.id": "222",
+            "campaign_criterion.type": "USER_LIST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_list.user_list": (
+                f"customers/{CUSTOMER_ID}/userLists/99"
+            ),
+        },
+    ]
+    with mock.patch(
+        "ads_mcp.tools.campaigns._read_campaign_audiences",
+        return_value=rows,
+    ):
+      result = campaigns.diff_campaign_audiences(
+          CUSTOMER_ID,
+          " 00111 ",
+          "00222",
+      )
+
+    assert result["source_campaign_id"] == "111"
+    assert result["target_campaign_id"] == "222"
     assert result["missing_count"] == 1
 
   def test_rejects_invalid_audience_type(self, mock_ads_client):
