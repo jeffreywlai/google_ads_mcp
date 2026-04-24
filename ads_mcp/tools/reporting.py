@@ -30,6 +30,7 @@ from ads_mcp.tools._gaql import date_range_label
 from ads_mcp.tools._gaql import gaql_quote_string
 from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools._gaql import validate_limit
@@ -133,6 +134,66 @@ def _append_campaign_ad_group_filters(
     where_conditions.append(
         f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
     )
+
+
+def _single_campaign_id_filter(
+    campaign_ids: list[str] | str | None,
+    tool_name: str,
+) -> tuple[list[Any], str]:
+  """Returns normalized IDs and a required single-campaign equality filter."""
+  normalized_campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
+  if len(normalized_campaign_ids) != 1:
+    raise ToolError(
+        f"{tool_name} requires exactly one campaign_id in campaign_ids."
+    )
+  campaign_id_filter = quote_int_value(
+      normalized_campaign_ids[0],
+      "campaign_ids",
+  )
+  return normalized_campaign_ids, f"campaign.id = {campaign_id_filter}"
+
+
+def _single_shopping_product_campaign_filter(
+    customer_id: str,
+    campaign_ids: list[str] | str | None,
+    tool_name: str,
+) -> tuple[list[Any], str]:
+  """Returns a required shopping_product.campaign equality filter."""
+  normalized_campaign_ids, _ = _single_campaign_id_filter(
+      campaign_ids,
+      tool_name,
+  )
+  campaign_id = quote_int_value(normalized_campaign_ids[0], "campaign_ids")
+  campaign_resource_name = f"customers/{customer_id}/campaigns/{campaign_id}"
+  campaign_filter = "shopping_product.campaign = " + gaql_quote_string(
+      campaign_resource_name
+  )
+  return (
+      normalized_campaign_ids,
+      campaign_filter,
+  )
+
+
+def _shopping_product_ad_group_filter(
+    customer_id: str,
+    ad_group_ids: list[str] | str | None,
+    tool_name: str,
+) -> tuple[list[Any], str | None]:
+  """Returns an optional shopping_product.ad_group equality filter."""
+  normalized_ad_group_ids = normalize_list_arg(ad_group_ids, "ad_group_ids")
+  if not normalized_ad_group_ids:
+    return normalized_ad_group_ids, None
+  if len(normalized_ad_group_ids) != 1:
+    raise ToolError(
+        f"{tool_name} requires exactly one ad_group_id in ad_group_ids "
+        "when filtering Shopping products by ad group."
+    )
+  ad_group_id = quote_int_value(normalized_ad_group_ids[0], "ad_group_ids")
+  return (
+      normalized_ad_group_ids,
+      "shopping_product.ad_group = "
+      f"{gaql_quote_string(f'customers/{customer_id}/adGroups/{ad_group_id}')}",
+  )
 
 
 def _limited_rows_response(
@@ -2456,12 +2517,23 @@ def list_final_url_expansion_assets(
       A paginated dict containing final URL expansion asset rows.
   """
   validate_limit(limit)
+  try:
+    _, campaign_filter = _single_campaign_id_filter(
+        campaign_ids,
+        "list_final_url_expansion_assets",
+    )
+  except ToolError as exc:
+    raise ToolError(
+        "list_final_url_expansion_assets requires exactly one campaign_id "
+        "in campaign_ids because Google Ads requires "
+        "final_url_expansion_asset_view to be filtered by a single campaign."
+    ) from exc
 
   where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions.append(campaign_filter)
+  where_conditions.append(
+      "campaign.advertising_channel_type = PERFORMANCE_MAX"
+  )
   if asset_group_ids:
     where_conditions.append(
         f"asset_group.id IN ({quote_int_values(asset_group_ids)})"
@@ -2778,29 +2850,37 @@ def summarize_shopping_product_status(
   """
   validate_limit(row_limit)
   validate_limit(top_issue_products_limit)
+  normalized_campaign_ids, campaign_filter = (
+      _single_shopping_product_campaign_filter(
+          customer_id,
+          campaign_ids,
+          "summarize_shopping_product_status",
+      )
+  )
+  _, ad_group_filter = _shopping_product_ad_group_filter(
+      customer_id,
+      ad_group_ids,
+      "summarize_shopping_product_status",
+  )
 
   normalized_date_range = date_range_label(date_range)
-  where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range), campaign_filter]
+  if ad_group_filter:
+    where_conditions.append(ad_group_filter)
   if statuses:
     statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
 
+  ad_group_select = (
+      "ad_group.id,\n        ad_group.name," if ad_group_filter else ""
+  )
   query = f"""
       SELECT
         campaign.id,
         campaign.name,
-        ad_group.id,
-        ad_group.name,
+        {ad_group_select}
         shopping_product.item_id,
         shopping_product.title,
         shopping_product.brand,
@@ -2856,6 +2936,7 @@ def summarize_shopping_product_status(
       ),
       "top_issue_products": issue_products,
       "top_issue_products_limit": top_issue_products_limit,
+      "campaign_ids": normalized_campaign_ids,
       "campaign_context": get_campaign_context(
           customer_id,
           _campaign_ids_from_rows(rows),
@@ -2892,28 +2973,34 @@ def list_shopping_product_status(
       A paginated dict containing Shopping product health rows.
   """
   validate_limit(limit)
+  _, campaign_filter = _single_shopping_product_campaign_filter(
+      customer_id,
+      campaign_ids,
+      "list_shopping_product_status",
+  )
+  _, ad_group_filter = _shopping_product_ad_group_filter(
+      customer_id,
+      ad_group_ids,
+      "list_shopping_product_status",
+  )
 
-  where_conditions = [segments_date_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range), campaign_filter]
+  if ad_group_filter:
+    where_conditions.append(ad_group_filter)
   if statuses:
     statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
 
+  ad_group_select = (
+      "ad_group.id,\n        ad_group.name," if ad_group_filter else ""
+  )
   query = f"""
       SELECT
         campaign.id,
         campaign.name,
-        ad_group.id,
-        ad_group.name,
+        {ad_group_select}
         shopping_product.item_id,
         shopping_product.title,
         shopping_product.brand,

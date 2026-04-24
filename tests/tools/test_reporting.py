@@ -495,6 +495,7 @@ def test_list_final_url_expansion_assets_builds_query():
     }
     reporting.list_final_url_expansion_assets(
         CUSTOMER_ID,
+        campaign_ids=["111"],
         asset_group_ids=["222"],
         statuses=["ENABLED"],
         field_types=["FINAL_URL"],
@@ -505,7 +506,23 @@ def test_list_final_url_expansion_assets_builds_query():
   assert "final_url_expansion_asset_view.final_url" in query
   assert "final_url_expansion_asset_view.status IN (ENABLED)" in query
   assert "final_url_expansion_asset_view.field_type IN (FINAL_URL)" in query
+  assert "campaign.id = 111" in query
+  assert "campaign.advertising_channel_type = PERFORMANCE_MAX" in query
   assert "asset_group.id IN (222)" in query
+
+
+@pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
+def test_list_final_url_expansion_assets_requires_single_campaign(
+    campaign_ids,
+):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one campaign_id"):
+      reporting.list_final_url_expansion_assets(
+          CUSTOMER_ID,
+          campaign_ids=campaign_ids,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_targeting_expansion_performance_builds_query():
@@ -647,6 +664,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
     ):
       result = reporting.summarize_shopping_product_status(
           CUSTOMER_ID,
+          campaign_ids=["111"],
           statuses=["LIMITED", "ELIGIBLE"],
           date_range="last_30_days",
           row_limit=500,
@@ -655,6 +673,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
 
   query = mock_run.call_args.args[0]
   assert "FROM shopping_product" in query
+  assert "shopping_product.campaign = 'customers/123/campaigns/111'" in query
   assert "shopping_product.status IN (LIMITED, ELIGIBLE)" in query
   assert "shopping_product.issues" in query
   assert "LIMIT 500" in query
@@ -668,6 +687,21 @@ def test_summarize_shopping_product_status_builds_compact_summary():
       {"issue_type": "PRICE_MISMATCH", "issue_count": 1}
   ]
   assert result["top_issue_products"] == [rows[0]]
+  assert result["campaign_ids"] == ["111"]
+
+
+@pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
+def test_summarize_shopping_product_status_requires_single_campaign(
+    campaign_ids,
+):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one campaign_id"):
+      reporting.summarize_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=campaign_ids,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_shopping_product_status_builds_paginated_query():
@@ -686,16 +720,42 @@ def test_list_shopping_product_status_builds_paginated_query():
 
   query = mock_run.call_args.kwargs["query"]
   assert "FROM shopping_product" in query
-  assert "campaign.id IN (111)" in query
-  assert "ad_group.id IN (222)" in query
+  assert "shopping_product.campaign = 'customers/123/campaigns/111'" in query
+  assert "shopping_product.ad_group = 'customers/123/adGroups/222'" in query
   assert "shopping_product.status IN (NOT_ELIGIBLE)" in query
   assert "shopping_product.issues" in query
+
+
+@pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
+def test_list_shopping_product_status_requires_single_campaign(campaign_ids):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one campaign_id"):
+      reporting.list_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=campaign_ids,
+      )
+
+  mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("ad_group_ids", [["222", "333"]])
+def test_list_shopping_product_status_requires_single_ad_group(ad_group_ids):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one ad_group_id"):
+      reporting.list_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=["111"],
+          ad_group_ids=ad_group_ids,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_shopping_product_status_rejects_bad_status_filter():
   with pytest.raises(ToolError, match="Invalid statuses"):
     reporting.list_shopping_product_status(
         CUSTOMER_ID,
+        campaign_ids=["111"],
         statuses=["NOT_ELIGIBLE) OR metrics.clicks > 0"],
     )
 
