@@ -19,16 +19,13 @@ from typing import Any
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import merge_single_and_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
-from ads_mcp.tools._gaql import validate_date_range
+from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import run_gaql_query_page
-
-
-def _date_range_condition(date_range: str) -> str:
-  return f"segments.date DURING {validate_date_range(date_range)}"
 
 
 performance_max_tool = ads_read_tool(mcp, tags={"performance_max"})
@@ -36,23 +33,20 @@ performance_max_tool = ads_read_tool(mcp, tags={"performance_max"})
 
 def _merge_ids(
     single_id: str | None,
-    multiple_ids: list[str] | None,
+    multiple_ids: list[str] | str | None,
+    field_name: str,
 ) -> list[str] | None:
-  if single_id:
-    if multiple_ids:
-      return [single_id, *multiple_ids]
-    return [single_id]
-  return multiple_ids
+  return merge_single_and_list_arg(single_id, multiple_ids, field_name)
 
 
 @performance_max_tool
 def list_asset_group_assets(
     customer_id: str,
     campaign_id: str | None = None,
-    campaign_ids: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
     asset_group_id: str | None = None,
-    asset_group_ids: list[str] | None = None,
-    date_range: str | None = None,
+    asset_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] | None = None,
     limit: int = 50,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -75,12 +69,14 @@ def list_asset_group_assets(
       A dict containing asset group asset diagnostics.
   """
   validate_limit(limit)
-  campaign_ids = _merge_ids(campaign_id, campaign_ids)
-  asset_group_ids = _merge_ids(asset_group_id, asset_group_ids)
+  campaign_ids = _merge_ids(campaign_id, campaign_ids, "campaign_ids")
+  asset_group_ids = _merge_ids(
+      asset_group_id, asset_group_ids, "asset_group_ids"
+  )
 
   where_conditions = ["asset_group_asset.status != REMOVED"]
   if date_range:
-    where_conditions.append(_date_range_condition(date_range))
+    where_conditions.append(segments_date_condition(date_range))
   if campaign_ids:
     where_conditions.append(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"
@@ -131,9 +127,9 @@ def list_asset_group_assets(
 def list_asset_group_top_combinations(
     customer_id: str,
     campaign_id: str | None = None,
-    campaign_ids: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
     asset_group_id: str | None = None,
-    asset_group_ids: list[str] | None = None,
+    asset_group_ids: list[str] | str | None = None,
     limit: int = 25,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -154,8 +150,10 @@ def list_asset_group_top_combinations(
       A dict containing top asset combination rows.
   """
   validate_limit(limit)
-  campaign_ids = _merge_ids(campaign_id, campaign_ids)
-  asset_group_ids = _merge_ids(asset_group_id, asset_group_ids)
+  campaign_ids = _merge_ids(campaign_id, campaign_ids, "campaign_ids")
+  asset_group_ids = _merge_ids(
+      asset_group_id, asset_group_ids, "asset_group_ids"
+  )
 
   where_conditions = []
   if campaign_ids:
@@ -199,9 +197,9 @@ def list_asset_group_top_combinations(
 def list_performance_max_placements(
     customer_id: str,
     campaign_id: str | None = None,
-    campaign_ids: list[str] | None = None,
-    placement_types: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    placement_types: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 500,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -222,9 +220,9 @@ def list_performance_max_placements(
       A dict containing Performance Max placement rows.
   """
   validate_limit(limit)
-  campaign_ids = _merge_ids(campaign_id, campaign_ids)
+  campaign_ids = _merge_ids(campaign_id, campaign_ids, "campaign_ids")
 
-  where_conditions = [_date_range_condition(date_range)]
+  where_conditions = [segments_date_condition(date_range)]
   if campaign_ids:
     where_conditions.append(
         f"campaign.id IN ({quote_int_values(campaign_ids)})"

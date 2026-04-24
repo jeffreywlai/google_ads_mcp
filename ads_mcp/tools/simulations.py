@@ -21,6 +21,7 @@ from fastmcp.exceptions import ToolError
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
@@ -51,8 +52,10 @@ def _selected_point_fields(
 ) -> list[str]:
   if simulation_type is None:
     return []
+  if not isinstance(simulation_type, str) or not simulation_type.strip():
+    raise ToolError("simulation_type must be a non-empty string.")
 
-  normalized_type = simulation_type.upper()
+  normalized_type = simulation_type.strip().upper()
   if normalized_type not in allowed_fields:
     raise ToolError(
         "Unsupported simulation_type. Use one of: "
@@ -67,7 +70,7 @@ simulation_tool = ads_read_tool(mcp, tags={"simulations"})
 @simulation_tool
 def list_campaign_simulations(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
     simulation_type: str | None = None,
     limit: int = 25,
     page_token: str | None = None,
@@ -98,7 +101,7 @@ def list_campaign_simulations(
     )
   if simulation_type:
     where_conditions.append(
-        f"campaign_simulation.type = {simulation_type.upper()}"
+        f"campaign_simulation.type = {simulation_type.strip().upper()}"
     )
 
   select_fields = [
@@ -137,7 +140,7 @@ def list_campaign_simulations(
 @simulation_tool
 def list_ad_group_simulations(
     customer_id: str,
-    ad_group_ids: list[str] | None = None,
+    ad_group_ids: list[str] | str | None = None,
     simulation_type: str | None = None,
     limit: int = 25,
     page_token: str | None = None,
@@ -168,7 +171,7 @@ def list_ad_group_simulations(
     )
   if simulation_type:
     where_conditions.append(
-        f"ad_group_simulation.type = {simulation_type.upper()}"
+        f"ad_group_simulation.type = {simulation_type.strip().upper()}"
     )
 
   select_fields = [
@@ -210,7 +213,7 @@ def list_ad_group_simulations(
 def list_ad_group_criterion_simulations(
     customer_id: str,
     ad_group_id: str | None = None,
-    criterion_ids: list[str] | None = None,
+    criterion_ids: list[str] | str | None = None,
     limit: int = 25,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -232,7 +235,8 @@ def list_ad_group_criterion_simulations(
 
   where_conditions = []
   if ad_group_id:
-    where_conditions.append(f"ad_group.id = {int(ad_group_id)}")
+    ad_group_id_filter = quote_int_value(ad_group_id, "ad_group_id")
+    where_conditions.append(f"ad_group.id = {ad_group_id_filter}")
   if criterion_ids:
     where_conditions.append(
         "ad_group_criterion.criterion_id IN "

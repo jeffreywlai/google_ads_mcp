@@ -256,6 +256,18 @@ class TestUpdateCampaignTargetingSetting:
 
 class TestAddCampaignAudiences:
 
+  @pytest.mark.parametrize("campaign_ids", ["", [], "[]"])
+  def test_list_campaign_audiences_rejects_empty_campaign_ids(
+      self, campaign_ids
+  ):
+    with mock.patch(
+        "ads_mcp.tools.campaigns.run_gaql_query_page"
+    ) as mock_query:
+      with pytest.raises(ToolError, match="campaign_ids must not be empty"):
+        campaigns.list_campaign_audiences(CUSTOMER_ID, campaign_ids)
+
+    mock_query.assert_not_called()
+
   def test_adds_campaign_audiences_with_partial_failure_enabled(
       self, mock_ads_client
   ):
@@ -309,6 +321,14 @@ class TestAddCampaignAudiences:
         "resource_names": [
             "customers/123/campaignCriteria/111~7001",
         ],
+        "successes": [
+            {
+                "index": 0,
+                "resource_name": "customers/123/campaignCriteria/111~7001",
+                "criterion_id": "7001",
+            }
+        ],
+        "failures": [{"code": 3, "reason": "Bad audience", "indexes": [1]}],
         "partial_failure_error": {"code": 3, "message": "Bad audience"},
     }
     criterion_service.mutate_campaign_criteria.assert_called_once()
@@ -328,6 +348,151 @@ class TestAddCampaignAudiences:
         operations[1].create.custom_audience.custom_audience
         == "customers/123/customAudiences/789"
     )
+
+  def test_adds_campaign_audiences_accepts_aliases_and_negative(
+      self, mock_ads_client
+  ):
+    campaign_service = mock.Mock()
+    criterion_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "CampaignService": campaign_service,
+        "CampaignCriterionService": criterion_service,
+    }[name]
+    campaign_service.campaign_path.return_value = "customers/123/campaigns/111"
+
+    operation = mock.Mock()
+    operation.create = mock.Mock()
+    mock_ads_client.get_type.return_value = operation
+    response = criterion_service.mutate_campaign_criteria.return_value
+    response.results = [
+        mock.Mock(resource_name="customers/123/campaignCriteria/111~7002")
+    ]
+    response.partial_failure_error = None
+
+    result = campaigns.add_campaign_audiences(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        [
+            {
+                "type": "USER_INTEREST",
+                "user_interest_id": 90206,
+                "negative": True,
+            }
+        ],
+    )
+
+    assert result["created_criterion_ids"] == ["7002"]
+    assert operation.create.negative is True
+    assert (
+        operation.create.user_interest.user_interest_category
+        == f"customers/{CUSTOMER_ID}/userInterests/90206"
+    )
+
+  @pytest.mark.parametrize("audience_id", [True, 1.9])
+  def test_adds_campaign_audiences_rejects_non_integer_aliases(
+      self,
+      mock_ads_client,
+      audience_id,
+  ):
+    with pytest.raises(ToolError, match="must be an integer string"):
+      campaigns.add_campaign_audiences(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          [
+              {
+                  "type": "USER_INTEREST",
+                  "user_interest_id": audience_id,
+              }
+          ],
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
+  def test_adds_campaign_audiences_omits_empty_partial_failure_results(
+      self, mock_ads_client
+  ):
+    campaign_service = mock.Mock()
+    criterion_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "CampaignService": campaign_service,
+        "CampaignCriterionService": criterion_service,
+    }[name]
+    campaign_service.campaign_path.return_value = "customers/123/campaigns/111"
+
+    operation = mock.Mock()
+    operation.create = mock.Mock()
+    mock_ads_client.get_type.return_value = operation
+    response = criterion_service.mutate_campaign_criteria.return_value
+    response.results = [
+        mock.Mock(resource_name=""),
+        mock.Mock(resource_name="customers/123/campaignCriteria/111~7002"),
+    ]
+    response.partial_failure_error = None
+
+    result = campaigns.add_campaign_audiences(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        [
+            {
+                "type": "USER_INTEREST",
+                "user_interest_id": 90206,
+            },
+            {
+                "type": "USER_INTEREST",
+                "user_interest_id": 90207,
+            },
+        ],
+    )
+
+    assert result["resource_names"] == [
+        "customers/123/campaignCriteria/111~7002"
+    ]
+    assert result["created_criterion_ids"] == ["7002"]
+    assert result["successes"] == [
+        {
+            "index": 1,
+            "resource_name": "customers/123/campaignCriteria/111~7002",
+            "criterion_id": "7002",
+        }
+    ]
+
+  def test_diff_campaign_audiences_returns_copy_ready_payloads(self):
+    rows = [
+        {
+            "campaign.id": CAMPAIGN_ID,
+            "campaign_criterion.type": "USER_INTEREST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_interest.user_interest_category": (
+                f"customers/{CUSTOMER_ID}/userInterests/90206"
+            ),
+        },
+        {
+            "campaign.id": "222",
+            "campaign_criterion.type": "USER_LIST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_list.user_list": (
+                f"customers/{CUSTOMER_ID}/userLists/99"
+            ),
+        },
+    ]
+    with mock.patch(
+        "ads_mcp.tools.campaigns._read_campaign_audiences",
+        return_value=rows,
+    ):
+      result = campaigns.diff_campaign_audiences(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          "222",
+      )
+
+    assert result["missing_in_target"] == [
+        {
+            "type": "USER_INTEREST",
+            "resource_name": f"customers/{CUSTOMER_ID}/userInterests/90206",
+            "negative": False,
+        }
+    ]
+    assert result["missing_count"] == 1
 
   def test_rejects_invalid_audience_type(self, mock_ads_client):
     with pytest.raises(ToolError, match="Invalid audiences\\[0\\].type"):
@@ -355,7 +520,20 @@ class TestAddCampaignAudiences:
 
 class TestRemoveCampaignAudiences:
 
-  def test_removes_campaign_audiences_by_criterion_id(self, mock_ads_client):
+  @pytest.mark.parametrize(
+      ("criterion_ids", "expected_ids"),
+      [
+          (["7001", "7002"], ["7001", "7002"]),
+          ("7001", ["7001"]),
+          ("7001,7002", ["7001", "7002"]),
+      ],
+  )
+  def test_removes_campaign_audiences_by_criterion_id(
+      self,
+      mock_ads_client,
+      criterion_ids,
+      expected_ids,
+  ):
     criterion_service = mock.Mock()
     mock_ads_client.get_service.return_value = criterion_service
     criterion_service.campaign_criterion_path.side_effect = (
@@ -377,27 +555,45 @@ class TestRemoveCampaignAudiences:
 
     response = criterion_service.mutate_campaign_criteria.return_value
     response.results = [
-        mock.Mock(resource_name="customers/123/campaignCriteria/111~7001"),
-        mock.Mock(resource_name="customers/123/campaignCriteria/111~7002"),
+        mock.Mock(resource_name=f"customers/123/campaignCriteria/111~{value}")
+        for value in expected_ids
     ]
 
     result = campaigns.remove_campaign_audiences(
         CUSTOMER_ID,
         CAMPAIGN_ID,
-        ["7001", "7002"],
+        criterion_ids,
     )
 
     assert result == {
         "removed_resource_names": [
-            "customers/123/campaignCriteria/111~7001",
-            "customers/123/campaignCriteria/111~7002",
+            f"customers/123/campaignCriteria/111~{value}"
+            for value in expected_ids
         ]
     }
-    assert (
-        operations[0].remove
-        == "customers/1234567890/campaignCriteria/111~7001"
-    )
-    assert (
-        operations[1].remove
-        == "customers/1234567890/campaignCriteria/111~7002"
-    )
+    assert [operation.remove for operation in operations] == [
+        f"customers/1234567890/campaignCriteria/111~{value}"
+        for value in expected_ids
+    ]
+
+  @pytest.mark.parametrize(
+      "criterion_ids",
+      [
+          "333 OR metrics.clicks > 0",
+          ["333", "333"],
+          "333,333",
+      ],
+  )
+  def test_removes_campaign_audiences_rejects_bad_criterion_ids(
+      self,
+      mock_ads_client,
+      criterion_ids,
+  ):
+    with pytest.raises(ToolError, match="criterion_ids must"):
+      campaigns.remove_campaign_audiences(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          criterion_ids,
+      )
+
+    mock_ads_client.get_service.assert_not_called()

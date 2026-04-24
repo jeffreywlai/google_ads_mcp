@@ -20,6 +20,7 @@ from unittest import mock
 import os
 
 from ads_mcp.tools import api
+from google.ads.googleads.errors import GoogleAdsException
 from google.protobuf.field_mask_pb2 import FieldMask
 import proto
 import pytest
@@ -66,11 +67,101 @@ def reset_ads_client():
                 " omit_unselected_resource_names=true"
             ),
         ),
+        (
+            "SELECT campaign.id FROM campaign;",
+            (
+                "SELECT campaign.id FROM campaign PARAMETERS"
+                " omit_unselected_resource_names=true"
+            ),
+        ),
+        (
+            "SELECT campaign.id FROM campaign PARAMETERS include_drafts=true;",
+            (
+                "SELECT campaign.id FROM campaign PARAMETERS"
+                " include_drafts=true, omit_unselected_resource_names=true"
+            ),
+        ),
     ],
 )
 def test_preprocess_gaql(query, expected):
   """Tests the preprocess_gaql function."""
   assert api.preprocess_gaql(query) == expected
+
+
+def test_preprocess_gaql_rewrites_unsupported_during_range(mocker):
+  mocker.patch(
+      "ads_mcp.tools._gaql._literal_date_bounds",
+      return_value=(
+          __import__("datetime").date(2026, 1, 23),
+          __import__("datetime").date(2026, 4, 22),
+      ),
+  )
+
+  result = api.preprocess_gaql(
+      "SELECT campaign.id FROM campaign "
+      "WHERE segments.date DURING LAST_90_DAYS"
+  )
+
+  assert "segments.date BETWEEN '2026-01-23' AND '2026-04-22'" in result
+
+
+def test_preprocess_gaql_preserves_during_text_inside_string_literals():
+  query = (
+      "SELECT campaign.id FROM campaign "
+      "WHERE campaign.name LIKE '%segments.date DURING LAST_90_DAYS%'"
+  )
+
+  result = api.preprocess_gaql(query)
+
+  assert "'%segments.date DURING LAST_90_DAYS%'" in result
+  assert "segments.date BETWEEN" not in result
+  assert result.endswith("PARAMETERS omit_unselected_resource_names=true")
+
+
+def test_preprocess_gaql_rejects_group_by():
+  with pytest.raises(api.ToolError, match="GAQL does not support aggregate"):
+    api.preprocess_gaql(
+        "SELECT recommendation.type, COUNT(*) FROM recommendation "
+        "GROUP BY recommendation.type"
+    )
+
+
+def test_preprocess_gaql_rejects_or_conditions():
+  with pytest.raises(api.ToolError, match="not OR"):
+    api.preprocess_gaql(
+        "SELECT campaign.id FROM campaign "
+        "WHERE campaign.name LIKE '%A%' OR campaign.name LIKE '%B%'"
+    )
+
+
+def test_preprocess_gaql_allows_or_enum_literal():
+  result = api.preprocess_gaql(
+      "SELECT user_list.resource_name FROM user_list "
+      "WHERE user_list.rule_based_user_list.flexible_rule_user_list"
+      ".inclusive_rule_operator = or"
+  )
+
+  assert "inclusive_rule_operator = OR" in result
+  assert result.startswith("SELECT user_list.resource_name FROM user_list")
+
+
+def test_preprocess_gaql_allows_or_enum_in_list_literal():
+  result = api.preprocess_gaql(
+      "SELECT user_list.resource_name FROM user_list "
+      "WHERE user_list.rule_based_user_list.flexible_rule_user_list"
+      ".inclusive_rule_operator IN (or, and)"
+  )
+
+  assert "inclusive_rule_operator IN (OR, AND)" in result
+
+
+def test_preprocess_gaql_does_not_add_regular_filter_field_to_select():
+  result = api.preprocess_gaql(
+      "SELECT campaign.name FROM campaign WHERE campaign.status = ENABLED"
+  )
+
+  assert "campaign.name FROM campaign" in result
+  assert "campaign.name, campaign.status" not in result
 
 
 def test_format_value():
@@ -95,6 +186,20 @@ def test_format_value():
   # Test with a simple type
   assert api.format_value("string") == "string"
   assert api.format_value(123) == 123
+
+
+def _google_ads_exception(*messages):
+  errors = []
+  for message in messages:
+    error = mock.Mock()
+    error.__str__ = lambda self, message=message: message
+    errors.append(error)
+  return GoogleAdsException(
+      error=mock.Mock(),
+      failure=mock.Mock(errors=errors),
+      call=mock.Mock(),
+      request_id="test",
+  )
 
 
 @mock.patch("ads_mcp.tools.api._load_ads_config", return_value={})
@@ -152,6 +257,145 @@ def test_execute_gaql_applies_max_rows_and_returns_metadata():
     }
 
 
+def test_execute_gaql_accepts_max_results_alias():
+  rows = [{"campaign.id": "1"}, {"campaign.id": "2"}]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    assert api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        max_results=1,
+    ) == {
+        "data": [{"campaign.id": "1"}],
+        "returned_row_count": 1,
+        "total_row_count": 2,
+        "truncated": True,
+        "max_rows_applied": 1,
+    }
+
+
+def test_execute_gaql_warns_on_large_unbounded_result():
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    result = api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        warning_row_threshold=2,
+    )
+
+  assert result["data"] == rows
+  assert result["returned_row_count"] == 3
+  assert result["total_row_count"] == 3
+  assert result["truncated"] is False
+  assert result["warning_row_threshold"] == 2
+  assert "max_rows" in result["token_efficiency_warning"]
+  assert "export_gaql_csv" in result["token_efficiency_warning"]
+
+
+def test_execute_gaql_does_not_warn_at_threshold():
+  rows = [{"campaign.id": "1"}, {"campaign.id": "2"}]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    assert api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        warning_row_threshold=2,
+    ) == {"data": rows}
+
+
+def test_execute_gaql_warning_threshold_can_be_disabled():
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    assert api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        warning_row_threshold=None,
+    ) == {"data": rows}
+
+
+def test_execute_gaql_rejects_non_positive_warning_threshold():
+  with pytest.raises(
+      api.ToolError,
+      match="warning_row_threshold must be greater than 0",
+  ):
+    api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        warning_row_threshold=0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_rows": True}, "max_rows must be an integer"),
+        ({"max_rows": 1.5}, "max_rows must be an integer"),
+        ({"max_results": True}, "max_results must be an integer"),
+        ({"max_results": 1.5}, "max_results must be an integer"),
+        (
+            {"warning_row_threshold": True},
+            "warning_row_threshold must be an integer",
+        ),
+        (
+            {"warning_row_threshold": 1.5},
+            "warning_row_threshold must be an integer",
+        ),
+    ],
+)
+def test_execute_gaql_rejects_non_integer_row_caps(kwargs, message):
+  with pytest.raises(api.ToolError, match=message):
+    api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        **kwargs,
+    )
+
+
+def test_execute_gaql_max_rows_suppresses_unbounded_warning():
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
+    result = api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        max_rows=2,
+        warning_row_threshold=1,
+    )
+
+  assert "token_efficiency_warning" not in result
+  assert result == {
+      "data": [{"campaign.id": "1"}, {"campaign.id": "2"}],
+      "returned_row_count": 2,
+      "total_row_count": 3,
+      "truncated": True,
+      "max_rows_applied": 2,
+  }
+
+
+def test_execute_gaql_rejects_conflicting_row_caps():
+  with pytest.raises(api.ToolError, match="Use only one"):
+    api.execute_gaql(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        max_rows=1,
+        max_results=2,
+    )
+
+
 def test_execute_gaql_rejects_non_positive_max_rows():
   with pytest.raises(api.ToolError, match="max_rows must be greater than 0"):
     api.execute_gaql(
@@ -159,6 +403,105 @@ def test_execute_gaql_rejects_non_positive_max_rows():
         "123",
         max_rows=0,
     )
+
+
+def test_run_gaql_query_retries_structured_transient_google_ads_error():
+  mock_client = mock.Mock()
+  mock_service = mock_client.get_service.return_value
+  transient_error = _google_ads_exception("internal_error: INTERNAL_ERROR")
+  mock_service.search_stream.side_effect = [
+      transient_error,
+      [
+          mock.Mock(
+              results=[mock.Mock()],
+              field_mask=mock.Mock(paths=["campaign.id"]),
+          )
+      ],
+  ]
+
+  with mock.patch(
+      "ads_mcp.tools.api.get_ads_client", return_value=mock_client
+  ):
+    with mock.patch("ads_mcp.tools.api.get_nested_attr", return_value="123"):
+      with mock.patch("ads_mcp.tools.api.time.sleep") as mock_sleep:
+        result = api.run_gaql_query(
+            "SELECT campaign.id FROM campaign",
+            "123",
+        )
+
+  assert result == [{"campaign.id": "123"}]
+  assert mock_service.search_stream.call_count == 2
+  mock_sleep.assert_called_once_with(1)
+
+
+def test_run_gaql_query_does_not_retry_quota_errors():
+  mock_client = mock.Mock()
+  mock_service = mock_client.get_service.return_value
+  quota_error = _google_ads_exception("quota_error: RESOURCE_EXHAUSTED")
+  mock_service.search_stream.side_effect = quota_error
+
+  with mock.patch(
+      "ads_mcp.tools.api.get_ads_client", return_value=mock_client
+  ):
+    with mock.patch("ads_mcp.tools.api.time.sleep") as mock_sleep:
+      with pytest.raises(api.ToolError, match="RESOURCE_EXHAUSTED"):
+        api.run_gaql_query(
+            "SELECT campaign.id FROM campaign",
+            "123",
+        )
+
+  assert mock_service.search_stream.call_count == 1
+  mock_sleep.assert_not_called()
+
+
+def test_run_gaql_query_rejects_bad_enum_before_client_call():
+  with mock.patch("ads_mcp.tools.api.get_ads_client") as mock_get_client:
+    with pytest.raises(
+        api.ToolError,
+        match="Invalid enum literal 'ENABLD' for campaign.status",
+    ):
+      api.run_gaql_query(
+          "SELECT campaign.id FROM campaign " "WHERE campaign.status = ENABLD",
+          "123",
+      )
+
+  mock_get_client.assert_not_called()
+
+
+def test_run_gaql_query_rejects_incompatible_fields_before_client_call():
+  with mock.patch("ads_mcp.tools.api.get_ads_client") as mock_get_client:
+    with pytest.raises(
+        api.ToolError,
+        match="metrics.clicks is not compatible with FROM campaign_criterion",
+    ):
+      api.run_gaql_query(
+          "SELECT campaign_criterion.criterion_id, metrics.clicks "
+          "FROM campaign_criterion",
+          "123",
+      )
+
+  mock_get_client.assert_not_called()
+
+
+def test_run_gaql_query_sends_canonical_enum_filters():
+  mock_client = mock.Mock()
+  mock_service = mock_client.get_service.return_value
+  mock_service.search_stream.return_value = []
+
+  with mock.patch(
+      "ads_mcp.tools.api.get_ads_client",
+      return_value=mock_client,
+  ):
+    assert not api.run_gaql_query(
+        "SELECT campaign.id FROM campaign "
+        "WHERE campaign.status IN ('enabled', paused)",
+        "123",
+    )
+
+  sent_query = mock_service.search_stream.call_args.kwargs["query"]
+  assert "campaign.status IN (ENABLED, PAUSED)" in sent_query
+  assert "campaign.id FROM campaign" in sent_query
+  assert "campaign.id, campaign.status" not in sent_query
 
 
 def test_run_gaql_query_page_returns_rows_and_metadata():
@@ -327,6 +670,17 @@ def test_export_gaql_csv_applies_max_rows(tmp_path):
   assert result["total_row_count"] == 3
   assert result["truncated"] is True
   assert result["max_rows_applied"] == 2
+
+
+@pytest.mark.parametrize("max_rows", [True, 1.5])
+def test_export_gaql_csv_rejects_non_integer_max_rows(max_rows, tmp_path):
+  with pytest.raises(api.ToolError, match="max_rows must be an integer"):
+    api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=str(tmp_path / "out.csv"),
+        max_rows=max_rows,
+    )
 
 
 @mock.patch("ads_mcp.tools.api.Credentials")

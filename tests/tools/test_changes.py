@@ -116,6 +116,34 @@ def test_list_change_events_rejects_dates_older_than_30_days():
     )
 
 
+def test_list_change_events_rejects_future_end_date():
+  start_date = (date.today() - timedelta(days=1)).isoformat()
+  future_end_date = (date.today() + timedelta(days=1)).isoformat()
+
+  with pytest.raises(ToolError, match="dates through today"):
+    changes.list_change_events(
+        CUSTOMER_ID,
+        start_date=start_date,
+        end_date=future_end_date,
+    )
+
+
+def test_change_tools_reject_invalid_dates():
+  with pytest.raises(ToolError, match="start_date must be a YYYY-MM-DD date"):
+    changes.list_change_statuses(
+        CUSTOMER_ID,
+        start_date="not-a-date",
+    )
+
+
+def test_change_tools_reject_non_string_dates():
+  with pytest.raises(ToolError, match="start_date must be a YYYY-MM-DD date"):
+    changes.list_change_statuses(
+        CUSTOMER_ID,
+        start_date=20260401,
+    )
+
+
 def test_list_change_events_defaults_end_date_to_today():
   start_date = (date.today() - timedelta(days=5)).isoformat()
 
@@ -158,3 +186,138 @@ def test_list_change_statuses_defaults_start_date_when_only_end_date_provided():
   query = mock_query.call_args.kwargs["query"]
   assert f"'{expected_start_date} 00:00:00'" in query
   assert f"'{end_date} 23:59:59'" in query
+
+
+def test_get_change_history_extended_stitches_statuses_and_recent_events():
+  today = date.today()
+  start_date = (today - timedelta(days=60)).isoformat()
+  end_date = today.isoformat()
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value={
+          "change_statuses": [{"change_status.resource_name": "x"}],
+          "returned_count": 1,
+          "total_count": 1,
+          "truncated": False,
+      },
+  ) as mock_statuses:
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+        return_value={
+            "change_events": [{"change_event.resource_name": "y"}],
+            "returned_count": 1,
+            "total_count": 1,
+            "total_page_count": 1,
+            "truncated": False,
+            "next_page_token": None,
+            "page_size": 100,
+        },
+    ) as mock_events:
+      result = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          resource_types=["campaign"],
+          start_date=start_date,
+          end_date=end_date,
+      )
+
+  mock_statuses.assert_called_once()
+  event_kwargs = mock_events.call_args.kwargs
+  assert event_kwargs["change_resource_types"] == ["campaign"]
+  assert event_kwargs["start_date"] == (today - timedelta(days=30)).isoformat()
+  assert result["change_statuses"] == [{"change_status.resource_name": "x"}]
+  assert result["recent_change_events"] == [
+      {"change_event.resource_name": "y"}
+  ]
+  assert result["change_event_window"] == {
+      "start_date": (today - timedelta(days=30)).isoformat(),
+      "end_date": end_date,
+  }
+  coverage = result["change_event_coverage"]
+  assert coverage["available"] is True
+  assert coverage["full_requested_range_covered"] is False
+  assert coverage["lookback_days"] == 30
+  assert coverage["api_result_cap"] == 10000
+  assert coverage["unavailable_window"] == {
+      "start_date": start_date,
+      "end_date": (today - timedelta(days=31)).isoformat(),
+  }
+  assert (
+      "Older granular change_event rows are unavailable" in coverage["reason"]
+  )
+
+
+def test_get_change_history_extended_skips_events_when_range_is_too_old():
+  today = date.today()
+  start_date = (today - timedelta(days=90)).isoformat()
+  end_date = (today - timedelta(days=45)).isoformat()
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value={
+          "change_statuses": [],
+          "returned_count": 0,
+          "total_count": 0,
+          "truncated": False,
+      },
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+    ) as mock_events:
+      result = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          start_date=start_date,
+          end_date=end_date,
+      )
+
+  mock_events.assert_not_called()
+  assert result["change_event_window"] is None
+  assert result["recent_change_events"] == []
+  assert result["change_event_coverage"] == {
+      "available": False,
+      "window": None,
+      "full_requested_range_covered": False,
+      "lookback_days": 30,
+      "api_result_cap": 10000,
+      "unavailable_window": {
+          "start_date": start_date,
+          "end_date": end_date,
+      },
+      "reason": (
+          "The requested range does not overlap the Google Ads "
+          "change_event lookback window."
+      ),
+  }
+
+
+def test_get_change_history_extended_marks_events_disabled():
+  today = date.today()
+  start_date = (today - timedelta(days=5)).isoformat()
+  end_date = today.isoformat()
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value={
+          "change_statuses": [],
+          "returned_count": 0,
+          "total_count": 0,
+          "truncated": False,
+      },
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+    ) as mock_events:
+      result = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          start_date=start_date,
+          end_date=end_date,
+          include_recent_events=False,
+      )
+
+  mock_events.assert_not_called()
+  assert result["change_event_coverage"] == {
+      "available": False,
+      "window": None,
+      "full_requested_range_covered": False,
+      "lookback_days": 30,
+      "api_result_cap": 10000,
+      "reason": "include_recent_events is false.",
+  }
+  assert "not requested" in result["coverage_note"]

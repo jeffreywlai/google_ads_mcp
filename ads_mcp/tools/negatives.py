@@ -22,6 +22,10 @@ from google.ads.googleads.errors import GoogleAdsException
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tools._gaql import normalize_list_arg
+from ads_mcp.tools._gaql import preprocess_gaql_query
+from ads_mcp.tools._gaql import quote_int_value
+from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools.api import get_ads_client
 
 
@@ -37,6 +41,24 @@ destructive_negative_tool = ads_mutation_tool(
     tags={"negatives"},
     destructive=True,
 )
+
+
+def _search_stream(ads_service: Any, query: str, customer_id: str) -> Any:
+  """Runs a GAQL search stream after shared local preprocessing."""
+  return ads_service.search_stream(
+      query=preprocess_gaql_query(query),
+      customer_id=customer_id,
+  )
+
+
+def _normalize_criterion_ids(criterion_ids: list[str] | str) -> list[str]:
+  """Normalizes destructive criterion ID inputs to integer strings."""
+  normalized_values = normalize_list_arg(criterion_ids, "criterion_ids")
+  normalized_ids = [
+      quote_int_value(criterion_id, "criterion_ids")
+      for criterion_id in normalized_values
+  ]
+  return require_unique_values(normalized_ids, "criterion_ids")
 
 
 @negative_read_tool
@@ -59,7 +81,7 @@ def list_shared_sets(
   """
 
   try:
-    response = ads_service.search_stream(query=query, customer_id=customer_id)
+    response = _search_stream(ads_service, query, customer_id)
     results = []
     for batch in response:
       for row in batch.results:
@@ -152,7 +174,7 @@ def list_shared_set_keywords(
   """
 
   try:
-    response = ads_service.search_stream(query=query, customer_id=customer_id)
+    response = _search_stream(ads_service, query, customer_id)
     results = []
     for batch in response:
       for row in batch.results:
@@ -216,10 +238,14 @@ def add_shared_set_keywords(
 def remove_shared_set_keywords(
     customer_id: str,
     shared_set_id: str,
-    criterion_ids: list[str],
+    criterion_ids: list[str] | str,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Removes keywords from a shared negative keyword list by criterion ID."""
+  criterion_ids = _normalize_criterion_ids(criterion_ids)
+  if not criterion_ids:
+    return {"resource_names": []}
+
   ads_client = get_ads_client(login_customer_id)
   shared_criterion_service = ads_client.get_service("SharedCriterionService")
 
@@ -277,7 +303,7 @@ def list_campaign_shared_sets(
     query += f"  AND shared_set.id = {shared_set_id}\n"
 
   try:
-    response = ads_service.search_stream(query=query, customer_id=customer_id)
+    response = _search_stream(ads_service, query, customer_id)
     results = []
     for batch in response:
       for row in batch.results:
@@ -387,7 +413,7 @@ def list_campaign_negative_keywords(
   """
 
   try:
-    response = ads_service.search_stream(query=query, customer_id=customer_id)
+    response = _search_stream(ads_service, query, customer_id)
     results = []
     for batch in response:
       for row in batch.results:
@@ -452,10 +478,14 @@ def add_campaign_negative_keywords(
 def remove_campaign_negative_keywords(
     customer_id: str,
     campaign_id: str,
-    criterion_ids: list[str],
+    criterion_ids: list[str] | str,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Removes negative keywords from a campaign by criterion ID."""
+  criterion_ids = _normalize_criterion_ids(criterion_ids)
+  if not criterion_ids:
+    return {"resource_names": []}
+
   ads_client = get_ads_client(login_customer_id)
   campaign_criterion_service = ads_client.get_service(
       "CampaignCriterionService"

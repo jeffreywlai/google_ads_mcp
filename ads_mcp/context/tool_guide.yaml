@@ -9,11 +9,17 @@ principles:
   - Use search_tools only when the right tool name is unclear.
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
+  - For execute_gaql, pass max_rows for exploratory reads. If an unbounded raw
+    query returns many rows, the tool includes a token-efficiency warning
+    without truncating the data.
   - Use export_gaql_csv for bulk extracts that would be too large or noisy as
     JSON tool output.
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.
+  - Date-range args accept native GAQL ranges plus LAST_90_DAYS,
+    LAST_180_DAYS, LAST_365_DAYS, LAST_12_MONTHS, LAST_QUARTER, YTD,
+    ALL_TIME, or {start_date, end_date}.
   - Use get_resource_metadata, get_reporting_view_doc, or
     search_google_ads_fields only when query construction is blocked.
   - Mutation tools are hidden by default. Use unlock_mutation_tools only when
@@ -33,12 +39,17 @@ categories:
       list_device_performance: Campaign performance segmented by device.
       list_geographic_performance: Campaign performance segmented by user or geographic location.
       list_impression_share: Campaign impression share metrics.
+      get_campaign_performance: Core campaign performance with optional date, week, month, device, or network segmenting.
+      get_competitive_pressure_report: Impression-share pressure, auction insights, and change history in one compact report.
       get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
       list_keyword_quality_scores: Keyword quality score diagnostics.
       summarize_keyword_quality_scores: Compact keyword quality score distributions without raw row dumps.
       list_rsa_ad_strength: Responsive search ad strength diagnostics.
       list_conversion_actions: Conversion action configuration.
       list_audience_performance: Campaign or ad-group audience performance.
+      get_demographic_performance: Age, gender, and income performance fan-out in one response.
+      get_landing_page_performance: Landing-page or expanded landing-page performance with optional device split.
+      get_ad_inventory: Ad creative inventory with optional text assets and recent performance.
       list_video_enhancements: Video Enhancement rows with source, title, duration, and video-view metrics.
       summarize_cart_data_sales: Compact v24 cart-data revenue, profit, units-sold, and lead/cross-sell summary.
       compare_biddable_vs_all_cart_value: Compare biddable cart metrics with all cart metrics to find value outside optimization goals.
@@ -97,12 +108,16 @@ categories:
       update_campaign_budget: Change daily budget amount.
       update_campaign_targeting_setting: Replace campaign targeting restrictions for dimensions like AUDIENCE or KEYWORD.
       set_campaign_view_through_conversion_optimization: Enable or disable view-through conversion optimization on eligible campaigns.
+      list_campaign_audiences: List campaign-level audience criteria with resource names ready for copying.
+      diff_campaign_audiences: Compare two campaigns and return missing/common/target-only audiences.
       add_campaign_audiences: Add supported campaign audience criteria with partial failure enabled.
+      copy_audiences_between_campaigns: Copy missing campaign audiences from one campaign to another, dry-run by default.
       remove_campaign_audiences: Remove campaign audience criteria by criterion ID.
 
   audiences:
-    summary: Create modern AudienceService audience resources.
+    summary: Discover or create audience resources.
     tools:
+      search_user_interests: Search affinity and in-market user-interest taxonomy nodes with add_campaign_audiences-ready resource names.
       create_audience: Create a customer-scope audience resource with AND/OR include logic and optional user-list exclusions.
 
   ad_groups:
@@ -163,6 +178,7 @@ categories:
     tools:
       list_campaign_search_term_insights: Single-campaign insight categories and search terms.
       list_customer_search_term_insights: Account-level insight categories and search terms.
+      compare_search_terms: Period-over-period search term diff with new, lost, improved, and declined terms.
       analyze_search_terms: Heuristic exact-match and negative keyword candidates.
 
   simulations:
@@ -177,6 +193,7 @@ categories:
     tools:
       list_change_statuses: Changed resources and last change timestamps.
       list_change_events: Granular change events for the last 30 days without full old/new resource blobs.
+      get_change_history_extended: Full-range change_status plus structured coverage metadata and recent granular change_event rows where Google exposes them.
 
   performance_max:
     summary: Performance Max diagnostics.

@@ -42,18 +42,17 @@ CUSTOMER_ID = "1234567890"
 class TestPreprocessGaqlEdgeCases:
 
   def test_empty_query(self):
-    result = api.preprocess_gaql("")
-    assert result == " PARAMETERS omit_unselected_resource_names=true"
+    with pytest.raises(api.ToolError, match="non-empty GAQL"):
+      api.preprocess_gaql("")
 
   def test_whitespace_only_query(self):
-    result = api.preprocess_gaql("   ")
-    assert result == "    PARAMETERS omit_unselected_resource_names=true"
+    with pytest.raises(api.ToolError, match="non-empty GAQL"):
+      api.preprocess_gaql("   ")
 
   def test_query_with_parameters_but_no_include_drafts(self):
     query = "SELECT x FROM y PARAMETERS some_param=true"
     result = api.preprocess_gaql(query)
-    # No include_drafts, so PARAMETERS block doesn't get appended to
-    assert result == query + " PARAMETERS omit_unselected_resource_names=true"
+    assert result == query + ", omit_unselected_resource_names=true"
 
   def test_query_already_has_omit(self):
     query = "SELECT x FROM y" " PARAMETERS omit_unselected_resource_names=true"
@@ -336,19 +335,16 @@ class TestGaqlInterpolation:
 
   @mock.patch("ads_mcp.tools.negatives.get_ads_client")
   def test_shared_set_id_with_spaces(self, mock_get):
-    """shared_set_id with spaces creates malformed query."""
+    """shared_set_id with OR is rejected by local GAQL preflight."""
     client = mock.Mock()
     mock_get.return_value = client
     mock_service = client.get_service.return_value
 
-    # The API should be called with the malformed query - it's the
-    # API's job to reject it, not ours.
     mock_service.search_stream.return_value = []
 
-    result = negatives.list_shared_set_keywords(CUSTOMER_ID, "123 OR 1=1")
-    # Query is constructed but the API would reject it
-    call_args = mock_service.search_stream.call_args
-    assert "123 OR 1=1" in call_args.kwargs["query"]
+    with pytest.raises(ToolError, match="not OR"):
+      negatives.list_shared_set_keywords(CUSTOMER_ID, "123 OR 1=1")
+    mock_service.search_stream.assert_not_called()
 
   @mock.patch("ads_mcp.tools.negatives.get_ads_client")
   def test_campaign_id_with_injection_attempt(self, mock_get):

@@ -17,6 +17,7 @@
 from unittest import mock
 
 from ads_mcp.tools import simulations
+import pytest
 
 
 CUSTOMER_ID = "1234567890"
@@ -83,6 +84,32 @@ def test_list_campaign_simulations_without_type_stays_lightweight():
   assert "cpc_bid_point_list.points" not in query
 
 
+@pytest.mark.parametrize(
+    "tool_call",
+    [
+        lambda: simulations.list_campaign_simulations(
+            CUSTOMER_ID,
+            simulation_type=1,
+        ),
+        lambda: simulations.list_ad_group_simulations(
+            CUSTOMER_ID,
+            simulation_type=1,
+        ),
+    ],
+)
+def test_simulation_type_must_be_string(tool_call):
+  with mock.patch(
+      "ads_mcp.tools.simulations.run_gaql_query_page"
+  ) as mock_query:
+    with pytest.raises(
+        simulations.ToolError,
+        match="simulation_type must be a non-empty string",
+    ):
+      tool_call()
+
+  mock_query.assert_not_called()
+
+
 def test_list_ad_group_criterion_simulations_builds_query():
   with mock.patch(
       "ads_mcp.tools.simulations.run_gaql_query_page",
@@ -104,3 +131,11 @@ def test_list_ad_group_criterion_simulations_builds_query():
   assert "ad_group_criterion.criterion_id IN (444, 555)" in query
   assert "ad_group_criterion_simulation.cpc_bid_point_list.points" in query
   assert result["returned_count"] == 0
+
+
+def test_list_ad_group_criterion_simulations_rejects_bad_ad_group_id():
+  with pytest.raises(simulations.ToolError, match="ad_group_id must"):
+    simulations.list_ad_group_criterion_simulations(
+        CUSTOMER_ID,
+        ad_group_id="abc",
+    )

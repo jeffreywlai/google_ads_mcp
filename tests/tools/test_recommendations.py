@@ -44,7 +44,7 @@ def test_list_recommendations_builds_filtered_query():
   assert "recommendation.type IN (CAMPAIGN_BUDGET, KEYWORD)" in query
   assert "campaign.id IN (111, 222)" in query
   assert "recommendation.dismissed = FALSE" in query
-  assert "recommendation.impact" not in query
+  assert "recommendation.impact" in query
   assert mock_query.call_args.kwargs["page_size"] == 500
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
@@ -225,6 +225,38 @@ def test_apply_recommendations_builds_operations(mock_ads_client):
   ]
 
 
+def test_apply_recommendations_accepts_single_resource_string(
+    mock_ads_client,
+):
+  mock_service = mock_ads_client.get_service.return_value
+  mock_service.apply_recommendation.return_value.results = [
+      mock.Mock(resource_name="customers/123/recommendations/1")
+  ]
+  mock_service.apply_recommendation.return_value.partial_failure_error = None
+
+  with mock.patch(
+      "ads_mcp.tools.recommendations.run_gaql_query",
+      return_value=[
+          {
+              "recommendation.resource_name": "customers/123/recommendations/1",
+              "recommendation.type": "KEYWORD",
+          }
+      ],
+  ):
+    recommendations.apply_recommendations(
+        CUSTOMER_ID,
+        recommendation_resource_names="customers/123/recommendations/1",
+    )
+
+  request = mock_service.apply_recommendation.call_args.kwargs["request"]
+  assert request["operations"] == [
+      {
+          "resource_name": "customers/123/recommendations/1",
+          "keyword": {},
+      }
+  ]
+
+
 def test_apply_recommendations_rejects_unknown_parameter_key():
   with pytest.raises(ToolError, match="unknown resource names"):
     recommendations.apply_recommendations(
@@ -234,6 +266,25 @@ def test_apply_recommendations_rejects_unknown_parameter_key():
             "customers/123/recommendations/2": {"new_budget_amount_micros": 1}
         },
     )
+
+
+def test_apply_recommendations_rejects_duplicate_resource_names(
+    mock_ads_client,
+):
+  with mock.patch(
+      "ads_mcp.tools.recommendations.run_gaql_query"
+  ) as mock_query:
+    with pytest.raises(ToolError, match="must not contain duplicates"):
+      recommendations.apply_recommendations(
+          CUSTOMER_ID,
+          recommendation_resource_names=[
+              "customers/123/recommendations/1",
+              "customers/123/recommendations/1",
+          ],
+      )
+
+  mock_query.assert_not_called()
+  mock_ads_client.get_service.assert_not_called()
 
 
 def test_dismiss_recommendations_calls_service(mock_ads_client):
@@ -254,6 +305,42 @@ def test_dismiss_recommendations_calls_service(mock_ads_client):
   assert request["operations"] == [
       {"resource_name": "customers/123/recommendations/1"}
   ]
+
+
+def test_dismiss_recommendations_accepts_json_stringified_list(
+    mock_ads_client,
+):
+  mock_service = mock_ads_client.get_service.return_value
+  mock_service.dismiss_recommendation.return_value.results = [
+      mock.Mock(resource_name="customers/123/recommendations/1"),
+      mock.Mock(resource_name="customers/123/recommendations/2"),
+  ]
+  mock_service.dismiss_recommendation.return_value.partial_failure_error = None
+
+  recommendations.dismiss_recommendations(
+      CUSTOMER_ID,
+      '["customers/123/recommendations/1", '
+      '"customers/123/recommendations/2"]',
+  )
+
+  request = mock_service.dismiss_recommendation.call_args.kwargs["request"]
+  assert request["operations"] == [
+      {"resource_name": "customers/123/recommendations/1"},
+      {"resource_name": "customers/123/recommendations/2"},
+  ]
+
+
+def test_dismiss_recommendations_rejects_duplicate_resource_names(
+    mock_ads_client,
+):
+  with pytest.raises(ToolError, match="must not contain duplicates"):
+    recommendations.dismiss_recommendations(
+        CUSTOMER_ID,
+        '["customers/123/recommendations/1", '
+        '"customers/123/recommendations/1"]',
+    )
+
+  mock_ads_client.get_service.assert_not_called()
 
 
 def test_create_recommendation_subscription_defaults_to_paused(

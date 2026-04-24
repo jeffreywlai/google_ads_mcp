@@ -20,6 +20,7 @@ import asyncio
 from datetime import date
 from datetime import timedelta
 import inspect
+import os
 import re
 from unittest import mock
 
@@ -28,6 +29,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.server.transforms.visibility import Visibility
 import pytest
+import yaml
 
 from ads_mcp.coordinator import mcp_server
 from ads_mcp.tooling import MUTATE_TAG
@@ -60,6 +62,7 @@ TOOL_MODULES = {
         "list_accessible_accounts",
     ],
     audiences: [
+        "search_user_interests",
         "create_audience",
     ],
     campaigns: [
@@ -67,7 +70,10 @@ TOOL_MODULES = {
         "update_campaign_budget",
         "set_campaign_view_through_conversion_optimization",
         "update_campaign_targeting_setting",
+        "list_campaign_audiences",
+        "diff_campaign_audiences",
         "add_campaign_audiences",
+        "copy_audiences_between_campaigns",
         "remove_campaign_audiences",
     ],
     ad_groups: [
@@ -132,6 +138,7 @@ TOOL_MODULES = {
     search_terms: [
         "list_campaign_search_term_insights",
         "list_customer_search_term_insights",
+        "compare_search_terms",
         "analyze_search_terms",
     ],
     simulations: [
@@ -142,6 +149,7 @@ TOOL_MODULES = {
     changes: [
         "list_change_statuses",
         "list_change_events",
+        "get_change_history_extended",
     ],
     conversions: [
         "list_offline_conversion_upload_client_summaries",
@@ -158,12 +166,17 @@ TOOL_MODULES = {
         "list_device_performance",
         "list_geographic_performance",
         "list_impression_share",
+        "get_campaign_performance",
+        "get_competitive_pressure_report",
         "get_campaign_conversion_goals",
         "list_keyword_quality_scores",
         "summarize_keyword_quality_scores",
         "list_rsa_ad_strength",
         "list_conversion_actions",
         "list_audience_performance",
+        "get_demographic_performance",
+        "get_landing_page_performance",
+        "get_ad_inventory",
         "list_video_enhancements",
         "summarize_cart_data_sales",
         "compare_biddable_vs_all_cart_value",
@@ -187,15 +200,15 @@ TOOL_MODULES = {
 
 
 # ===================================================================
-# 1. Tool registration: all 93 tools exist as callable functions
+# 1. Tool registration: all expected tools exist as callable functions
 # ===================================================================
 
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_93(self):
+  def test_total_tool_count_is_104(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 93, f"Expected 93 tools, found {total}"
+    assert total == 104, f"Expected 104 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -568,7 +581,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 93
+    assert len(registered_tools) == 104
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -583,6 +596,47 @@ class TestFastMcpConfiguration:
         registered_tools["unlock_mutation_tools"].annotations.openWorldHint
         is False
     )
+
+  def test_tool_guide_references_registered_tools(self):
+    registered_tool_names = {
+        tool.name
+        for tool in asyncio.run(mcp_server._local_provider.list_tools())
+    }
+    tool_guide_path = os.path.join(
+        docs.MODULE_DIR,
+        "context/tool_guide.yaml",
+    )
+    with open(tool_guide_path, "r", encoding="utf-8") as tool_guide_file:
+      tool_guide = yaml.safe_load(tool_guide_file)
+
+    guide_tool_names = {
+        tool_name
+        for category in tool_guide["categories"].values()
+        for tool_name in category.get("tools", {})
+    }
+    missing_tools = sorted(guide_tool_names - registered_tool_names)
+    undocumented_tools = sorted(registered_tool_names - guide_tool_names)
+
+    assert not missing_tools
+    assert not undocumented_tools
+
+  def test_get_tool_guide_returns_structured_content_through_client(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "get_tool_guide",
+            {"topic": "gaql"},
+        )
+
+      assert set(result.structured_content) == {
+          "guide",
+          "matched_category_count",
+          "topic",
+      }
+      assert result.structured_content["topic"] == "gaql"
+      assert result.structured_content["matched_category_count"] >= 1
+
+    asyncio.run(_run())
 
   def test_bm25_search_and_default_visibility_transforms_configured(self):
     transforms = mcp_server._transforms
@@ -655,6 +709,26 @@ class TestFastMcpConfiguration:
     assert "get_resource_metadata" in public_tool_names
     assert "search_google_ads_fields" in public_tool_names
     assert "apply_recommendations" not in public_tool_names
+
+  def test_tool_visibility_profile_output_schema_is_specific(self):
+    tools = {
+        tool.name: tool
+        for tool in asyncio.run(mcp_server._local_provider.list_tools())
+    }
+    schema = tools["get_tool_visibility_profile"].output_schema
+
+    assert schema["type"] == "object"
+    assert schema["properties"]["mutation_tools_unlocked"] == {
+        "type": "boolean"
+    }
+    assert schema["properties"]["session_rules"] == {
+        "type": "array",
+        "items": {"type": "object"},
+    }
+    assert set(schema["required"]) == {
+        "mutation_tools_unlocked",
+        "session_rules",
+    }
 
   def test_resource_list_includes_live_release_notes(self):
     resources = {
@@ -906,9 +980,9 @@ class TestFastMcpConfiguration:
         )
 
         assert populated.structured_content["result"][0]["name"] == (
-            "list_change_events"
+            "get_change_history_extended"
         )
-        assert populated.data[0].name == "list_change_events"
+        assert populated.data[0].name == "get_change_history_extended"
         assert populated.data[0].workflow == "changes"
         assert empty.structured_content == {"result": []}
         assert empty.data == []
@@ -990,7 +1064,11 @@ class TestFastMcpConfiguration:
             "workflow": "reporting",
             "summary": "Executes a GAQL query to get reporting data.",
             "required_args": ["query"],
-            "optional_args": ["max_rows"],
+            "optional_args": [
+                "max_rows",
+                "max_results",
+                "warning_row_threshold",
+            ],
         },
         {
             "name": "list_campaign_search_term_insights",

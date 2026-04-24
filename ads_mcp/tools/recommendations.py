@@ -26,9 +26,11 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_string_values
+from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
@@ -93,6 +95,28 @@ def _validate_apply_parameters(
     )
 
 
+def _normalize_recommendation_resource_names(
+    recommendation_resource_names: list[str] | str,
+) -> list[str]:
+  """Normalizes resource-name inputs accepted by recommendation mutations."""
+  resource_names = normalize_list_arg(
+      recommendation_resource_names,
+      "recommendation_resource_names",
+  )
+  if not resource_names:
+    raise ToolError("recommendation_resource_names must not be empty.")
+
+  normalized_resource_names = []
+  for resource_name in resource_names:
+    if not isinstance(resource_name, str) or not resource_name.strip():
+      raise ToolError("recommendation_resource_names must contain strings.")
+    normalized_resource_names.append(resource_name.strip())
+  return require_unique_values(
+      normalized_resource_names,
+      "recommendation_resource_names",
+  )
+
+
 recommendation_read_tool = ads_read_tool(mcp, tags={"optimization"})
 recommendation_tool = ads_mutation_tool(mcp, tags={"optimization"})
 
@@ -100,8 +124,8 @@ recommendation_tool = ads_mutation_tool(mcp, tags={"optimization"})
 @recommendation_read_tool
 def list_recommendations(
     customer_id: str,
-    recommendation_types: list[str] | None = None,
-    campaign_ids: list[str] | None = None,
+    recommendation_types: list[str] | str | None = None,
+    campaign_ids: list[str] | str | None = None,
     include_dismissed: bool = False,
     limit: int = 500,
     page_token: str | None = None,
@@ -142,6 +166,7 @@ def list_recommendations(
         recommendation.resource_name,
         recommendation.type,
         recommendation.dismissed,
+        recommendation.impact,
         campaign.id,
         campaign.name,
         ad_group.id,
@@ -253,7 +278,7 @@ def get_optimization_score_summary(
 @recommendation_tool
 def apply_recommendations(
     customer_id: str,
-    recommendation_resource_names: list[str],
+    recommendation_resource_names: list[str] | str,
     parameters_by_resource_name: dict[str, dict[str, Any]] | None = None,
     partial_failure: bool = False,
     login_customer_id: str | None = None,
@@ -273,8 +298,9 @@ def apply_recommendations(
   Returns:
       A dict with applied recommendation resource names.
   """
-  if not recommendation_resource_names:
-    raise ToolError("recommendation_resource_names must not be empty.")
+  recommendation_resource_names = _normalize_recommendation_resource_names(
+      recommendation_resource_names
+  )
 
   parameters_by_resource_name = parameters_by_resource_name or {}
   unknown_keys = sorted(
@@ -345,7 +371,7 @@ def apply_recommendations(
 @recommendation_tool
 def dismiss_recommendations(
     customer_id: str,
-    recommendation_resource_names: list[str],
+    recommendation_resource_names: list[str] | str,
     partial_failure: bool = False,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -360,8 +386,9 @@ def dismiss_recommendations(
   Returns:
       A dict with dismissed recommendation resource names.
   """
-  if not recommendation_resource_names:
-    raise ToolError("recommendation_resource_names must not be empty.")
+  recommendation_resource_names = _normalize_recommendation_resource_names(
+      recommendation_resource_names
+  )
 
   operations = [
       {"resource_name": resource_name}
@@ -394,7 +421,7 @@ def dismiss_recommendations(
 @recommendation_read_tool
 def list_recommendation_subscriptions(
     customer_id: str,
-    recommendation_types: list[str] | None = None,
+    recommendation_types: list[str] | str | None = None,
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,

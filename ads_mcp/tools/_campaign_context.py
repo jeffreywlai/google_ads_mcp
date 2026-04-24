@@ -19,8 +19,9 @@ from copy import deepcopy
 import time
 from typing import Any
 
+from ads_mcp.tools._gaql import date_range_label
 from ads_mcp.tools._gaql import quote_int_values
-from ads_mcp.tools._gaql import validate_date_range
+from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools.api import run_gaql_query
 
 
@@ -36,13 +37,17 @@ def _campaign_context_cache_key(
     customer_id: str,
     campaign_ids: list[str],
     login_customer_id: str | None,
-    spend_date_range: str,
+    spend_date_range: str | dict[str, str],
 ) -> tuple[str, str | None, str, tuple[str, ...]]:
   """Builds a cache key for campaign context reads."""
   return (
       customer_id,
       login_customer_id,
-      spend_date_range,
+      (
+          str(dict(spend_date_range))
+          if isinstance(spend_date_range, dict)
+          else spend_date_range
+      ),
       tuple(sorted(set(campaign_ids), key=int)),
   )
 
@@ -79,13 +84,14 @@ def get_campaign_context(
     customer_id: str,
     campaign_ids: list[str],
     login_customer_id: str | None = None,
-    spend_date_range: str = "LAST_30_DAYS",
+    spend_date_range: str | dict[str, str] = "LAST_30_DAYS",
 ) -> dict[str, dict[str, Any]]:
   """Returns campaign status and recent spend keyed by campaign ID."""
   unique_campaign_ids = sorted(set(campaign_ids), key=int)
   if not unique_campaign_ids:
     return {}
-  spend_date_range = validate_date_range(spend_date_range)
+  spend_date_range = date_range_label(spend_date_range)
+  spend_date_condition = segments_date_condition(spend_date_range)
 
   cache_key = _campaign_context_cache_key(
       customer_id,
@@ -118,7 +124,7 @@ def get_campaign_context(
         metrics.cost_micros
       FROM campaign
       WHERE campaign.id IN ({campaign_id_filter})
-        AND segments.date DURING {spend_date_range}
+        {f"AND {spend_date_condition}" if spend_date_condition else ""}
       ORDER BY campaign.id
       """,
       customer_id,
