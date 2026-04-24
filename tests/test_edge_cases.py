@@ -384,14 +384,13 @@ class TestEmptyListOperations:
   def test_remove_empty_criterion_ids(self, mock_get):
     client = mock.Mock()
     mock_get.return_value = client
-    mock_service = client.get_service.return_value
-    mock_response = mock_service.mutate_shared_criteria.return_value
-    mock_response.results = []
 
-    result = negatives.remove_shared_set_keywords(
-        CUSTOMER_ID, "111", criterion_ids=[]
-    )
-    assert result == {"resource_names": []}
+    with pytest.raises(ToolError, match="criterion_ids must not be empty"):
+      negatives.remove_shared_set_keywords(
+          CUSTOMER_ID, "111", criterion_ids=[]
+      )
+
+    client.get_service.assert_not_called()
 
   @mock.patch("ads_mcp.tools.labels.get_ads_client")
   def test_manage_campaign_labels_empty_ids(self, mock_get):
@@ -439,14 +438,13 @@ class TestEmptyListOperations:
   def test_remove_campaign_negatives_empty_list(self, mock_get):
     client = mock.Mock()
     mock_get.return_value = client
-    mock_service = client.get_service.return_value
-    mock_response = mock_service.mutate_campaign_criteria.return_value
-    mock_response.results = []
 
-    result = negatives.remove_campaign_negative_keywords(
-        CUSTOMER_ID, "111", criterion_ids=[]
-    )
-    assert result == {"resource_names": []}
+    with pytest.raises(ToolError, match="criterion_ids must not be empty"):
+      negatives.remove_campaign_negative_keywords(
+          CUSTOMER_ID, "111", criterion_ids=[]
+      )
+
+    client.get_service.assert_not_called()
 
 
 # =========================================================================

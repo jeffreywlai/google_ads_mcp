@@ -2603,14 +2603,14 @@ def list_final_url_expansion_assets(
       asset_group_ids,
       "asset_group_ids",
   )
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         "final_url_expansion_asset_view.status IN "
         f"({quote_enum_values(statuses)})"
     )
+  field_types = _normalize_enum_filters(field_types, "field_types")
   if field_types:
-    field_types = _normalize_enum_filters(field_types, "field_types")
     where_conditions.append(
         "final_url_expansion_asset_view.field_type IN "
         f"({quote_enum_values(field_types)})"
@@ -2944,8 +2944,8 @@ def summarize_shopping_product_status(
   where_conditions = [segments_date_condition(date_range), campaign_filter]
   if ad_group_filter:
     where_conditions.append(ad_group_filter)
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
@@ -3064,8 +3064,8 @@ def list_shopping_product_status(
   where_conditions = [segments_date_condition(date_range), campaign_filter]
   if ad_group_filter:
     where_conditions.append(ad_group_filter)
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
@@ -3132,8 +3132,8 @@ def list_travel_feed_asset_sets(
   validate_limit(limit)
 
   where_conditions = ["asset_set.type = TRAVEL_FEED"]
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"asset_set.status IN ({quote_enum_values(statuses)})"
     )

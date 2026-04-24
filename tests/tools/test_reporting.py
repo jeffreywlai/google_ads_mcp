@@ -511,6 +511,27 @@ def test_list_final_url_expansion_assets_builds_query():
   assert "asset_group.id IN (222)" in query
 
 
+def test_list_final_url_expansion_assets_ignores_empty_string_enum_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_final_url_expansion_assets(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        statuses="[]",
+        field_types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "final_url_expansion_asset_view.status IN ()" not in query
+  assert "final_url_expansion_asset_view.field_type IN ()" not in query
+  assert "final_url_expansion_asset_view.status IN" not in query
+  assert "final_url_expansion_asset_view.field_type IN" not in query
+
+
 @pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
 def test_list_final_url_expansion_assets_requires_single_campaign(
     campaign_ids,
@@ -726,6 +747,40 @@ def test_list_shopping_product_status_builds_paginated_query():
   assert "shopping_product.issues" in query
 
 
+def test_shopping_product_status_tools_ignore_empty_string_status_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    mock_run.return_value = []
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={},
+    ):
+      reporting.summarize_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=["111"],
+          statuses="[]",
+      )
+
+  summary_query = mock_run.call_args.args[0]
+  assert "shopping_product.status IN ()" not in summary_query
+  assert "shopping_product.status IN" not in summary_query
+
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_page:
+    mock_page.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_shopping_product_status(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        statuses="[]",
+    )
+
+  list_query = mock_page.call_args.kwargs["query"]
+  assert "shopping_product.status IN ()" not in list_query
+  assert "shopping_product.status IN" not in list_query
+
+
 @pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
 def test_list_shopping_product_status_requires_single_campaign(campaign_ids):
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
@@ -778,6 +833,23 @@ def test_list_travel_feed_asset_sets_builds_config_query():
   assert "asset_set.status IN (ENABLED)" in query
   assert "asset_set.travel_feed_data.merchant_center_id" in query
   assert "asset_set.travel_feed_data.partner_center_id" in query
+
+
+def test_list_travel_feed_asset_sets_ignores_empty_string_statuses():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_travel_feed_asset_sets(
+        CUSTOMER_ID,
+        statuses="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "asset_set.status IN ()" not in query
+  assert "asset_set.status IN" not in query
 
 
 def test_list_travel_feed_asset_sets_rejects_bad_status_filter():

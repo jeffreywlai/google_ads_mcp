@@ -244,7 +244,7 @@ def remove_shared_set_keywords(
   """Removes keywords from a shared negative keyword list by criterion ID."""
   criterion_ids = _normalize_criterion_ids(criterion_ids)
   if not criterion_ids:
-    return {"resource_names": []}
+    raise ToolError("criterion_ids must not be empty.")
 
   ads_client = get_ads_client(login_customer_id)
   shared_criterion_service = ads_client.get_service("SharedCriterionService")
@@ -484,7 +484,7 @@ def remove_campaign_negative_keywords(
   """Removes negative keywords from a campaign by criterion ID."""
   criterion_ids = _normalize_criterion_ids(criterion_ids)
   if not criterion_ids:
-    return {"resource_names": []}
+    raise ToolError("criterion_ids must not be empty.")
 
   ads_client = get_ads_client(login_customer_id)
   campaign_criterion_service = ads_client.get_service(

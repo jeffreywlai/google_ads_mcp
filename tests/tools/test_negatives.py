@@ -238,6 +238,16 @@ class TestRemoveSharedSetKeywords:
 
     mock_ads_client.get_service.assert_not_called()
 
+  def test_rejects_empty_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="criterion_ids must not be empty"):
+      negatives.remove_shared_set_keywords(
+          CUSTOMER_ID,
+          SHARED_SET_ID,
+          "[]",
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Campaign Shared Sets
@@ -453,6 +463,16 @@ class TestRemoveCampaignNegativeKeywords:
           CUSTOMER_ID,
           CAMPAIGN_ID,
           ["333", "333"],
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
+  def test_rejects_empty_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="criterion_ids must not be empty"):
+      negatives.remove_campaign_negative_keywords(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          "[]",
       )
 
     mock_ads_client.get_service.assert_not_called()
