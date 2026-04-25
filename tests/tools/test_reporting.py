@@ -46,6 +46,33 @@ def test_list_device_performance_builds_campaign_query():
   assert result["total_count"] == 0
 
 
+def test_list_device_performance_accepts_extended_range_and_string_ids(
+    mocker,
+):
+  mocker.patch(
+      "ads_mcp.tools._gaql._literal_date_bounds",
+      return_value=(
+          __import__("datetime").date(2026, 1, 23),
+          __import__("datetime").date(2026, 4, 22),
+      ),
+  )
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_device_performance(
+        CUSTOMER_ID,
+        campaign_ids='["111", "222"]',
+        date_range="LAST_90_DAYS",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.id IN (111, 222)" in query
+  assert "segments.date BETWEEN '2026-01-23' AND '2026-04-22'" in query
+
+
 def test_list_geographic_performance_uses_geographic_view():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
@@ -83,6 +110,77 @@ def test_list_geographic_performance_rejects_empty_string_view():
       ToolError, match="location_view must be a non-empty string"
   ):
     reporting.list_geographic_performance(CUSTOMER_ID, location_view="")
+
+
+def test_get_competitive_pressure_report_bundles_queries_and_changes():
+  pressure_rows = [{"campaign.id": "111", "metrics.cost_micros": 100}]
+  auction_rows = [{"segments.auction_insight_domain": "example.com"}]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      side_effect=[pressure_rows, auction_rows],
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.changes.get_change_history_extended",
+        return_value={"change_statuses": []},
+    ) as mock_changes:
+      result = reporting.get_competitive_pressure_report(
+          CUSTOMER_ID,
+          campaign_ids='["111"]',
+          date_range={"start_date": "2026-02-01", "end_date": "2026-02-28"},
+          trend_limit=10,
+          auction_insight_limit=5,
+      )
+
+  pressure_query = mock_run.call_args_list[0].args[0]
+  auction_query = mock_run.call_args_list[1].args[0]
+  assert "metrics.search_budget_lost_impression_share" in pressure_query
+  assert "segments.date" in pressure_query
+  assert "campaign.id IN (111)" in pressure_query
+  assert "LIMIT 10" in pressure_query
+  assert "segments.auction_insight_domain" in auction_query
+  assert "LIMIT 5" in auction_query
+  mock_changes.assert_called_once()
+  assert mock_changes.call_args.kwargs["start_date"] == "2026-02-01"
+  assert mock_changes.call_args.kwargs["end_date"] == "2026-02-28"
+  assert result["pressure_trend"] == pressure_rows
+  assert result["auction_insights"] == auction_rows
+  assert result["change_history"] == {"change_statuses": []}
+
+
+def test_get_competitive_pressure_report_can_skip_optional_sections():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[],
+  ) as mock_run:
+    result = reporting.get_competitive_pressure_report(
+        CUSTOMER_ID,
+        include_auction_insights=False,
+        include_change_history=False,
+        granularity="none",
+    )
+
+  assert mock_run.call_count == 1
+  assert result["auction_insights"] == []
+  assert result["change_history"] is None
+  assert result["granularity"] == "NONE"
+
+
+def test_get_competitive_pressure_report_all_time_skips_change_call():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.get_change_history_extended",
+    ) as mock_changes:
+      result = reporting.get_competitive_pressure_report(
+          CUSTOMER_ID,
+          date_range="ALL_TIME",
+          include_auction_insights=False,
+      )
+
+  mock_changes.assert_not_called()
+  assert "finite date bounds" in result["change_history"]["coverage_note"]
 
 
 def test_summarize_cart_data_sales_builds_v24_cart_query():
@@ -136,12 +234,27 @@ def test_summarize_cart_data_sales_uses_filter_context_for_non_campaign_group():
       result = reporting.summarize_cart_data_sales(
           CUSTOMER_ID,
           group_by="sold_brand",
-          campaign_ids=["111"],
+          campaign_ids='["111", "222"]',
       )
 
-  mock_context.assert_called_once_with(CUSTOMER_ID, ["111"], None)
+  mock_context.assert_called_once_with(CUSTOMER_ID, ["111", "222"], None)
   assert result["group_by"] == "SOLD_BRAND"
   assert result["campaign_context"] == {"111": {"campaign.name": "Shopping"}}
+
+
+def test_summarize_cart_data_sales_normalizes_comma_string_campaign_ids():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query", return_value=[]):
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={},
+    ) as mock_context:
+      reporting.summarize_cart_data_sales(
+          CUSTOMER_ID,
+          group_by="sold_brand",
+          campaign_ids="111,222",
+      )
+
+  mock_context.assert_called_once_with(CUSTOMER_ID, ["111", "222"], None)
 
 
 def test_summarize_cart_data_sales_rejects_invalid_date_range():
@@ -276,6 +389,23 @@ def test_list_campaign_view_through_optimization_includes_v24_field():
   assert "campaign.advertising_channel_type IN (DEMAND_GEN)" in query
 
 
+def test_list_campaign_view_through_optimization_ignores_empty_channel_types():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_campaign_view_through_optimization(
+        CUSTOMER_ID,
+        advertising_channel_types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.advertising_channel_type IN ()" not in query
+  assert "campaign.advertising_channel_type IN" not in query
+
+
 def test_list_campaign_view_through_optimization_rejects_bad_enum_filter():
   with pytest.raises(ToolError, match="Invalid advertising_channel_types"):
     reporting.list_campaign_view_through_optimization(
@@ -382,6 +512,7 @@ def test_list_final_url_expansion_assets_builds_query():
     }
     reporting.list_final_url_expansion_assets(
         CUSTOMER_ID,
+        campaign_ids=["111"],
         asset_group_ids=["222"],
         statuses=["ENABLED"],
         field_types=["FINAL_URL"],
@@ -392,7 +523,44 @@ def test_list_final_url_expansion_assets_builds_query():
   assert "final_url_expansion_asset_view.final_url" in query
   assert "final_url_expansion_asset_view.status IN (ENABLED)" in query
   assert "final_url_expansion_asset_view.field_type IN (FINAL_URL)" in query
+  assert "campaign.id = 111" in query
+  assert "campaign.advertising_channel_type = PERFORMANCE_MAX" in query
   assert "asset_group.id IN (222)" in query
+
+
+def test_list_final_url_expansion_assets_ignores_empty_string_enum_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_final_url_expansion_assets(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        statuses="[]",
+        field_types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "final_url_expansion_asset_view.status IN ()" not in query
+  assert "final_url_expansion_asset_view.field_type IN ()" not in query
+  assert "final_url_expansion_asset_view.status IN" not in query
+  assert "final_url_expansion_asset_view.field_type IN" not in query
+
+
+@pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
+def test_list_final_url_expansion_assets_requires_single_campaign(
+    campaign_ids,
+):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one campaign_id"):
+      reporting.list_final_url_expansion_assets(
+          CUSTOMER_ID,
+          campaign_ids=campaign_ids,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_targeting_expansion_performance_builds_query():
@@ -437,6 +605,23 @@ def test_list_content_suitability_placements_builds_group_query():
       "(YOUTUBE_VIDEO)"
   ) in query
   assert result["placement_view"] == "GROUP"
+
+
+def test_list_content_suitability_placements_ignores_empty_placement_types():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_content_suitability_placements(
+        CUSTOMER_ID,
+        placement_types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "placement_type IN ()" not in query
+  assert "placement_type IN" not in query
 
 
 def test_list_content_suitability_placements_builds_detail_query():
@@ -534,6 +719,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
     ):
       result = reporting.summarize_shopping_product_status(
           CUSTOMER_ID,
+          campaign_ids=["111"],
           statuses=["LIMITED", "ELIGIBLE"],
           date_range="last_30_days",
           row_limit=500,
@@ -542,6 +728,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
 
   query = mock_run.call_args.args[0]
   assert "FROM shopping_product" in query
+  assert "shopping_product.campaign = 'customers/123/campaigns/111'" in query
   assert "shopping_product.status IN (LIMITED, ELIGIBLE)" in query
   assert "shopping_product.issues" in query
   assert "LIMIT 500" in query
@@ -555,6 +742,21 @@ def test_summarize_shopping_product_status_builds_compact_summary():
       {"issue_type": "PRICE_MISMATCH", "issue_count": 1}
   ]
   assert result["top_issue_products"] == [rows[0]]
+  assert result["campaign_ids"] == ["111"]
+
+
+@pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
+def test_summarize_shopping_product_status_requires_single_campaign(
+    campaign_ids,
+):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one campaign_id"):
+      reporting.summarize_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=campaign_ids,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_shopping_product_status_builds_paginated_query():
@@ -573,16 +775,76 @@ def test_list_shopping_product_status_builds_paginated_query():
 
   query = mock_run.call_args.kwargs["query"]
   assert "FROM shopping_product" in query
-  assert "campaign.id IN (111)" in query
-  assert "ad_group.id IN (222)" in query
+  assert "shopping_product.campaign = 'customers/123/campaigns/111'" in query
+  assert "shopping_product.ad_group = 'customers/123/adGroups/222'" in query
   assert "shopping_product.status IN (NOT_ELIGIBLE)" in query
   assert "shopping_product.issues" in query
+
+
+def test_shopping_product_status_tools_ignore_empty_string_status_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    mock_run.return_value = []
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value={},
+    ):
+      reporting.summarize_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=["111"],
+          statuses="[]",
+      )
+
+  summary_query = mock_run.call_args.args[0]
+  assert "shopping_product.status IN ()" not in summary_query
+  assert "shopping_product.status IN" not in summary_query
+
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_page:
+    mock_page.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_shopping_product_status(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        statuses="[]",
+    )
+
+  list_query = mock_page.call_args.kwargs["query"]
+  assert "shopping_product.status IN ()" not in list_query
+  assert "shopping_product.status IN" not in list_query
+
+
+@pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
+def test_list_shopping_product_status_requires_single_campaign(campaign_ids):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one campaign_id"):
+      reporting.list_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=campaign_ids,
+      )
+
+  mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("ad_group_ids", [["222", "333"]])
+def test_list_shopping_product_status_requires_single_ad_group(ad_group_ids):
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    with pytest.raises(ToolError, match="requires exactly one ad_group_id"):
+      reporting.list_shopping_product_status(
+          CUSTOMER_ID,
+          campaign_ids=["111"],
+          ad_group_ids=ad_group_ids,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_shopping_product_status_rejects_bad_status_filter():
   with pytest.raises(ToolError, match="Invalid statuses"):
     reporting.list_shopping_product_status(
         CUSTOMER_ID,
+        campaign_ids=["111"],
         statuses=["NOT_ELIGIBLE) OR metrics.clicks > 0"],
     )
 
@@ -605,6 +867,23 @@ def test_list_travel_feed_asset_sets_builds_config_query():
   assert "asset_set.status IN (ENABLED)" in query
   assert "asset_set.travel_feed_data.merchant_center_id" in query
   assert "asset_set.travel_feed_data.partner_center_id" in query
+
+
+def test_list_travel_feed_asset_sets_ignores_empty_string_statuses():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_travel_feed_asset_sets(
+        CUSTOMER_ID,
+        statuses="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "asset_set.status IN ()" not in query
+  assert "asset_set.status IN" not in query
 
 
 def test_list_travel_feed_asset_sets_rejects_bad_status_filter():
@@ -666,6 +945,67 @@ def test_list_impression_share_can_include_non_enabled_campaigns():
   assert "campaign.status = ENABLED" not in query
 
 
+def test_get_campaign_performance_builds_segmented_query():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [{"campaign.id": "111"}],
+        "next_page_token": "25",
+        "total_results_count": 26,
+    }
+    result = reporting.get_campaign_performance(
+        CUSTOMER_ID,
+        campaign_ids='["111"]',
+        date_range="LAST_90_DAYS",
+        segment_by=["date", "device"],
+        limit=25,
+        page_token="0",
+        login_customer_id="999",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "FROM campaign" in query
+  assert "segments.date BETWEEN" in query
+  assert "segments.date DURING LAST_90_DAYS" not in query
+  assert "campaign.id IN (111)" in query
+  assert "segments.date" in query
+  assert "segments.device" in query
+  assert "metrics.cost_per_conversion" in query
+  assert (
+      "ORDER BY segments.date, segments.device, metrics.cost_micros DESC"
+      in (query)
+  )
+  assert "LIMIT 25" not in query
+  assert mock_run.call_args.kwargs["page_size"] == 25
+  assert mock_run.call_args.kwargs["page_token"] == "0"
+  assert mock_run.call_args.kwargs["login_customer_id"] == "999"
+  assert result["campaign_performance"] == [{"campaign.id": "111"}]
+  assert result["segment_by"] == ["DATE", "DEVICE"]
+  assert result["truncated"] is True
+
+
+def test_get_campaign_performance_rejects_bad_segment():
+  with pytest.raises(ToolError, match="Invalid segment_by"):
+    reporting.get_campaign_performance(CUSTOMER_ID, segment_by="BAD")
+
+
+def test_get_campaign_performance_ignores_empty_string_list_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.get_campaign_performance(
+        CUSTOMER_ID,
+        campaign_ids="[]",
+        limit=25,
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.id IN ()" not in query
+  assert "campaign.id IN" not in query
+
+
 def test_list_keyword_quality_scores_builds_filtered_query():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
@@ -691,6 +1031,26 @@ def test_list_keyword_quality_scores_builds_filtered_query():
   assert "ad_group_criterion.criterion_id ASC" in query
   assert "LIMIT" not in query
   assert mock_run.call_args.kwargs["page_size"] == 1000
+
+
+def test_list_keyword_quality_scores_ignores_empty_string_list_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_keyword_quality_scores(
+        CUSTOMER_ID,
+        campaign_ids="[]",
+        ad_group_ids="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "campaign.id IN ()" not in query
+  assert "ad_group.id IN ()" not in query
+  assert "campaign.id IN" not in query
+  assert "ad_group.id IN" not in query
 
 
 def test_list_keyword_quality_scores_rejects_invalid_score():
@@ -971,6 +1331,26 @@ def test_list_conversion_actions_builds_filtered_query():
   assert result["returned_count"] == 0
 
 
+def test_list_conversion_actions_ignores_empty_string_enum_filters():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+    }
+    reporting.list_conversion_actions(
+        CUSTOMER_ID,
+        statuses="[]",
+        types="[]",
+    )
+
+  query = mock_run.call_args.kwargs["query"]
+  assert "conversion_action.status IN ()" not in query
+  assert "conversion_action.type IN ()" not in query
+  assert "conversion_action.status IN" not in query
+  assert "conversion_action.type IN" not in query
+
+
 def test_list_audience_performance_campaign_scope_uses_campaign_view():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
@@ -1023,6 +1403,120 @@ def test_list_audience_performance_rejects_ad_group_ids_for_campaign_scope():
         scope="campaign",
         ad_group_ids=["222"],
     )
+
+
+def test_get_demographic_performance_fans_out_selected_views():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      side_effect=[
+          [{"ad_group_criterion.age_range.type": "AGE_RANGE_25_34"}],
+          [{"ad_group_criterion.gender.type": "MALE"}],
+      ],
+  ) as mock_run:
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids='["222"]',
+        demographic_types=["age", "gender"],
+        limit_per_type=12,
+    )
+
+  age_query = mock_run.call_args_list[0].args[0]
+  gender_query = mock_run.call_args_list[1].args[0]
+  assert "FROM age_range_view" in age_query
+  assert "ad_group_criterion.age_range.type" in age_query
+  assert "campaign.id IN (111)" in age_query
+  assert "ad_group.id IN (222)" in age_query
+  assert "LIMIT 12" in age_query
+  assert "FROM gender_view" in gender_query
+  assert result["demographic_types"] == ["AGE", "GENDER"]
+  assert result["returned_counts"] == {"AGE": 1, "GENDER": 1}
+
+
+def test_get_landing_page_performance_uses_expanded_view_and_device():
+  rows = [{"expanded_landing_page_view.expanded_final_url": "https://x.test"}]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    result = reporting.get_landing_page_performance(
+        CUSTOMER_ID,
+        campaign_ids='["111", "222"]',
+        landing_page_view="expanded",
+        segment_by_device=True,
+        limit=15,
+    )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM expanded_landing_page_view" in query
+  assert "expanded_landing_page_view.expanded_final_url" in query
+  assert "segments.device" in query
+  assert "campaign.id IN (111, 222)" in query
+  assert "LIMIT 15" in query
+  assert result["landing_page_performance"] == rows
+  assert result["landing_page_view"] == "EXPANDED"
+  assert result["segment_by_device"] is True
+
+
+def test_get_ad_inventory_can_return_structure_without_metrics_or_text():
+  rows = [{"ad_group_ad.ad.id": "7"}]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    result = reporting.get_ad_inventory(
+        CUSTOMER_ID,
+        campaign_ids=["111"],
+        ad_group_ids=["222"],
+        ad_statuses=["enabled"],
+        ad_types=["responsive_search_ad"],
+        include_metrics=False,
+        include_text_assets=False,
+        limit=20,
+    )
+
+  query = mock_run.call_args.args[0]
+  assert "FROM ad_group_ad" in query
+  assert "campaign.id IN (111)" in query
+  assert "ad_group.id IN (222)" in query
+  assert "ad_group_ad.status IN (ENABLED)" in query
+  assert "ad_group_ad.ad.type IN (RESPONSIVE_SEARCH_AD)" in query
+  assert "metrics.cost_micros" not in query
+  assert "responsive_search_ad.headlines" not in query
+  assert "LIMIT 20" in query
+  assert result["ad_inventory"] == rows
+  assert result["include_metrics"] is False
+
+
+def test_get_ad_inventory_ignores_empty_string_enum_filters():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[],
+  ) as mock_run:
+    reporting.get_ad_inventory(
+        CUSTOMER_ID,
+        ad_statuses="[]",
+        ad_types="[]",
+        include_metrics=False,
+    )
+
+  query = mock_run.call_args.args[0]
+  assert "ad_group_ad.status IN ()" not in query
+  assert "ad_group_ad.ad.type IN ()" not in query
+  assert "ad_group_ad.status IN" not in query
+  assert "ad_group_ad.ad.type IN" not in query
+
+
+def test_get_ad_inventory_validates_date_range_without_metrics():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    with pytest.raises(ToolError, match="Invalid date_range"):
+      reporting.get_ad_inventory(
+          CUSTOMER_ID,
+          date_range="BAD_RANGE",
+          include_metrics=False,
+      )
+
+  mock_run.assert_not_called()
 
 
 def test_list_video_enhancements_builds_filtered_query():

@@ -35,6 +35,7 @@ from fastmcp.server.transforms.visibility import disable_components
 from fastmcp.server.transforms.visibility import enable_components
 from fastmcp.server.transforms.visibility import get_visibility_rules
 from google.ads.googleads.errors import GoogleAdsException
+from pydantic import StrictInt
 
 
 _TEXT_FILE_CACHE: dict[str, tuple[float, str]] = {}
@@ -45,6 +46,23 @@ _LIVE_RELEASE_NOTES_URL = (
     "https://developers.google.com/google-ads/api/docs/release-notes"
 )
 _REMOTE_DOC_USER_AGENT = "Mozilla/5.0"
+_TOOL_GUIDE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "topic": {"type": ["string", "null"]},
+        "guide": {"type": "string"},
+        "matched_category_count": {"type": "integer"},
+    },
+    "required": ["topic", "guide", "matched_category_count"],
+}
+_TOOL_VISIBILITY_PROFILE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "mutation_tools_unlocked": {"type": "boolean"},
+        "session_rules": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": ["mutation_tools_unlocked", "session_rules"],
+}
 
 
 def _read_cached_text(path: str) -> str:
@@ -179,11 +197,20 @@ def _get_view_doc_content(view: str) -> str:
 
 
 doc_tool = local_read_tool(mcp, tags={"docs"})
-tool_guide_tool = local_read_tool(mcp, tags={"docs", "guide"})
+tool_guide_tool = local_read_tool(
+    mcp,
+    tags={"docs", "guide"},
+    output_schema=_TOOL_GUIDE_OUTPUT_SCHEMA,
+)
 ads_field_tool = ads_read_tool(mcp, tags={"docs", "fields", "gaql"})
 visibility_tool = session_control_tool(
     mcp,
     tags={"profiles", "visibility"},
+)
+visibility_profile_tool = session_control_tool(
+    mcp,
+    tags={"profiles", "visibility"},
+    output_schema=_TOOL_VISIBILITY_PROFILE_OUTPUT_SCHEMA,
 )
 
 
@@ -254,7 +281,7 @@ def get_resource_metadata(resource_name: str) -> dict[str, Any]:
 
 
 @tool_guide_tool
-def get_tool_guide(topic: str | None = None) -> str:
+def get_tool_guide(topic: str | None = None) -> dict[str, Any]:
   """Get a compact map of tools and when to use them.
 
   Without a topic, returns the full guide.
@@ -263,7 +290,13 @@ def get_tool_guide(topic: str | None = None) -> str:
   tool_guide_path = os.path.join(MODULE_DIR, "context/tool_guide.yaml")
   content = _read_cached_text(tool_guide_path)
   if not topic:
-    return content
+    guide = _load_cached_yaml(tool_guide_path)
+    categories = guide.get("categories", {}) if isinstance(guide, dict) else {}
+    return {
+        "topic": None,
+        "guide": content,
+        "matched_category_count": len(categories),
+    }
 
   guide = _load_cached_yaml(tool_guide_path)
   filtered_categories = {}
@@ -290,7 +323,11 @@ def get_tool_guide(topic: str | None = None) -> str:
       "principles": guide["principles"],
       "categories": filtered_categories,
   }
-  return yaml.safe_dump(filtered_guide, sort_keys=False)
+  return {
+      "topic": topic,
+      "guide": yaml.safe_dump(filtered_guide, sort_keys=False),
+      "matched_category_count": len(filtered_categories),
+  }
 
 
 @mcp.resource("resource://Google_Ads_API_Reporting_Views")
@@ -340,7 +377,7 @@ def get_reporting_fields_doc(fields: list[str]) -> str:
   return yaml.dump(fields_info)
 
 
-@visibility_tool
+@visibility_profile_tool
 async def get_tool_visibility_profile(
     ctx: Context,
 ) -> dict[str, Any]:
@@ -379,7 +416,7 @@ async def lock_mutation_tools(
 @ads_field_tool
 def search_google_ads_fields(
     query: str,
-    limit: int = 50,
+    limit: StrictInt = 50,
 ) -> dict[str, list[dict[str, Any]]]:
   """Searches live GoogleAdsField metadata to help build GAQL queries.
 
@@ -393,6 +430,8 @@ def search_google_ads_fields(
   """
   if not query.strip():
     raise ToolError("query must not be empty.")
+  if isinstance(limit, bool) or not isinstance(limit, int):
+    raise ToolError("limit must be an integer.")
   if limit <= 0:
     raise ToolError("limit must be greater than 0.")
 

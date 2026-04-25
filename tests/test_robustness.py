@@ -240,10 +240,17 @@ class TestPreprocessGaql:
         "WHERE campaign.name LIKE '%PARAMETERS%'"
     )
     result = preprocess_gaql(query)
-    # Has PARAMETERS in string but no include_drafts, so it should add
-    # a new PARAMETERS clause (current behavior, may be a false positive
-    # but not harmful since only omit_unselected_resource_names is added)
-    assert "omit_unselected_resource_names=true" in result
+    assert "'%PARAMETERS%'" in result
+    assert result.endswith("PARAMETERS omit_unselected_resource_names=true")
+
+  def test_omit_unselected_parameter_in_string_value_false_positive(self):
+    query = (
+        "SELECT campaign.id FROM campaign "
+        "WHERE campaign.name LIKE '%omit_unselected_resource_names%'"
+    )
+    result = preprocess_gaql(query)
+    assert "'%omit_unselected_resource_names%'" in result
+    assert result.endswith("PARAMETERS omit_unselected_resource_names=true")
 
   def test_preserves_existing_query_intact(self):
     query = (
@@ -287,8 +294,8 @@ class TestNegativeKeywordQueries:
     assert "shared_set.name" in query
     assert "shared_set.member_count" in query
     assert "FROM shared_set" in query
-    assert "shared_set.type = 'NEGATIVE_KEYWORDS'" in query
-    assert "shared_set.status = 'ENABLED'" in query
+    assert "shared_set.type = NEGATIVE_KEYWORDS" in query
+    assert "shared_set.status = ENABLED" in query
 
   def test_list_shared_set_keywords_query_fields(self):
     service = self.mock_client.get_service.return_value
@@ -316,7 +323,7 @@ class TestNegativeKeywordQueries:
     assert "campaign_criterion.keyword.text" in query
     assert "campaign_criterion.keyword.match_type" in query
     assert "FROM campaign_criterion" in query
-    assert "campaign_criterion.type = 'KEYWORD'" in query
+    assert "campaign_criterion.type = KEYWORD" in query
     assert "campaign_criterion.negative = TRUE" in query
     assert "campaign.id = 789" in query
 
@@ -333,7 +340,7 @@ class TestNegativeKeywordQueries:
     assert "shared_set.id" in query
     assert "shared_set.name" in query
     assert "FROM campaign_shared_set" in query
-    assert "shared_set.type = 'NEGATIVE_KEYWORDS'" in query
+    assert "shared_set.type = NEGATIVE_KEYWORDS" in query
 
   def test_list_campaign_shared_sets_filters_by_campaign(self):
     service = self.mock_client.get_service.return_value

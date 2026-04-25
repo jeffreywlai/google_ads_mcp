@@ -27,11 +27,24 @@ from google.ads.googleads.v24.enums.types.targeting_dimension import (
 )
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import normalize_list_arg
+from ads_mcp.tools._gaql import preprocess_gaql_query
+from ads_mcp.tools._gaql import quote_int_value
+from ads_mcp.tools._gaql import quote_int_values
+from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import require_unique_values
+from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import run_gaql_query_page
 
 
+campaign_read_tool = ads_read_tool(mcp, tags={"campaigns", "audiences"})
 campaign_tool = ads_mutation_tool(mcp, tags={"campaigns"})
 
 _AUDIENCE_FIELD_BY_TYPE = {
@@ -39,6 +52,30 @@ _AUDIENCE_FIELD_BY_TYPE = {
     "USER_INTEREST": ("user_interest", "user_interest_category"),
     "CUSTOM_AUDIENCE": ("custom_audience", "custom_audience"),
     "COMBINED_AUDIENCE": ("combined_audience", "combined_audience"),
+}
+_AUDIENCE_RESOURCE_COLLECTION_BY_TYPE = {
+    "USER_LIST": "userLists",
+    "USER_INTEREST": "userInterests",
+    "CUSTOM_AUDIENCE": "customAudiences",
+    "COMBINED_AUDIENCE": "combinedAudiences",
+}
+_AUDIENCE_ALIASES_BY_TYPE = {
+    "USER_LIST": {"user_list", "user_list_id"},
+    "USER_INTEREST": {
+        "user_interest",
+        "user_interest_category",
+        "user_interest_id",
+    },
+    "CUSTOM_AUDIENCE": {"custom_audience", "custom_audience_id"},
+    "COMBINED_AUDIENCE": {"combined_audience", "combined_audience_id"},
+}
+_CAMPAIGN_AUDIENCE_TYPES = set(_AUDIENCE_FIELD_BY_TYPE)
+_BASE_AUDIENCE_KEYS = {
+    "type",
+    "resource_name",
+    "bid_modifier",
+    "negative",
+    "id",
 }
 
 
@@ -125,10 +162,209 @@ def _validate_target_restrictions(
 
 def _validate_numeric_id(value: str, field_name: str) -> str:
   """Validates that an ID-like input can be safely treated as an integer."""
+  if isinstance(value, str) and not value.strip().isdigit():
+    raise ToolError(f"{field_name} must be an integer string.")
   try:
-    return str(int(value))
-  except (TypeError, ValueError) as exc:
+    normalized_value = quote_int_value(value, field_name)
+  except ToolError as exc:
     raise ToolError(f"{field_name} must be an integer string.") from exc
+  if normalized_value.startswith("-"):
+    raise ToolError(f"{field_name} must be an integer string.")
+  return normalized_value
+
+
+def _criterion_id_from_resource_name(resource_name: str) -> str:
+  return resource_name.rsplit("~", maxsplit=1)[-1]
+
+
+def _audience_query_field(audience_type: str) -> str:
+  criterion_field, resource_field = _AUDIENCE_FIELD_BY_TYPE[audience_type]
+  return f"campaign_criterion.{criterion_field}.{resource_field}"
+
+
+def _expected_audience_shape(index: int, audience_type: str) -> str:
+  collection = _AUDIENCE_RESOURCE_COLLECTION_BY_TYPE[audience_type]
+  aliases = sorted(_AUDIENCE_ALIASES_BY_TYPE[audience_type] | {"id"})
+  return (
+      f"Expected audiences[{index}] for type={audience_type}: "
+      f'{{"type": "{audience_type}", "resource_name": '
+      f'"customers/<CID>/{collection}/<ID>"}} or one of aliases: '
+      + ", ".join(aliases)
+      + ". Optional fields: bid_modifier, negative."
+  )
+
+
+def _audience_resource_name_from_id(
+    customer_id: str,
+    audience_type: str,
+    audience_id: str,
+) -> str:
+  collection = _AUDIENCE_RESOURCE_COLLECTION_BY_TYPE[audience_type]
+  return f"customers/{customer_id}/{collection}/{audience_id}"
+
+
+def _audience_resource_name_from_payload(
+    customer_id: str,
+    audience_type: str,
+    audience: dict[str, Any],
+    index: int,
+) -> str:
+  """Returns a resource name from aliases or ID."""
+  resource_name = audience.get("resource_name")
+  if isinstance(resource_name, str):
+    resource_name = resource_name.strip()
+    if resource_name:
+      return resource_name
+
+  for alias in sorted(_AUDIENCE_ALIASES_BY_TYPE[audience_type]):
+    alias_value = audience.get(alias)
+    if alias_value in (None, ""):
+      continue
+    if isinstance(alias_value, str) and alias_value.startswith("customers/"):
+      return alias_value
+    audience_id = _validate_numeric_id(
+        alias_value, f"audiences[{index}].{alias}"
+    )
+    return _audience_resource_name_from_id(
+        customer_id, audience_type, audience_id
+    )
+
+  if audience.get("id") not in (None, ""):
+    audience_id = _validate_numeric_id(
+        audience["id"], f"audiences[{index}].id"
+    )
+    return _audience_resource_name_from_id(
+        customer_id, audience_type, audience_id
+    )
+
+  raise ToolError(
+      f"audiences[{index}].resource_name must be a non-empty string. "
+      + _expected_audience_shape(index, audience_type)
+  )
+
+
+def _audience_resource_name_from_row(row: dict[str, Any]) -> str:
+  audience_type = row.get("campaign_criterion.type")
+  if audience_type not in _AUDIENCE_FIELD_BY_TYPE:
+    return ""
+  return row.get(_audience_query_field(audience_type)) or ""
+
+
+def _audience_key(row: dict[str, Any]) -> tuple[str, str, bool]:
+  return (
+      str(row.get("campaign_criterion.type") or ""),
+      _audience_resource_name_from_row(row),
+      bool(row.get("campaign_criterion.negative")),
+  )
+
+
+def _audience_payload_from_row(row: dict[str, Any]) -> dict[str, Any]:
+  """Builds add_campaign_audiences-compatible payload from a GAQL row."""
+  payload = {
+      "type": row.get("campaign_criterion.type"),
+      "resource_name": _audience_resource_name_from_row(row),
+      "negative": bool(row.get("campaign_criterion.negative")),
+  }
+  bid_modifier = row.get("campaign_criterion.bid_modifier")
+  if bid_modifier not in (None, 0):
+    payload["bid_modifier"] = bid_modifier
+  return payload
+
+
+def _audience_rows_by_key(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str, bool], dict[str, Any]]:
+  rows_by_key = {}
+  for row in rows:
+    key = _audience_key(row)
+    if key[1]:
+      rows_by_key[key] = row
+  return rows_by_key
+
+
+def _campaign_audience_query(
+    campaign_ids: list[str] | str,
+    include_negative: bool | None = None,
+) -> str:
+  normalized_campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
+  if not normalized_campaign_ids:
+    raise ToolError("campaign_ids must not be empty.")
+  campaign_id_values = quote_int_values(
+      normalized_campaign_ids,
+      "campaign_ids",
+  )
+  where_conditions = [
+      f"campaign.id IN ({campaign_id_values})",
+      "campaign_criterion.status != REMOVED",
+      "campaign_criterion.type IN "
+      f"({quote_enum_values(sorted(_CAMPAIGN_AUDIENCE_TYPES))})",
+  ]
+  if include_negative is not None:
+    where_conditions.append(
+        "campaign_criterion.negative = "
+        + ("TRUE" if include_negative else "FALSE")
+    )
+
+  audience_fields = [
+      _audience_query_field(audience_type)
+      for audience_type in sorted(_CAMPAIGN_AUDIENCE_TYPES)
+  ]
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      "campaign_criterion.criterion_id",
+      "campaign_criterion.type",
+      "campaign_criterion.status",
+      "campaign_criterion.negative",
+      "campaign_criterion.bid_modifier",
+      *audience_fields,
+  ]
+  return f"""
+      SELECT
+        {", ".join(select_fields)}
+      FROM campaign_criterion
+      {build_where_clause(where_conditions)}
+      ORDER BY campaign.id, campaign_criterion.type,
+        campaign_criterion.criterion_id
+  """
+
+
+def _read_campaign_audiences(
+    customer_id: str,
+    campaign_ids: list[str] | str,
+    include_negative: bool | None = None,
+    login_customer_id: str | None = None,
+) -> list[dict[str, Any]]:
+  return run_gaql_query(
+      _campaign_audience_query(campaign_ids, include_negative),
+      customer_id,
+      login_customer_id,
+  )
+
+
+def _diff_campaign_audience_rows(
+    source_rows: list[dict[str, Any]],
+    target_rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+  target_by_key = _audience_rows_by_key(target_rows)
+  source_by_key = _audience_rows_by_key(source_rows)
+  return {
+      "missing_in_target": [
+          _audience_payload_from_row(row)
+          for key, row in source_by_key.items()
+          if key not in target_by_key
+      ],
+      "common": [
+          _audience_payload_from_row(row)
+          for key, row in source_by_key.items()
+          if key in target_by_key
+      ],
+      "target_only": [
+          _audience_payload_from_row(row)
+          for key, row in target_by_key.items()
+          if key not in source_by_key
+      ],
+  }
 
 
 def _get_campaign_target_restrictions(
@@ -149,7 +385,10 @@ def _get_campaign_target_restrictions(
 
   current_restrictions = {}
   try:
-    response = ads_service.search_stream(query=query, customer_id=customer_id)
+    response = ads_service.search_stream(
+        query=preprocess_gaql_query(query),
+        customer_id=customer_id,
+    )
     for batch in response:
       for row in batch.results:
         for restriction in row.campaign.targeting_setting.target_restrictions:
@@ -164,6 +403,7 @@ def _get_campaign_target_restrictions(
 
 
 def _validate_audience_payload(
+    customer_id: str,
     audiences: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
   """Validates and normalizes audience criterion inputs."""
@@ -173,18 +413,10 @@ def _validate_audience_payload(
     raise ToolError("audiences must not be empty.")
 
   validated = []
-  allowed_keys = {"type", "resource_name", "bid_modifier"}
 
   for index, audience in enumerate(audiences):
     if not isinstance(audience, dict):
       raise ToolError(f"audiences[{index}] must be an object.")
-
-    invalid_keys = sorted(set(audience) - allowed_keys)
-    if invalid_keys:
-      invalid_field_names = ", ".join(invalid_keys)
-      raise ToolError(
-          f"Invalid audiences[{index}] fields: {invalid_field_names}"
-      )
 
     audience_type = audience.get("type")
     if not isinstance(audience_type, str) or not audience_type:
@@ -202,16 +434,30 @@ def _validate_audience_payload(
           f"Invalid audiences[{index}].type: {invalid_audience_type}"
       )
 
-    resource_name = audience.get("resource_name")
-    if not isinstance(resource_name, str) or not resource_name:
+    allowed_keys = (
+        _BASE_AUDIENCE_KEYS | _AUDIENCE_ALIASES_BY_TYPE[audience_type]
+    )
+    invalid_keys = sorted(set(audience) - allowed_keys)
+    if invalid_keys:
+      invalid_field_names = ", ".join(invalid_keys)
       raise ToolError(
-          f"audiences[{index}].resource_name must be a non-empty string."
+          f"Invalid audiences[{index}] fields: {invalid_field_names}. "
+          + _expected_audience_shape(index, audience_type)
       )
 
+    resource_name = _audience_resource_name_from_payload(
+        customer_id,
+        audience_type,
+        audience,
+        index,
+    )
     normalized = {
         "type": audience_type,
         "resource_name": resource_name,
+        "negative": bool(audience.get("negative", False)),
     }
+    if "negative" in audience and not isinstance(audience["negative"], bool):
+      raise ToolError(f"audiences[{index}].negative must be a boolean.")
     if "bid_modifier" in audience:
       bid_modifier = audience["bid_modifier"]
       if isinstance(bid_modifier, bool) or not isinstance(
@@ -227,10 +473,133 @@ def _validate_audience_payload(
 
 def _extract_campaign_criterion_ids(resource_names: list[str]) -> list[str]:
   """Parses criterion IDs from campaign criterion resource names."""
-  return [
-      resource_name.rsplit("~", maxsplit=1)[-1]
-      for resource_name in resource_names
+  return [_criterion_id_from_resource_name(name) for name in resource_names]
+
+
+def _partial_failure_indexes_from_value(value: Any) -> list[int]:
+  """Extracts failed operation indexes from a formatted partial failure."""
+  indexes = []
+  if isinstance(value, dict):
+    if isinstance(value.get("index"), int):
+      indexes.append(value["index"])
+    for key in ("field_path_elements", "fieldPathElements"):
+      elements = value.get(key)
+      if isinstance(elements, list):
+        for element in elements:
+          if not isinstance(element, dict):
+            continue
+          if (
+              element.get("field_name") == "operations"
+              or element.get("fieldName") == "operations"
+          ) and isinstance(element.get("index"), int):
+            indexes.append(element["index"])
+    for nested_value in value.values():
+      indexes.extend(_partial_failure_indexes_from_value(nested_value))
+  elif isinstance(value, list):
+    for item in value:
+      indexes.extend(_partial_failure_indexes_from_value(item))
+  return indexes
+
+
+def _partial_failure_indexes(partial_failure_error: Any) -> list[int]:
+  """Returns unique failed operation indexes from partial failure details."""
+  formatted = format_value(partial_failure_error)
+  indexes = _partial_failure_indexes_from_value(formatted)
+  return sorted(set(indexes))
+
+
+def _success_operation_indexes(
+    resource_names: list[str],
+    failed_indexes: list[int],
+    operation_count: int | None = None,
+) -> list[int]:
+  """Maps returned success rows back to submitted operation indexes."""
+  if operation_count is None:
+    return list(range(len(resource_names)))
+  if len(resource_names) == operation_count:
+    return [
+        index
+        for index, resource_name in enumerate(resource_names)
+        if resource_name
+    ]
+  remaining_indexes = [
+      index for index in range(operation_count) if index not in failed_indexes
   ]
+  return remaining_indexes[: len(resource_names)]
+
+
+def _operation_successes(
+    resource_names: list[str],
+    failed_indexes: list[int] | None = None,
+    operation_count: int | None = None,
+) -> list[dict[str, Any]]:
+  """Builds per-operation success entries from mutation resource names."""
+  failed_indexes = failed_indexes or []
+  success_indexes = _success_operation_indexes(
+      resource_names,
+      failed_indexes,
+      operation_count,
+  )
+  successes = []
+  success_position = 0
+  for result_index, resource_name in enumerate(resource_names):
+    if not resource_name:
+      continue
+    if len(resource_names) == operation_count:
+      operation_index = result_index
+    else:
+      operation_index = success_indexes[success_position]
+      success_position += 1
+    successes.append(
+        {
+            "index": operation_index,
+            "resource_name": resource_name,
+            "criterion_id": _criterion_id_from_resource_name(resource_name),
+        }
+    )
+  return successes
+
+
+def _failed_operation_indexes(
+    resource_names: list[str],
+    operation_count: int | None = None,
+    partial_failure_error: Any = None,
+) -> list[int]:
+  """Returns indexes for operations without a success resource name."""
+  partial_failure_indexes = _partial_failure_indexes(partial_failure_error)
+  if partial_failure_indexes:
+    return partial_failure_indexes
+  failed_indexes = [
+      index
+      for index, resource_name in enumerate(resource_names)
+      if not resource_name
+  ]
+  if operation_count is not None and len(resource_names) < operation_count:
+    failed_indexes.extend(range(len(resource_names), operation_count))
+  return failed_indexes
+
+
+def _partial_failure_entries(
+    partial_failure_error: Any,
+    failed_indexes: list[int] | None = None,
+) -> list[dict[str, Any]]:
+  """Builds a compact failures list while preserving the legacy error key."""
+  if not partial_failure_error:
+    return []
+  failed_indexes = failed_indexes or []
+  if isinstance(partial_failure_error, dict):
+    failure = {}
+    if partial_failure_error.get("message"):
+      failure["reason"] = partial_failure_error["message"]
+    if "code" in partial_failure_error:
+      failure["code"] = partial_failure_error["code"]
+    if failed_indexes:
+      failure["indexes"] = failed_indexes
+    return [failure] if failure else []
+  failure = {"reason": str(partial_failure_error)}
+  if failed_indexes:
+    failure["indexes"] = failed_indexes
+  return [failure]
 
 
 @campaign_tool
@@ -426,6 +795,104 @@ def update_campaign_targeting_setting(
   return result
 
 
+@campaign_read_tool
+def list_campaign_audiences(
+    customer_id: str,
+    campaign_ids: list[str] | str,
+    include_negative: bool | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists campaign-level audience criteria with copy-ready resource names.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Campaign IDs to inspect. Accepts an array, JSON string,
+          comma-separated string, or single ID.
+      include_negative: Optional filter for exclusions (`true`) or positive
+          audiences (`false`). Leave unset to include both.
+      limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing campaign audience rows and pagination metadata.
+  """
+  validate_limit(limit)
+  query = _campaign_audience_query(campaign_ids, include_negative)
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "campaign_audiences",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["copy_ready_audiences"] = [
+      _audience_payload_from_row(row)
+      for row in page["rows"]
+      if _audience_resource_name_from_row(row)
+  ]
+  return result
+
+
+@campaign_read_tool
+def diff_campaign_audiences(
+    customer_id: str,
+    source_campaign_id: str,
+    target_campaign_id: str,
+    include_negative: bool | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Compares campaign audiences and returns copy-ready differences.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      source_campaign_id: Campaign ID to copy from.
+      target_campaign_id: Campaign ID to compare against.
+      include_negative: Optional filter for exclusions (`true`) or positive
+          audiences (`false`). Leave unset to include both.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with missing_in_target, common, and target_only audience payloads.
+  """
+  rows = _read_campaign_audiences(
+      customer_id,
+      [source_campaign_id, target_campaign_id],
+      include_negative=include_negative,
+      login_customer_id=login_customer_id,
+  )
+  source_campaign_id = quote_int_value(
+      source_campaign_id, "source_campaign_id"
+  )
+  target_campaign_id = quote_int_value(
+      target_campaign_id, "target_campaign_id"
+  )
+  source_rows = [
+      row for row in rows if str(row.get("campaign.id")) == source_campaign_id
+  ]
+  target_rows = [
+      row for row in rows if str(row.get("campaign.id")) == target_campaign_id
+  ]
+  diff = _diff_campaign_audience_rows(source_rows, target_rows)
+  return {
+      "source_campaign_id": source_campaign_id,
+      "target_campaign_id": target_campaign_id,
+      "missing_count": len(diff["missing_in_target"]),
+      "common_count": len(diff["common"]),
+      "target_only_count": len(diff["target_only"]),
+      **diff,
+  }
+
+
 @campaign_tool
 def add_campaign_audiences(
     customer_id: str,
@@ -440,13 +907,17 @@ def add_campaign_audiences(
       campaign_id: Campaign ID.
       audiences: Criteria to create. Supported types are USER_LIST,
           USER_INTEREST, CUSTOM_AUDIENCE, and COMBINED_AUDIENCE. Modern
-          AudienceService audience resources are not supported here.
+          AudienceService audience resources are not supported here. Each
+          audience may use resource_name or friendly aliases such as
+          user_interest_id, user_list_id, combined_audience_id, or
+          combined_audience. Set negative=true to create exclusions.
       login_customer_id: Optional manager account ID.
 
   Returns:
-      created_criterion_ids, resource_names, and any partial_failure_error.
+      created_criterion_ids, resource_names, successes, failures, and any
+      partial_failure_error.
   """
-  validated_audiences = _validate_audience_payload(audiences)
+  validated_audiences = _validate_audience_payload(customer_id, audiences)
   ads_client = get_ads_client(login_customer_id)
   campaign_service = ads_client.get_service("CampaignService")
   campaign_criterion_service = ads_client.get_service(
@@ -464,6 +935,8 @@ def add_campaign_audiences(
 
     if "bid_modifier" in audience:
       campaign_criterion.bid_modifier = audience["bid_modifier"]
+    if audience.get("negative"):
+      campaign_criterion.negative = True
 
     criterion_field, resource_field = _AUDIENCE_FIELD_BY_TYPE[audience["type"]]
     criterion_info = getattr(campaign_criterion, criterion_field)
@@ -481,12 +954,29 @@ def add_campaign_audiences(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  resource_names = [result.resource_name for result in response.results]
+  raw_resource_names = [result.resource_name for result in response.results]
+  resource_names = [
+      resource_name for resource_name in raw_resource_names if resource_name
+  ]
+  partial_failure_error = _extract_partial_failure(response)
+  failed_indexes = _failed_operation_indexes(
+      raw_resource_names,
+      len(operations),
+      response.partial_failure_error,
+  )
   result = {
       "created_criterion_ids": _extract_campaign_criterion_ids(resource_names),
       "resource_names": resource_names,
+      "successes": _operation_successes(
+          raw_resource_names,
+          failed_indexes,
+          len(operations),
+      ),
+      "failures": _partial_failure_entries(
+          partial_failure_error,
+          failed_indexes,
+      ),
   }
-  partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
 
@@ -494,10 +984,64 @@ def add_campaign_audiences(
 
 
 @campaign_tool
+def copy_audiences_between_campaigns(
+    customer_id: str,
+    source_campaign_id: str,
+    target_campaign_id: str,
+    include_negative: bool | None = None,
+    dry_run: bool = True,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Copies missing campaign audiences from one campaign to another.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      source_campaign_id: Campaign ID to copy from.
+      target_campaign_id: Campaign ID to copy into.
+      include_negative: Optional filter for exclusions (`true`) or positive
+          audiences (`false`). Leave unset to include both.
+      dry_run: When true, only returns the audiences that would be created.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with the audience diff and mutation result when dry_run=false.
+  """
+  diff = diff_campaign_audiences(
+      customer_id=customer_id,
+      source_campaign_id=source_campaign_id,
+      target_campaign_id=target_campaign_id,
+      include_negative=include_negative,
+      login_customer_id=login_customer_id,
+  )
+  audiences_to_create = diff["missing_in_target"]
+  normalized_source_campaign_id = diff["source_campaign_id"]
+  normalized_target_campaign_id = diff["target_campaign_id"]
+  result = {
+      "source_campaign_id": normalized_source_campaign_id,
+      "target_campaign_id": normalized_target_campaign_id,
+      "dry_run": dry_run,
+      "audiences_to_create": audiences_to_create,
+      "create_count": len(audiences_to_create),
+      "common_count": diff["common_count"],
+      "target_only_count": diff["target_only_count"],
+  }
+  if dry_run or not audiences_to_create:
+    return result
+
+  result["mutation_result"] = add_campaign_audiences(
+      customer_id=customer_id,
+      campaign_id=normalized_target_campaign_id,
+      audiences=audiences_to_create,
+      login_customer_id=login_customer_id,
+  )
+  return result
+
+
+@campaign_tool
 def remove_campaign_audiences(
     customer_id: str,
     campaign_id: str,
-    criterion_ids: list[str],
+    criterion_ids: list[str] | str,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Removes campaign audience criteria by criterion ID.
@@ -511,10 +1055,16 @@ def remove_campaign_audiences(
   Returns:
       removed_resource_names.
   """
-  if not isinstance(criterion_ids, list):
-    raise ToolError("criterion_ids must be a list.")
+  criterion_ids = normalize_list_arg(criterion_ids, "criterion_ids")
   if not criterion_ids:
     raise ToolError("criterion_ids must not be empty.")
+  criterion_ids = require_unique_values(
+      [
+          _validate_numeric_id(criterion_id, "criterion_ids")
+          for criterion_id in criterion_ids
+      ],
+      "criterion_ids",
+  )
 
   ads_client = get_ads_client(login_customer_id)
   campaign_criterion_service = ads_client.get_service(

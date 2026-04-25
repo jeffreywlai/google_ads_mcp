@@ -69,6 +69,16 @@ class TestListSharedSets:
     negatives.list_shared_sets(CUSTOMER_ID, login_customer_id="999")
     mock_ads_client._mock_get.assert_any_call("999")
 
+  def test_normalizes_enum_filters_before_search(self, mock_ads_client):
+    mock_ads_service = mock_ads_client.get_service.return_value
+    mock_ads_service.search_stream.return_value = []
+
+    negatives.list_shared_sets(CUSTOMER_ID)
+
+    sent_query = mock_ads_service.search_stream.call_args.kwargs["query"]
+    assert "shared_set.type = NEGATIVE_KEYWORDS" in sent_query
+    assert "shared_set.status = ENABLED" in sent_query
+
   def test_raises_tool_error_on_api_error(self, mock_ads_client):
     mock_ads_service = mock_ads_client.get_service.return_value
     error = mock.Mock()
@@ -181,7 +191,7 @@ class TestRemoveSharedSetKeywords:
     mock_service = mock_ads_client.get_service.return_value
     mock_response = mock_service.mutate_shared_criteria.return_value
     mock_response.results = [
-        mock.Mock(resource_name=("customers/123/sharedCriteria/111~333"))
+        mock.Mock(resource_name="customers/123/sharedCriteria/111~333")
     ]
 
     result = negatives.remove_shared_set_keywords(
@@ -190,6 +200,53 @@ class TestRemoveSharedSetKeywords:
     assert result == {
         "resource_names": ["customers/123/sharedCriteria/111~333"]
     }
+
+  def test_accepts_single_criterion_id_string(self, mock_ads_client):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_response = mock_service.mutate_shared_criteria.return_value
+    mock_response.results = [
+        mock.Mock(resource_name="customers/123/sharedCriteria/111~333")
+    ]
+    operation = mock.Mock()
+    mock_ads_client.get_type.return_value = operation
+
+    negatives.remove_shared_set_keywords(CUSTOMER_ID, SHARED_SET_ID, "333")
+
+    assert operation.remove == "customers/1234567890/sharedCriteria/111~333"
+    request_operations = mock_service.mutate_shared_criteria.call_args.kwargs[
+        "operations"
+    ]
+    assert request_operations == [operation]
+
+  def test_rejects_malformed_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="criterion_ids must be an integer"):
+      negatives.remove_shared_set_keywords(
+          CUSTOMER_ID,
+          SHARED_SET_ID,
+          "333 OR metrics.clicks > 0",
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
+  def test_rejects_duplicate_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="must not contain duplicates"):
+      negatives.remove_shared_set_keywords(
+          CUSTOMER_ID,
+          SHARED_SET_ID,
+          "333,333",
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
+  def test_rejects_empty_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="criterion_ids must not be empty"):
+      negatives.remove_shared_set_keywords(
+          CUSTOMER_ID,
+          SHARED_SET_ID,
+          "[]",
+      )
+
+    mock_ads_client.get_service.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +371,15 @@ class TestListCampaignNegativeKeywords:
         ]
     }
 
+  def test_normalizes_enum_filters_before_search(self, mock_ads_client):
+    mock_ads_service = mock_ads_client.get_service.return_value
+    mock_ads_service.search_stream.return_value = []
+
+    negatives.list_campaign_negative_keywords(CUSTOMER_ID, CAMPAIGN_ID)
+
+    sent_query = mock_ads_service.search_stream.call_args.kwargs["query"]
+    assert "campaign_criterion.type = KEYWORD" in sent_query
+
 
 class TestAddCampaignNegativeKeywords:
 
@@ -363,3 +429,50 @@ class TestRemoveCampaignNegativeKeywords:
     assert result == {
         "resource_names": ["customers/123/campaignCriteria/222~444"]
     }
+
+  def test_accepts_comma_separated_criterion_ids(self, mock_ads_client):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_response = mock_service.mutate_campaign_criteria.return_value
+    mock_response.results = [
+        mock.Mock(resource_name="customers/123/campaignCriteria/222~333"),
+        mock.Mock(resource_name="customers/123/campaignCriteria/222~444"),
+    ]
+    operations = [mock.Mock(), mock.Mock()]
+    mock_ads_client.get_type.side_effect = operations
+
+    negatives.remove_campaign_negative_keywords(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        "333,444",
+    )
+
+    assert operations[0].remove == (
+        "customers/1234567890/campaignCriteria/222~333"
+    )
+    assert operations[1].remove == (
+        "customers/1234567890/campaignCriteria/222~444"
+    )
+    request_operations = (
+        mock_service.mutate_campaign_criteria.call_args.kwargs["operations"]
+    )
+    assert request_operations == operations
+
+  def test_rejects_duplicate_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="must not contain duplicates"):
+      negatives.remove_campaign_negative_keywords(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          ["333", "333"],
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
+  def test_rejects_empty_criterion_ids(self, mock_ads_client):
+    with pytest.raises(ToolError, match="criterion_ids must not be empty"):
+      negatives.remove_campaign_negative_keywords(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          "[]",
+      )
+
+    mock_ads_client.get_service.assert_not_called()

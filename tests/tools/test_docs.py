@@ -67,7 +67,11 @@ def test_get_reporting_doc(mock_file):
 )
 def test_get_tool_guide(mock_file):
   """Tests get_tool_guide without a topic."""
-  assert docs.get_tool_guide() == "tool content"
+  assert docs.get_tool_guide() == {
+      "topic": None,
+      "guide": "tool content",
+      "matched_category_count": 0,
+  }
   mock_file.assert_called_with(
       os.path.join(docs.MODULE_DIR, "context/tool_guide.yaml"),
       "r",
@@ -194,10 +198,12 @@ categories:
   ):
     result = docs.get_tool_guide("apply")
 
-  assert "optimization:" in result
-  assert "apply_recommendations" in result
-  assert "list_recommendations" not in result
-  assert "docs:" not in result
+  assert result["topic"] == "apply"
+  assert result["matched_category_count"] == 1
+  assert "optimization:" in result["guide"]
+  assert "apply_recommendations" in result["guide"]
+  assert "list_recommendations" not in result["guide"]
+  assert "docs:" not in result["guide"]
 
 
 def test_get_tool_guide_raises_when_topic_missing():
@@ -238,9 +244,11 @@ categories:
   ):
     result = docs.get_tool_guide("negative keywords")
 
-  assert "negatives:" in result
-  assert "list_shared_set_keywords" in result
-  assert "docs:" not in result
+  assert result["topic"] == "negative keywords"
+  assert result["matched_category_count"] == 1
+  assert "negatives:" in result["guide"]
+  assert "list_shared_set_keywords" in result["guide"]
+  assert "docs:" not in result["guide"]
 
 
 @mock.patch("ads_mcp.tools.docs.os.path.getmtime", return_value=123.0)
@@ -381,3 +389,15 @@ def test_search_google_ads_fields(mock_get_ads_client, mock_format_value):
       ]
   }
   mock_service.search_google_ads_fields.assert_called_once()
+
+
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_search_google_ads_fields_rejects_bool_limit(mock_get_ads_client):
+  """Bool is not accepted as an integer limit."""
+  with pytest.raises(ToolError, match="limit must be an integer"):
+    docs.search_google_ads_fields(
+        "SELECT name WHERE name LIKE 'campaign.%'",
+        limit=True,
+    )
+
+  mock_get_ads_client.assert_not_called()

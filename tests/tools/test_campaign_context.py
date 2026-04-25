@@ -56,6 +56,23 @@ def test_get_campaign_context_reuses_cached_rows():
   assert first == second
 
 
+def test_campaign_context_cache_key_canonicalizes_date_range_dicts():
+  first_key = _campaign_context._campaign_context_cache_key(  # pylint: disable=protected-access
+      "123",
+      ["222", "111"],
+      None,
+      {"start_date": "2026-04-01", "end_date": "2026-04-30"},
+  )
+  second_key = _campaign_context._campaign_context_cache_key(  # pylint: disable=protected-access
+      "123",
+      ["111", "222"],
+      None,
+      {"end_date": "2026-04-30", "start_date": "2026-04-01"},
+  )
+
+  assert first_key == second_key
+
+
 def test_get_campaign_context_returns_copied_cached_values():
   status_rows = [
       {

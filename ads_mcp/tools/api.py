@@ -17,11 +17,13 @@
 from collections import OrderedDict
 import csv
 from copy import deepcopy
+import difflib
 import functools
 import importlib.metadata
 import json
 import math
 import os
+import re
 import tempfile
 import time
 from typing import Any
@@ -42,6 +44,9 @@ import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tools._gaql import gaql_quote_string as _gaql_quote_string
+from ads_mcp.tools._gaql import preprocess_gaql_query
+from ads_mcp.utils import MODULE_DIR
 from ads_mcp.utils import ROOT_DIR
 
 
@@ -53,6 +58,9 @@ _PAGED_QUERY_CACHE_MAX_ENTRIES = 2
 _PAGED_QUERY_CACHE: OrderedDict[
     tuple[str, str | None, str], tuple[float, list[dict[str, Any]]]
 ] = OrderedDict()
+_GAQL_FIELD_NAMES_CACHE: tuple[str, ...] | None = None
+_DEFAULT_EXECUTE_GAQL_WARNING_ROW_THRESHOLD = 100
+gaql_quote_string = _gaql_quote_string
 _EXECUTE_GAQL_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -61,9 +69,60 @@ _EXECUTE_GAQL_OUTPUT_SCHEMA = {
         "total_row_count": {"type": "integer"},
         "truncated": {"type": "boolean"},
         "max_rows_applied": {"type": "integer"},
+        "warning_row_threshold": {"type": "integer"},
+        "token_efficiency_warning": {"type": "string"},
     },
     "required": ["data"],
 }
+_KNOWN_FIELD_CORRECTIONS = {
+    "campaign_criterion.audience.audience": "campaign_criterion.audience",
+    "recommendation.impact.base_campaign": "recommendation.campaign",
+}
+_TRANSIENT_GOOGLE_ADS_ERROR_MARKERS = (
+    "DEADLINE_EXCEEDED",
+    "INTERNAL_ERROR",
+    "UNAVAILABLE",
+)
+_NON_RETRYABLE_GOOGLE_ADS_ERROR_MARKERS = (
+    "QUOTA_ERROR",
+    "RESOURCE_EXHAUSTED",
+)
+_GOOGLE_ADS_ERROR_HINTS = (
+    (
+        ("PROHIBITED_RESOURCE_TYPE_IN_SELECT",),
+        True,
+        "The selected field is not compatible with the FROM resource. Use "
+        "get_resource_metadata for that resource or switch to a *_view that "
+        "joins the resources you need.",
+    ),
+    (
+        ("PROHIBITED_SEGMENT", "PROHIBITED_METRIC"),
+        False,
+        "At least one selected metric/segment is incompatible with this "
+        "resource. Drop the incompatible segment or query a more specific "
+        "reporting view.",
+    ),
+    (
+        ("BAD_ENUM_CONSTANT", "DETAILED_DEMOGRAPHIC"),
+        True,
+        "DETAILED_DEMOGRAPHIC is not a CampaignCriterionType. Use "
+        "AGE_RANGE, GENDER, INCOME_RANGE, PARENTAL_STATUS, USER_LIST, "
+        "USER_INTEREST, CUSTOM_AUDIENCE, or COMBINED_AUDIENCE as "
+        "applicable.",
+    ),
+    (
+        ("Metrics cannot be requested for a manager account",),
+        True,
+        "Use the child customer_id for metric queries and pass the manager "
+        "account as login_customer_id.",
+    ),
+    (
+        ("USER_PERMISSION_DENIED", "CUSTOMER_NOT_FOUND"),
+        False,
+        "Call list_accessible_accounts to confirm valid customer IDs, then "
+        "use login_customer_id for manager-account access when needed.",
+    ),
+)
 _EXPORT_GAQL_CSV_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -209,12 +268,122 @@ def list_accessible_accounts() -> list[str]:
 
 
 def preprocess_gaql(query: str) -> str:
-  """Preprocesses a GAQL query to add omit_unselected_resource_names=true."""
-  if "omit_unselected_resource_names" not in query:
-    if "PARAMETERS" in query and "include_drafts" in query:
-      return query + ", omit_unselected_resource_names=true"
-    return query + " PARAMETERS omit_unselected_resource_names=true"
-  return query
+  """Preprocesses GAQL for safer, lower-retry execution."""
+  return preprocess_gaql_query(query)
+
+
+def _load_known_gaql_field_names() -> tuple[str, ...]:
+  """Loads local field metadata for lightweight error suggestions."""
+  global _GAQL_FIELD_NAMES_CACHE
+  if _GAQL_FIELD_NAMES_CACHE is not None:
+    return _GAQL_FIELD_NAMES_CACHE
+
+  fields_path = os.path.join(MODULE_DIR, "context", "fields.yaml")
+  try:
+    with open(fields_path, "r", encoding="utf-8") as f:
+      fields = yaml.safe_load(f) or {}
+  except FileNotFoundError:
+    _GAQL_FIELD_NAMES_CACHE = ()
+    return _GAQL_FIELD_NAMES_CACHE
+
+  _GAQL_FIELD_NAMES_CACHE = tuple(sorted(fields))
+  return _GAQL_FIELD_NAMES_CACHE
+
+
+def _field_suggestions(field_name: str) -> list[str]:
+  if field_name in _KNOWN_FIELD_CORRECTIONS:
+    return [_KNOWN_FIELD_CORRECTIONS[field_name]]
+
+  field_names = _load_known_gaql_field_names()
+  if not field_names:
+    return []
+  return difflib.get_close_matches(
+      field_name,
+      field_names,
+      n=3,
+      cutoff=0.72,
+  )
+
+
+def _format_google_ads_error(error: GoogleAdsException) -> str:
+  """Formats Google Ads errors with common self-recovery hints."""
+  message = "\n".join(str(i) for i in error.failure.errors)
+  hints = []
+
+  unrecognized_field_match = re.search(
+      r"Unrecognized field in the query: '([^']+)'",
+      message,
+  )
+  if unrecognized_field_match:
+    field_name = unrecognized_field_match.group(1)
+    suggestions = _field_suggestions(field_name)
+    if suggestions:
+      hints.append("Did you mean: " + ", ".join(suggestions) + "?")
+    else:
+      hints.append(
+          "Use get_resource_metadata or search_google_ads_fields to find "
+          "valid selectable fields for this FROM resource."
+      )
+
+  referenced_field_match = re.search(
+      r"must be present in SELECT clause: '([^']+)'",
+      message,
+  )
+  if referenced_field_match:
+    hints.append(
+        "Add "
+        f"{referenced_field_match.group(1)} to SELECT; GAQL requires "
+        "filtered or sorted fields to be selected, except core date "
+        "segments."
+    )
+
+  for markers, require_all, hint in _GOOGLE_ADS_ERROR_HINTS:
+    marker_matcher = all if require_all else any
+    if marker_matcher(marker in message for marker in markers):
+      hints.append(hint)
+
+  if not hints:
+    return message
+  return message + "\n\nHints:\n- " + "\n- ".join(hints)
+
+
+def _google_ads_error_text(error: GoogleAdsException) -> str:
+  """Returns searchable text for a GoogleAdsException."""
+  parts = [str(error)]
+  failure = getattr(error, "failure", None)
+  for failure_error in getattr(failure, "errors", ()) or ():
+    parts.append(str(failure_error))
+
+  for attr_name in ("error", "call"):
+    attr_value = getattr(error, attr_name, None)
+    if attr_value:
+      parts.append(str(attr_value))
+
+  return "\n".join(part for part in parts if part)
+
+
+def _is_retryable_google_ads_error(error: GoogleAdsException) -> bool:
+  message = _google_ads_error_text(error)
+  if any(
+      marker in message for marker in _NON_RETRYABLE_GOOGLE_ADS_ERROR_MARKERS
+  ):
+    return False
+  return any(
+      marker in message for marker in _TRANSIENT_GOOGLE_ADS_ERROR_MARKERS
+  )
+
+
+def _validate_optional_positive_int(
+    value: int | None,
+    field_name: str,
+) -> None:
+  """Validates optional positive integer tool arguments."""
+  if value is None:
+    return
+  if isinstance(value, bool) or not isinstance(value, int):
+    raise ToolError(f"{field_name} must be an integer.")
+  if value <= 0:
+    raise ToolError(f"{field_name} must be greater than 0.")
 
 
 def format_value(value: Any) -> Any:
@@ -241,12 +410,6 @@ def format_value(value: Any) -> Any:
     return_value = value
 
   return return_value
-
-
-def gaql_quote_string(value: str) -> str:
-  """Escapes a string literal for use in a GAQL query."""
-  escaped_value = value.replace("\\", "\\\\").replace("'", "\\'")
-  return f"'{escaped_value}'"
 
 
 def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
@@ -383,11 +546,19 @@ def run_gaql_query(
   ads_service: GoogleAdsServiceClient = ads_client.get_service(
       "GoogleAdsService"
   )
-  try:
-    query_res = ads_service.search_stream(query=query, customer_id=customer_id)
-    return gaql_results_to_dicts(query_res)
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+  for attempt in range(3):
+    try:
+      query_res = ads_service.search_stream(
+          query=query,
+          customer_id=customer_id,
+      )
+      return gaql_results_to_dicts(query_res)
+    except GoogleAdsException as e:
+      if attempt == 2 or not _is_retryable_google_ads_error(e):
+        raise ToolError(_format_google_ads_error(e)) from e
+      time.sleep(2**attempt)
+
+  return []
 
 
 def run_gaql_query_page(
@@ -403,8 +574,7 @@ def run_gaql_query_page(
   provides a consistent cursor contract for MCP tools by applying client-side
   paging over the full result set.
   """
-  if page_size <= 0:
-    raise ToolError("page_size must be greater than 0.")
+  _validate_optional_positive_int(page_size, "page_size")
 
   offset = _decode_page_token(page_token)
   rows = _get_cached_page_rows(query, customer_id, login_customer_id)
@@ -446,6 +616,32 @@ def build_paginated_list_response(
   }
 
 
+def _unbounded_gaql_response(
+    rows: list[dict[str, Any]],
+    warning_row_threshold: int | None,
+) -> dict[str, Any]:
+  """Builds an untruncated execute_gaql response with optional warning."""
+  result: dict[str, Any] = {"data": rows}
+  if warning_row_threshold is None or len(rows) <= warning_row_threshold:
+    return result
+
+  result.update(
+      {
+          "returned_row_count": len(rows),
+          "total_row_count": len(rows),
+          "truncated": False,
+          "warning_row_threshold": warning_row_threshold,
+          "token_efficiency_warning": (
+              "Unbounded execute_gaql returned "
+              f"{len(rows)} rows. For token efficiency, rerun with max_rows, "
+              "use a paginated dedicated tool, or call export_gaql_csv for "
+              "bulk extracts."
+          ),
+      }
+  )
+  return result
+
+
 @ads_read_tool(
     mcp,
     tags={"gaql", "reporting"},
@@ -455,6 +651,10 @@ def execute_gaql(
     query: str,
     customer_id: str,
     max_rows: int | None = None,
+    max_results: int | None = None,
+    warning_row_threshold: int | None = (
+        _DEFAULT_EXECUTE_GAQL_WARNING_ROW_THRESHOLD
+    ),
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Executes a GAQL query to get reporting data.
@@ -463,9 +663,25 @@ def execute_gaql(
   tool is unclear, then use get_tool_guide, get_gaql_doc, and
   get_reporting_view_doc when a custom GAQL query is needed. Set max_rows to
   cap large result sets without changing the underlying GAQL query.
+  max_results is accepted as an alias for max_rows. Unbounded calls are not
+  truncated, but responses above warning_row_threshold include token-efficiency
+  metadata that recommends max_rows, dedicated paginated tools, or
+  export_gaql_csv.
   """
-  if max_rows is not None and max_rows <= 0:
-    raise ToolError("max_rows must be greater than 0.")
+  _validate_optional_positive_int(max_rows, "max_rows")
+  _validate_optional_positive_int(max_results, "max_results")
+  _validate_optional_positive_int(
+      warning_row_threshold,
+      "warning_row_threshold",
+  )
+  if (
+      max_rows is not None
+      and max_results is not None
+      and max_rows != max_results
+  ):
+    raise ToolError("Use only one of max_rows or max_results.")
+  if max_rows is None:
+    max_rows = max_results
 
   rows = run_gaql_query(
       query=query,
@@ -473,7 +689,7 @@ def execute_gaql(
       login_customer_id=login_customer_id,
   )
   if max_rows is None:
-    return {"data": rows}
+    return _unbounded_gaql_response(rows, warning_row_threshold)
 
   returned_rows = rows[:max_rows]
   return {
@@ -512,8 +728,7 @@ def export_gaql_csv(
   Returns:
       A dict with the CSV path and export metadata.
   """
-  if max_rows is not None and max_rows <= 0:
-    raise ToolError("max_rows must be greater than 0.")
+  _validate_optional_positive_int(max_rows, "max_rows")
 
   rows = run_gaql_query(
       query=query,

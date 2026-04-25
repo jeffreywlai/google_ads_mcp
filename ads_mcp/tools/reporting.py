@@ -25,18 +25,18 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tools._campaign_context import get_campaign_context
 from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import date_range_bounds
+from ads_mcp.tools._gaql import date_range_label
+from ads_mcp.tools._gaql import gaql_quote_string
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import quote_int_values
-from ads_mcp.tools._gaql import validate_date_range
+from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
-from ads_mcp.tools.api import gaql_quote_string
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
-
-
-def _date_range_condition(date_range: str) -> str:
-  return f"segments.date DURING {validate_date_range(date_range)}"
 
 
 def _normalize_choice(
@@ -57,14 +57,14 @@ def _normalize_choice(
 
 
 def _normalize_choices(
-    values: list[str],
+    values: list[str] | str,
     field_name: str,
     allowed_values: set[str],
 ) -> list[str]:
   """Normalizes and deduplicates a list of enum-like input values."""
   normalized_choices: list[str] = []
   seen: set[str] = set()
-  for value in values:
+  for value in normalize_list_arg(values, field_name):
     normalized_value = _normalize_choice(value, field_name, allowed_values)
     if normalized_value in seen:
       continue
@@ -73,11 +73,14 @@ def _normalize_choices(
   return normalized_choices
 
 
-def _normalize_enum_filters(values: list[str], field_name: str) -> list[str]:
+def _normalize_enum_filters(
+    values: list[str] | str,
+    field_name: str,
+) -> list[str]:
   """Normalizes GAQL enum filters while rejecting malformed values."""
   normalized_values: list[str] = []
   seen: set[str] = set()
-  for value in values:
+  for value in normalize_list_arg(values, field_name):
     if not isinstance(value, str):
       raise ToolError(f"{field_name} values must be strings.")
     normalized_value = value.upper()
@@ -115,6 +118,167 @@ def _campaign_ids_from_rows(rows: list[dict[str, Any]]) -> list[str]:
       if row.get("campaign.id") not in (None, "")
   }
   return sorted((str(campaign_id) for campaign_id in campaign_ids), key=int)
+
+
+def _append_campaign_ad_group_filters(
+    where_conditions: list[str],
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+) -> None:
+  """Appends common campaign/ad-group ID filters to GAQL conditions."""
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
+
+
+def _append_int_list_filter(
+    where_conditions: list[str],
+    gaql_field: str,
+    values: list[str] | str | None,
+    field_name: str,
+) -> None:
+  """Appends an IN filter after normalizing optional string/list args."""
+  normalized_values = normalize_list_arg(values, field_name)
+  if not normalized_values:
+    return
+  value_list = quote_int_values(normalized_values, field_name)
+  where_conditions.append(f"{gaql_field} IN ({value_list})")
+
+
+def _single_campaign_id_filter(
+    campaign_ids: list[str] | str | None,
+    tool_name: str,
+) -> tuple[list[Any], str]:
+  """Returns normalized IDs and a required single-campaign equality filter."""
+  normalized_campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
+  if len(normalized_campaign_ids) != 1:
+    raise ToolError(
+        f"{tool_name} requires exactly one campaign_id in campaign_ids."
+    )
+  campaign_id_filter = quote_int_value(
+      normalized_campaign_ids[0],
+      "campaign_ids",
+  )
+  return normalized_campaign_ids, f"campaign.id = {campaign_id_filter}"
+
+
+def _single_shopping_product_campaign_filter(
+    customer_id: str,
+    campaign_ids: list[str] | str | None,
+    tool_name: str,
+) -> tuple[list[Any], str]:
+  """Returns a required shopping_product.campaign equality filter."""
+  normalized_campaign_ids, _ = _single_campaign_id_filter(
+      campaign_ids,
+      tool_name,
+  )
+  campaign_id = quote_int_value(normalized_campaign_ids[0], "campaign_ids")
+  campaign_resource_name = f"customers/{customer_id}/campaigns/{campaign_id}"
+  campaign_filter = "shopping_product.campaign = " + gaql_quote_string(
+      campaign_resource_name
+  )
+  return (
+      normalized_campaign_ids,
+      campaign_filter,
+  )
+
+
+def _shopping_product_ad_group_filter(
+    customer_id: str,
+    ad_group_ids: list[str] | str | None,
+    tool_name: str,
+) -> tuple[list[Any], str | None]:
+  """Returns an optional shopping_product.ad_group equality filter."""
+  normalized_ad_group_ids = normalize_list_arg(ad_group_ids, "ad_group_ids")
+  if not normalized_ad_group_ids:
+    return normalized_ad_group_ids, None
+  if len(normalized_ad_group_ids) != 1:
+    raise ToolError(
+        f"{tool_name} requires exactly one ad_group_id in ad_group_ids "
+        "when filtering Shopping products by ad group."
+    )
+  ad_group_id = quote_int_value(normalized_ad_group_ids[0], "ad_group_ids")
+  return (
+      normalized_ad_group_ids,
+      "shopping_product.ad_group = "
+      f"{gaql_quote_string(f'customers/{customer_id}/adGroups/{ad_group_id}')}",
+  )
+
+
+def _limited_rows_response(
+    item_key: str,
+    rows: list[dict[str, Any]],
+    limit: int,
+) -> dict[str, Any]:
+  """Builds a compact response for server-capped workflow reports."""
+  return {
+      item_key: rows,
+      "returned_count": len(rows),
+      "limit": limit,
+      "truncated_by_limit": len(rows) >= limit,
+  }
+
+
+def _limited_select_query(
+    select_fields: list[str],
+    from_resource: str,
+    where_conditions: list[str],
+    order_by: str,
+    limit: int,
+) -> str:
+  """Builds the common capped SELECT query shape for workflow reports."""
+  return f"""
+      SELECT
+        {", ".join(select_fields)}
+      FROM {from_resource}
+      {build_where_clause(where_conditions)}
+      ORDER BY {order_by}
+      LIMIT {limit}
+  """
+
+
+def _competitive_change_history(
+    customer_id: str,
+    date_range: str | dict[str, str],
+    change_limit: int,
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Returns change-history coverage aligned to a finite report window."""
+  resolved_date_range = date_range_bounds(date_range)
+  if resolved_date_range is None:
+    return {
+        "coverage_note": (
+            "Change history needs finite date bounds. Pass an explicit "
+            "{start_date, end_date} range when using ALL_TIME."
+        ),
+    }
+
+  from ads_mcp.tools import changes  # pylint: disable=import-outside-toplevel
+
+  return changes.get_change_history_extended(
+      customer_id=customer_id,
+      resource_types=[
+          "CAMPAIGN",
+          "CAMPAIGN_BUDGET",
+          "AD_GROUP",
+          "AD_GROUP_AD",
+          "AD_GROUP_CRITERION",
+      ],
+      start_date=resolved_date_range[0],
+      end_date=resolved_date_range[1],
+      include_recent_events=True,
+      limit=change_limit,
+      login_customer_id=login_customer_id,
+  )
 
 
 _CART_GROUP_FIELDS = {
@@ -209,6 +373,74 @@ _LOCATION_INTEREST_VIEW_FIELDS = {
         ],
     ),
 }
+_DEMOGRAPHIC_VIEW_FIELDS = {
+    "AGE": (
+        "age_range_view",
+        "ad_group_criterion.age_range.type",
+        "age_range_view.resource_name",
+    ),
+    "GENDER": (
+        "gender_view",
+        "ad_group_criterion.gender.type",
+        "gender_view.resource_name",
+    ),
+    "INCOME": (
+        "income_range_view",
+        "ad_group_criterion.income_range.type",
+        "income_range_view.resource_name",
+    ),
+}
+_LANDING_PAGE_VIEW_FIELDS = {
+    "LANDING_PAGE": (
+        "landing_page_view",
+        "landing_page_view.unexpanded_final_url",
+        "landing_page_view.resource_name",
+    ),
+    "EXPANDED": (
+        "expanded_landing_page_view",
+        "expanded_landing_page_view.expanded_final_url",
+        "expanded_landing_page_view.resource_name",
+    ),
+}
+_CORE_PERFORMANCE_METRICS = [
+    "metrics.impressions",
+    "metrics.clicks",
+    "metrics.ctr",
+    "metrics.average_cpc",
+    "metrics.cost_micros",
+    "metrics.conversions",
+    "metrics.cost_per_conversion",
+    "metrics.conversions_value",
+]
+_CAMPAIGN_PERFORMANCE_SEGMENTS = {
+    "DATE": "segments.date",
+    "DEVICE": "segments.device",
+    "MONTH": "segments.month",
+    "NETWORK": "segments.ad_network_type",
+    "WEEK": "segments.week",
+}
+_COMPETITIVE_PRESSURE_METRICS = [
+    "metrics.search_impression_share",
+    "metrics.search_top_impression_share",
+    "metrics.search_absolute_top_impression_share",
+    "metrics.search_budget_lost_impression_share",
+    "metrics.search_rank_lost_impression_share",
+]
+_AUCTION_INSIGHT_METRICS = [
+    "metrics.auction_insight_search_impression_share",
+    "metrics.auction_insight_search_overlap_rate",
+    "metrics.auction_insight_search_position_above_rate",
+    "metrics.auction_insight_search_outranking_share",
+]
+_AD_INVENTORY_TEXT_FIELDS = [
+    "ad_group_ad.ad.responsive_search_ad.headlines",
+    "ad_group_ad.ad.responsive_search_ad.descriptions",
+    "ad_group_ad.ad.expanded_text_ad.headline_part1",
+    "ad_group_ad.ad.expanded_text_ad.headline_part2",
+    "ad_group_ad.ad.expanded_text_ad.headline_part3",
+    "ad_group_ad.ad.expanded_text_ad.description",
+    "ad_group_ad.ad.expanded_text_ad.description2",
+]
 
 
 def _issue_field(issue: Any, field_name: str) -> Any:
@@ -245,8 +477,8 @@ def _numeric_delta(row: dict[str, Any], lhs: str, rhs: str) -> int | float:
 
 
 def _keyword_quality_score_query(
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
     min_quality_score: int | None = None,
 ) -> str:
   """Builds the shared keyword quality score GAQL query."""
@@ -254,14 +486,18 @@ def _keyword_quality_score_query(
       "ad_group_criterion.type = KEYWORD",
       "ad_group_criterion.negative = FALSE",
   ]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
   if min_quality_score is not None:
     where_conditions.append(
         "ad_group_criterion.quality_info.quality_score >= "
@@ -321,8 +557,8 @@ reporting_tool = ads_read_tool(mcp, tags={"reporting"})
 @reporting_tool
 def list_device_performance(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -342,11 +578,13 @@ def list_device_performance(
   """
   validate_limit(limit)
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -384,8 +622,8 @@ def list_device_performance(
 @reporting_tool
 def list_geographic_performance(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     location_view: str = "USER_LOCATION",
     limit: int = 100,
     page_token: str | None = None,
@@ -412,11 +650,13 @@ def list_geographic_performance(
       {"GEOGRAPHIC", "USER_LOCATION"},
   )
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   if normalized_view == "GEOGRAPHIC":
     select_fields = [
@@ -475,8 +715,8 @@ def list_geographic_performance(
 @reporting_tool
 def list_impression_share(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     enabled_only: bool = True,
     limit: int = 100,
     page_token: str | None = None,
@@ -498,13 +738,15 @@ def list_impression_share(
   """
   validate_limit(limit)
 
-  where_conditions = [_date_range_condition(date_range)]
+  where_conditions = [segments_date_condition(date_range)]
   if enabled_only:
     where_conditions.append("campaign.status = ENABLED")
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -536,6 +778,205 @@ def list_impression_share(
       page_size=limit,
       next_page_token=page["next_page_token"],
   )
+
+
+@reporting_tool
+def get_campaign_performance(
+    customer_id: str,
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
+    segment_by: list[str] | str | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists core campaign performance with optional common segments.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range or {start_date, end_date}.
+      segment_by: Optional DATE, WEEK, MONTH, DEVICE, or NETWORK segments.
+      limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict containing campaign performance rows.
+  """
+  validate_limit(limit)
+  segment_names = (
+      _normalize_choices(
+          segment_by,
+          "segment_by",
+          set(_CAMPAIGN_PERFORMANCE_SEGMENTS),
+      )
+      if segment_by
+      else []
+  )
+  segment_fields = [
+      _CAMPAIGN_PERFORMANCE_SEGMENTS[segment_name]
+      for segment_name in segment_names
+  ]
+
+  where_conditions = [segments_date_condition(date_range)]
+  _append_campaign_ad_group_filters(where_conditions, campaign_ids)
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      "campaign.status",
+      "campaign.advertising_channel_type",
+      *segment_fields,
+      *_CORE_PERFORMANCE_METRICS,
+  ]
+  order_by = "metrics.cost_micros DESC"
+  if segment_fields:
+    segment_order = ", ".join(segment_fields)
+    order_by = f"{segment_order}, {order_by}"
+
+  query = f"""
+      SELECT
+        {", ".join(select_fields)}
+      FROM campaign
+      {build_where_clause(where_conditions)}
+      ORDER BY {order_by}
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = build_paginated_list_response(
+      "campaign_performance",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  result["segment_by"] = segment_names
+  return result
+
+
+@reporting_tool
+def get_competitive_pressure_report(
+    customer_id: str,
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
+    granularity: str = "DATE",
+    include_auction_insights: bool = True,
+    include_change_history: bool = True,
+    trend_limit: int = 500,
+    auction_insight_limit: int = 100,
+    change_limit: int = 50,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Bundles impression-share pressure, auction insights, and changes.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range or {start_date, end_date}.
+      granularity: DATE, WEEK, MONTH, or NONE for pressure trend rows.
+      include_auction_insights: Whether to include domain-level auction
+          insight rows for the same campaign/date filters.
+      include_change_history: Whether to include compact change history
+          coverage for the same window.
+      trend_limit: Maximum pressure trend rows.
+      auction_insight_limit: Maximum auction insight rows.
+      change_limit: Maximum rows in each change-history section.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict with pressure trend rows, optional auction insights, and
+      optional change-history metadata.
+  """
+  validate_limit(trend_limit)
+  validate_limit(auction_insight_limit)
+  validate_limit(change_limit)
+  normalized_granularity = _normalize_choice(
+      granularity,
+      "granularity",
+      {"DATE", "MONTH", "NONE", "WEEK"},
+  )
+
+  segment_fields = {
+      "DATE": ["segments.date"],
+      "WEEK": ["segments.week"],
+      "MONTH": ["segments.month"],
+      "NONE": [],
+  }[normalized_granularity]
+  where_conditions = [segments_date_condition(date_range)]
+  _append_campaign_ad_group_filters(where_conditions, campaign_ids)
+
+  trend_fields = [
+      "campaign.id",
+      "campaign.name",
+      "campaign.status",
+      *segment_fields,
+      *_CORE_PERFORMANCE_METRICS,
+      *_COMPETITIVE_PRESSURE_METRICS,
+  ]
+  trend_order_by = "metrics.cost_micros DESC"
+  if segment_fields:
+    segment_order = ", ".join(segment_fields)
+    trend_order_by = f"{segment_order}, {trend_order_by}"
+  trend_query = _limited_select_query(
+      trend_fields,
+      "campaign",
+      where_conditions,
+      trend_order_by,
+      trend_limit,
+  )
+  pressure_trend = run_gaql_query(
+      trend_query,
+      customer_id,
+      login_customer_id,
+  )
+
+  auction_insights = []
+  if include_auction_insights:
+    auction_fields = [
+        "campaign.id",
+        "campaign.name",
+        "segments.auction_insight_domain",
+        *_AUCTION_INSIGHT_METRICS,
+    ]
+    auction_query = _limited_select_query(
+        auction_fields,
+        "campaign",
+        where_conditions,
+        "metrics.auction_insight_search_impression_share DESC",
+        auction_insight_limit,
+    )
+    auction_insights = run_gaql_query(
+        auction_query,
+        customer_id,
+        login_customer_id,
+    )
+
+  change_history = None
+  if include_change_history:
+    change_history = _competitive_change_history(
+        customer_id,
+        date_range,
+        change_limit,
+        login_customer_id,
+    )
+
+  return {
+      "date_range": date_range_label(date_range),
+      "granularity": normalized_granularity,
+      "campaign_ids": normalize_list_arg(campaign_ids, "campaign_ids"),
+      "pressure_trend": pressure_trend,
+      "pressure_trend_returned_count": len(pressure_trend),
+      "pressure_trend_limit": trend_limit,
+      "auction_insights": auction_insights,
+      "auction_insight_returned_count": len(auction_insights),
+      "auction_insight_limit": auction_insight_limit,
+      "change_history": change_history,
+  }
 
 
 @reporting_tool
@@ -661,8 +1102,8 @@ def get_campaign_conversion_goals(
 @reporting_tool
 def list_keyword_quality_scores(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
     min_quality_score: int | None = None,
     limit: int | None = 1000,
     page_token: str | None = None,
@@ -747,8 +1188,8 @@ def list_keyword_quality_scores(
 @reporting_tool
 def summarize_keyword_quality_scores(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
     min_quality_score: int | None = None,
     top_campaigns_limit: int = 20,
     login_customer_id: str | None = None,
@@ -850,9 +1291,9 @@ def summarize_keyword_quality_scores(
 @reporting_tool
 def list_rsa_ad_strength(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -874,17 +1315,21 @@ def list_rsa_ad_strength(
   validate_limit(limit)
 
   where_conditions = [
-      _date_range_condition(date_range),
+      segments_date_condition(date_range),
       "ad_group_ad.ad.type = RESPONSIVE_SEARCH_AD",
   ]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -924,8 +1369,8 @@ def list_rsa_ad_strength(
 @reporting_tool
 def list_conversion_actions(
     customer_id: str,
-    statuses: list[str] | None = None,
-    types: list[str] | None = None,
+    statuses: list[str] | str | None = None,
+    types: list[str] | str | None = None,
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -946,10 +1391,12 @@ def list_conversion_actions(
   validate_limit(limit)
 
   where_conditions = []
+  statuses = normalize_list_arg(statuses, "statuses")
   if statuses:
     where_conditions.append(
         "conversion_action.status IN " f"({quote_enum_values(statuses)})"
     )
+  types = normalize_list_arg(types, "types")
   if types:
     where_conditions.append(
         f"conversion_action.type IN ({quote_enum_values(types)})"
@@ -991,9 +1438,9 @@ def list_conversion_actions(
 def list_audience_performance(
     customer_id: str,
     scope: str = "CAMPAIGN",
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1020,11 +1467,13 @@ def list_audience_performance(
   if normalized_scope == "CAMPAIGN" and ad_group_ids:
     raise ToolError("ad_group_ids can only be used when scope is AD_GROUP.")
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   if normalized_scope == "AD_GROUP":
     select_fields = [
@@ -1048,10 +1497,12 @@ def list_audience_performance(
         "metrics.conversions_value",
     ]
     from_resource = "ad_group_audience_view"
-    if ad_group_ids:
-      where_conditions.append(
-          f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-      )
+    _append_int_list_filter(
+        where_conditions,
+        "ad_group.id",
+        ad_group_ids,
+        "ad_group_ids",
+    )
   else:
     select_fields = [
         "campaign.id",
@@ -1098,12 +1549,247 @@ def list_audience_performance(
 
 
 @reporting_tool
+def get_demographic_performance(
+    customer_id: str,
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    demographic_types: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
+    limit_per_type: int = 100,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Fans out age, gender, and income performance into one response.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      demographic_types: Optional subset of AGE, GENDER, and INCOME.
+      date_range: GAQL date range or {start_date, end_date}.
+      limit_per_type: Maximum rows returned for each demographic resource.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict keyed by demographic type with compact performance rows.
+  """
+  validate_limit(limit_per_type)
+  if demographic_types:
+    selected_types = _normalize_choices(
+        demographic_types,
+        "demographic_types",
+        set(_DEMOGRAPHIC_VIEW_FIELDS),
+    )
+  else:
+    selected_types = sorted(_DEMOGRAPHIC_VIEW_FIELDS)
+
+  performance_by_type = {}
+  returned_counts = {}
+  for demographic_type in selected_types:
+    from_resource, segment_field, resource_name_field = (
+        _DEMOGRAPHIC_VIEW_FIELDS[demographic_type]
+    )
+    where_conditions = [segments_date_condition(date_range)]
+    _append_campaign_ad_group_filters(
+        where_conditions,
+        campaign_ids,
+        ad_group_ids,
+    )
+    query = _limited_select_query(
+        [
+            "campaign.id",
+            "campaign.name",
+            "ad_group.id",
+            "ad_group.name",
+            resource_name_field,
+            segment_field,
+            *_CORE_PERFORMANCE_METRICS,
+        ],
+        from_resource,
+        where_conditions,
+        "metrics.cost_micros DESC",
+        limit_per_type,
+    )
+    rows = run_gaql_query(query, customer_id, login_customer_id)
+    performance_by_type[demographic_type] = rows
+    returned_counts[demographic_type] = len(rows)
+
+  return {
+      "date_range": date_range_label(date_range),
+      "campaign_ids": normalize_list_arg(campaign_ids, "campaign_ids"),
+      "ad_group_ids": normalize_list_arg(ad_group_ids, "ad_group_ids"),
+      "demographic_types": selected_types,
+      "limit_per_type": limit_per_type,
+      "demographic_performance": performance_by_type,
+      "returned_counts": returned_counts,
+  }
+
+
+@reporting_tool
+def get_landing_page_performance(
+    customer_id: str,
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
+    landing_page_view: str = "LANDING_PAGE",
+    segment_by_device: bool = False,
+    limit: int = 100,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Returns top landing pages with compact cost/conversion metrics.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      date_range: GAQL date range or {start_date, end_date}.
+      landing_page_view: LANDING_PAGE or EXPANDED.
+      segment_by_device: Whether to include segments.device in the output.
+      limit: Maximum landing-page rows to return.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing capped landing-page performance rows.
+  """
+  validate_limit(limit)
+  normalized_view = _normalize_choice(
+      landing_page_view,
+      "landing_page_view",
+      set(_LANDING_PAGE_VIEW_FIELDS),
+  )
+  from_resource, url_field, resource_name_field = _LANDING_PAGE_VIEW_FIELDS[
+      normalized_view
+  ]
+  segment_fields = ["segments.device"] if segment_by_device else []
+  where_conditions = [segments_date_condition(date_range)]
+  _append_campaign_ad_group_filters(where_conditions, campaign_ids)
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      resource_name_field,
+      url_field,
+      *segment_fields,
+      *_CORE_PERFORMANCE_METRICS,
+  ]
+  query = _limited_select_query(
+      select_fields,
+      from_resource,
+      where_conditions,
+      "metrics.cost_micros DESC",
+      limit,
+  )
+  rows = run_gaql_query(query, customer_id, login_customer_id)
+  result = _limited_rows_response("landing_page_performance", rows, limit)
+  result.update(
+      {
+          "date_range": date_range_label(date_range),
+          "landing_page_view": normalized_view,
+          "segment_by_device": segment_by_device,
+      }
+  )
+  return result
+
+
+@reporting_tool
+def get_ad_inventory(
+    customer_id: str,
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    ad_statuses: list[str] | str | None = None,
+    ad_types: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
+    include_text_assets: bool = True,
+    include_metrics: bool = True,
+    limit: int = 100,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Returns ad creative inventory with optional recent performance.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_ids: Optional campaign IDs to filter to.
+      ad_group_ids: Optional ad group IDs to filter to.
+      ad_statuses: Optional ad_group_ad statuses such as ENABLED or PAUSED.
+      ad_types: Optional ad types such as RESPONSIVE_SEARCH_AD.
+      date_range: GAQL date range or {start_date, end_date} for metrics.
+      include_text_assets: Whether to include RSA/ETA text fields.
+      include_metrics: Whether to include recent performance metrics.
+      limit: Maximum ad rows to return.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing capped ad inventory rows.
+  """
+  validate_limit(limit)
+  date_condition = segments_date_condition(date_range)
+  normalized_date_range = date_range_label(date_range)
+  where_conditions = []
+  if include_metrics:
+    where_conditions.append(date_condition)
+  _append_campaign_ad_group_filters(
+      where_conditions,
+      campaign_ids,
+      ad_group_ids,
+  )
+  ad_statuses = normalize_list_arg(ad_statuses, "ad_statuses")
+  if ad_statuses:
+    where_conditions.append(
+        f"ad_group_ad.status IN ({quote_enum_values(ad_statuses)})"
+    )
+  ad_types = normalize_list_arg(ad_types, "ad_types")
+  if ad_types:
+    where_conditions.append(
+        f"ad_group_ad.ad.type IN ({quote_enum_values(ad_types)})"
+    )
+
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      "ad_group.id",
+      "ad_group.name",
+      "ad_group_ad.resource_name",
+      "ad_group_ad.ad.id",
+      "ad_group_ad.ad.name",
+      "ad_group_ad.ad.type",
+      "ad_group_ad.status",
+      "ad_group_ad.primary_status",
+      "ad_group_ad.ad_strength",
+      "ad_group_ad.policy_summary.approval_status",
+      "ad_group_ad.ad.final_urls",
+  ]
+  if include_text_assets:
+    select_fields.extend(_AD_INVENTORY_TEXT_FIELDS)
+  if include_metrics:
+    select_fields.extend(_CORE_PERFORMANCE_METRICS)
+
+  order_by = (
+      "metrics.cost_micros DESC"
+      if include_metrics
+      else "campaign.id ASC, ad_group.id ASC, ad_group_ad.ad.id ASC"
+  )
+  query = _limited_select_query(
+      select_fields,
+      "ad_group_ad",
+      where_conditions,
+      order_by,
+      limit,
+  )
+  rows = run_gaql_query(query, customer_id, login_customer_id)
+  result = _limited_rows_response("ad_inventory", rows, limit)
+  result.update(
+      {
+          "date_range": normalized_date_range,
+          "include_text_assets": include_text_assets,
+          "include_metrics": include_metrics,
+      }
+  )
+  return result
+
+
+@reporting_tool
 def list_video_enhancements(
     customer_id: str,
-    sources: list[str] | None = None,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    sources: list[str] | str | None = None,
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1139,20 +1825,24 @@ def list_video_enhancements(
         },
     )
 
-  where_conditions = [_date_range_condition(date_range)]
+  where_conditions = [segments_date_condition(date_range)]
   if normalized_sources:
     where_conditions.append(
         "video_enhancement.source IN "
         f"({quote_enum_values(normalized_sources)})"
     )
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -1203,8 +1893,8 @@ def list_video_enhancements(
 def summarize_cart_data_sales(
     customer_id: str,
     group_by: str = "CAMPAIGN",
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     top_limit: int = 25,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1228,12 +1918,15 @@ def summarize_cart_data_sales(
   """
   validate_limit(top_limit)
   normalized_group_by, group_fields = _cart_group_fields(group_by)
+  normalized_campaign_ids = normalize_list_arg(campaign_ids, "campaign_ids")
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
+  where_conditions = [segments_date_condition(date_range)]
+  if normalized_campaign_ids:
+    campaign_id_values = quote_int_values(
+        normalized_campaign_ids,
+        "campaign_ids",
     )
+    where_conditions.append(f"campaign.id IN ({campaign_id_values})")
 
   query = f"""
       SELECT
@@ -1245,15 +1938,15 @@ def summarize_cart_data_sales(
   """
   rows = run_gaql_query(query, customer_id, login_customer_id)
   context_campaign_ids = (
-      campaign_ids
-      if campaign_ids
+      normalized_campaign_ids
+      if normalized_campaign_ids
       else _campaign_ids_from_rows(rows)
       if normalized_group_by == "CAMPAIGN"
       else []
   )
   return {
       "group_by": normalized_group_by,
-      "date_range": validate_date_range(date_range),
+      "date_range": date_range_label(date_range),
       "cart_data_sales": rows,
       "returned_count": len(rows),
       "top_limit": top_limit,
@@ -1268,8 +1961,8 @@ def summarize_cart_data_sales(
 @reporting_tool
 def compare_biddable_vs_all_cart_value(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 25,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1288,12 +1981,14 @@ def compare_biddable_vs_all_cart_value(
   """
   validate_limit(limit)
 
-  normalized_date_range = validate_date_range(date_range)
-  where_conditions = [_date_range_condition(normalized_date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  normalized_date_range = date_range_label(date_range)
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -1344,8 +2039,8 @@ def list_cart_profit_outliers(
     customer_id: str,
     group_by: str = "SOLD_ITEM",
     sort_by: str = "GROSS_PROFIT",
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     direction: str = "ASC",
     limit: int = 25,
     page_token: str | None = None,
@@ -1381,11 +2076,13 @@ def list_cart_profit_outliers(
       {"ASC", "DESC"},
   )
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -1418,8 +2115,8 @@ def list_cart_profit_outliers(
 @reporting_tool
 def list_shopping_attribution_breakdown(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1439,11 +2136,13 @@ def list_shopping_attribution_breakdown(
   """
   validate_limit(limit)
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -1486,8 +2185,8 @@ def list_shopping_attribution_breakdown(
 @reporting_tool
 def list_campaign_view_through_optimization(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    advertising_channel_types: list[str] | None = None,
+    campaign_ids: list[str] | str | None = None,
+    advertising_channel_types: list[str] | str | None = None,
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1509,15 +2208,17 @@ def list_campaign_view_through_optimization(
   validate_limit(limit)
 
   where_conditions = []
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  advertising_channel_types = _normalize_enum_filters(
+      advertising_channel_types,
+      "advertising_channel_types",
+  )
   if advertising_channel_types:
-    advertising_channel_types = _normalize_enum_filters(
-        advertising_channel_types,
-        "advertising_channel_types",
-    )
     where_conditions.append(
         "campaign.advertising_channel_type IN "
         f"({quote_enum_values(advertising_channel_types)})"
@@ -1553,8 +2254,8 @@ def list_campaign_view_through_optimization(
 @reporting_tool
 def list_video_audibility_performance(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1574,11 +2275,13 @@ def list_video_audibility_performance(
   """
   validate_limit(limit)
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -1623,8 +2326,8 @@ def list_video_audibility_performance(
 def list_vertical_ads_performance(
     customer_id: str,
     segment_by: str = "VERTICAL",
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1651,11 +2354,13 @@ def list_vertical_ads_performance(
       set(_VERTICAL_ADS_FIELDS),
   )
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
 
   query = f"""
       SELECT
@@ -1693,8 +2398,8 @@ def list_vertical_ads_performance(
 @reporting_tool
 def list_campaign_search_terms(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     min_clicks: int = 0,
     min_cost_micros: int = 0,
     limit: int = 100,
@@ -1720,11 +2425,13 @@ def list_campaign_search_terms(
   _validate_non_negative(min_clicks, "min_clicks")
   _validate_non_negative(min_cost_micros, "min_cost_micros")
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
   if min_clicks:
     where_conditions.append(f"metrics.clicks >= {min_clicks}")
   if min_cost_micros:
@@ -1768,9 +2475,9 @@ def list_campaign_search_terms(
 @reporting_tool
 def list_ai_max_search_term_ad_combinations(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     min_impressions: int = 0,
     limit: int = 100,
     page_token: str | None = None,
@@ -1794,15 +2501,19 @@ def list_ai_max_search_term_ad_combinations(
   validate_limit(limit)
   _validate_non_negative(min_impressions, "min_impressions")
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
   if min_impressions:
     where_conditions.append(f"metrics.impressions >= {min_impressions}")
 
@@ -1843,11 +2554,11 @@ def list_ai_max_search_term_ad_combinations(
 @reporting_tool
 def list_final_url_expansion_assets(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    asset_group_ids: list[str] | None = None,
-    statuses: list[str] | None = None,
-    field_types: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    asset_group_ids: list[str] | str | None = None,
+    statuses: list[str] | str | None = None,
+    field_types: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1869,24 +2580,37 @@ def list_final_url_expansion_assets(
       A paginated dict containing final URL expansion asset rows.
   """
   validate_limit(limit)
+  try:
+    _, campaign_filter = _single_campaign_id_filter(
+        campaign_ids,
+        "list_final_url_expansion_assets",
+    )
+  except ToolError as exc:
+    raise ToolError(
+        "list_final_url_expansion_assets requires exactly one campaign_id "
+        "in campaign_ids because Google Ads requires "
+        "final_url_expansion_asset_view to be filtered by a single campaign."
+    ) from exc
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if asset_group_ids:
-    where_conditions.append(
-        f"asset_group.id IN ({quote_int_values(asset_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  where_conditions.append(campaign_filter)
+  where_conditions.append(
+      "campaign.advertising_channel_type = PERFORMANCE_MAX"
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "asset_group.id",
+      asset_group_ids,
+      "asset_group_ids",
+  )
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         "final_url_expansion_asset_view.status IN "
         f"({quote_enum_values(statuses)})"
     )
+  field_types = _normalize_enum_filters(field_types, "field_types")
   if field_types:
-    field_types = _normalize_enum_filters(field_types, "field_types")
     where_conditions.append(
         "final_url_expansion_asset_view.field_type IN "
         f"({quote_enum_values(field_types)})"
@@ -1927,9 +2651,9 @@ def list_final_url_expansion_assets(
 @reporting_tool
 def list_targeting_expansion_performance(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -1950,15 +2674,19 @@ def list_targeting_expansion_performance(
   """
   validate_limit(limit)
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -1998,10 +2726,10 @@ def list_targeting_expansion_performance(
 def list_content_suitability_placements(
     customer_id: str,
     placement_view: str = "GROUP",
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    placement_types: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    placement_types: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -2032,20 +2760,24 @@ def list_content_suitability_placements(
       normalized_view
   ]
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
+  placement_types = _normalize_enum_filters(
+      placement_types,
+      "placement_types",
+  )
   if placement_types:
-    placement_types = _normalize_enum_filters(
-        placement_types,
-        "placement_types",
-    )
     where_conditions.append(
         f"{from_resource}.placement_type IN "
         f"({quote_enum_values(placement_types)})"
@@ -2085,9 +2817,9 @@ def list_content_suitability_placements(
 def list_location_interest_performance(
     customer_id: str,
     interest_view: str = "LOCATION_INTEREST",
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -2117,15 +2849,19 @@ def list_location_interest_performance(
       normalized_view
   ]
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range)]
+  _append_int_list_filter(
+      where_conditions,
+      "campaign.id",
+      campaign_ids,
+      "campaign_ids",
+  )
+  _append_int_list_filter(
+      where_conditions,
+      "ad_group.id",
+      ad_group_ids,
+      "ad_group_ids",
+  )
 
   query = f"""
       SELECT
@@ -2164,10 +2900,10 @@ def list_location_interest_performance(
 @reporting_tool
 def summarize_shopping_product_status(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    statuses: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    statuses: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     row_limit: int = 5000,
     top_issue_products_limit: int = 25,
     login_customer_id: str | None = None,
@@ -2191,29 +2927,37 @@ def summarize_shopping_product_status(
   """
   validate_limit(row_limit)
   validate_limit(top_issue_products_limit)
+  normalized_campaign_ids, campaign_filter = (
+      _single_shopping_product_campaign_filter(
+          customer_id,
+          campaign_ids,
+          "summarize_shopping_product_status",
+      )
+  )
+  _, ad_group_filter = _shopping_product_ad_group_filter(
+      customer_id,
+      ad_group_ids,
+      "summarize_shopping_product_status",
+  )
 
-  normalized_date_range = validate_date_range(date_range)
-  where_conditions = [_date_range_condition(normalized_date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  normalized_date_range = date_range_label(date_range)
+  where_conditions = [segments_date_condition(date_range), campaign_filter]
+  if ad_group_filter:
+    where_conditions.append(ad_group_filter)
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
 
+  ad_group_select = (
+      "ad_group.id,\n        ad_group.name," if ad_group_filter else ""
+  )
   query = f"""
       SELECT
         campaign.id,
         campaign.name,
-        ad_group.id,
-        ad_group.name,
+        {ad_group_select}
         shopping_product.item_id,
         shopping_product.title,
         shopping_product.brand,
@@ -2269,6 +3013,7 @@ def summarize_shopping_product_status(
       ),
       "top_issue_products": issue_products,
       "top_issue_products_limit": top_issue_products_limit,
+      "campaign_ids": normalized_campaign_ids,
       "campaign_context": get_campaign_context(
           customer_id,
           _campaign_ids_from_rows(rows),
@@ -2280,10 +3025,10 @@ def summarize_shopping_product_status(
 @reporting_tool
 def list_shopping_product_status(
     customer_id: str,
-    campaign_ids: list[str] | None = None,
-    ad_group_ids: list[str] | None = None,
-    statuses: list[str] | None = None,
-    date_range: str = "LAST_30_DAYS",
+    campaign_ids: list[str] | str | None = None,
+    ad_group_ids: list[str] | str | None = None,
+    statuses: list[str] | str | None = None,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -2305,28 +3050,34 @@ def list_shopping_product_status(
       A paginated dict containing Shopping product health rows.
   """
   validate_limit(limit)
+  _, campaign_filter = _single_shopping_product_campaign_filter(
+      customer_id,
+      campaign_ids,
+      "list_shopping_product_status",
+  )
+  _, ad_group_filter = _shopping_product_ad_group_filter(
+      customer_id,
+      ad_group_ids,
+      "list_shopping_product_status",
+  )
 
-  where_conditions = [_date_range_condition(date_range)]
-  if campaign_ids:
-    where_conditions.append(
-        f"campaign.id IN ({quote_int_values(campaign_ids)})"
-    )
-  if ad_group_ids:
-    where_conditions.append(
-        f"ad_group.id IN ({quote_int_values(ad_group_ids)})"
-    )
+  where_conditions = [segments_date_condition(date_range), campaign_filter]
+  if ad_group_filter:
+    where_conditions.append(ad_group_filter)
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"shopping_product.status IN ({quote_enum_values(statuses)})"
     )
 
+  ad_group_select = (
+      "ad_group.id,\n        ad_group.name," if ad_group_filter else ""
+  )
   query = f"""
       SELECT
         campaign.id,
         campaign.name,
-        ad_group.id,
-        ad_group.name,
+        {ad_group_select}
         shopping_product.item_id,
         shopping_product.title,
         shopping_product.brand,
@@ -2361,7 +3112,7 @@ def list_shopping_product_status(
 @reporting_tool
 def list_travel_feed_asset_sets(
     customer_id: str,
-    statuses: list[str] | None = None,
+    statuses: list[str] | str | None = None,
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -2381,8 +3132,8 @@ def list_travel_feed_asset_sets(
   validate_limit(limit)
 
   where_conditions = ["asset_set.type = TRAVEL_FEED"]
+  statuses = _normalize_enum_filters(statuses, "statuses")
   if statuses:
-    statuses = _normalize_enum_filters(statuses, "statuses")
     where_conditions.append(
         f"asset_set.status IN ({quote_enum_values(statuses)})"
     )
@@ -2422,7 +3173,7 @@ def list_travel_feed_asset_sets(
 @reporting_tool
 def list_retail_filter_shared_criteria(
     customer_id: str,
-    shared_set_ids: list[str] | None = None,
+    shared_set_ids: list[str] | str | None = None,
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
@@ -2442,10 +3193,12 @@ def list_retail_filter_shared_criteria(
   validate_limit(limit)
 
   where_conditions = ["shared_set.type = RETAIL_FILTER"]
-  if shared_set_ids:
-    where_conditions.append(
-        f"shared_set.id IN ({quote_int_values(shared_set_ids)})"
-    )
+  _append_int_list_filter(
+      where_conditions,
+      "shared_set.id",
+      shared_set_ids,
+      "shared_set_ids",
+  )
 
   query = f"""
       SELECT

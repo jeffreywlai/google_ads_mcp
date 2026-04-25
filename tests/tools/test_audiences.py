@@ -125,6 +125,103 @@ def test_create_audience_builds_include_and_exclude_dimensions(
   )
 
 
+def test_search_user_interests_builds_filtered_paginated_query():
+  with mock.patch(
+      "ads_mcp.tools.audiences.run_gaql_query_page",
+      return_value={
+          "rows": [
+              {
+                  "user_interest.user_interest_id": "90206",
+                  "user_interest.name": "Dress shirts",
+              }
+          ],
+          "next_page_token": "25",
+          "total_results_count": 51,
+      },
+  ) as mock_query:
+    result = audiences.search_user_interests(
+        customer_id=CUSTOMER_ID,
+        query="dress shirts",
+        taxonomy_types='["IN_MARKET", "AFFINITY"]',
+        limit=25,
+        page_token="0",
+        login_customer_id="999",
+    )
+
+  sent_query = mock_query.call_args.kwargs["query"]
+  assert "FROM user_interest" in sent_query
+  assert "user_interest.name LIKE '%dress shirts%'" in sent_query
+  assert "user_interest.taxonomy_type IN (IN_MARKET, AFFINITY)" in sent_query
+  assert "user_interest.launched_to_all = TRUE" in sent_query
+  assert mock_query.call_args.kwargs["customer_id"] == CUSTOMER_ID
+  assert mock_query.call_args.kwargs["page_size"] == 25
+  assert mock_query.call_args.kwargs["page_token"] == "0"
+  assert mock_query.call_args.kwargs["login_customer_id"] == "999"
+  assert result["user_interests"] == [
+      {
+          "user_interest.user_interest_id": "90206",
+          "user_interest.name": "Dress shirts",
+      }
+  ]
+  assert result["truncated"] is True
+  assert result["next_page_token"] == "25"
+
+
+def test_search_user_interests_can_include_not_launched():
+  with mock.patch(
+      "ads_mcp.tools.audiences.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    audiences.search_user_interests(
+        customer_id=CUSTOMER_ID,
+        include_not_launched=True,
+    )
+
+  assert "WHERE" not in mock_query.call_args.kwargs["query"]
+
+
+def test_search_user_interests_ignores_empty_string_taxonomy_types():
+  with mock.patch(
+      "ads_mcp.tools.audiences.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    audiences.search_user_interests(
+        customer_id=CUSTOMER_ID,
+        taxonomy_types="[]",
+    )
+
+  sent_query = mock_query.call_args.kwargs["query"]
+  assert "user_interest.taxonomy_type IN ()" not in sent_query
+  assert "user_interest.taxonomy_type IN" not in sent_query
+
+
+def test_search_user_interests_escapes_like_wildcards():
+  with mock.patch(
+      "ads_mcp.tools.audiences.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    audiences.search_user_interests(
+        customer_id=CUSTOMER_ID,
+        query="50%_off",
+    )
+
+  sent_query = mock_query.call_args.kwargs["query"]
+  assert "user_interest.name LIKE '%50[%][_]off%'" in sent_query
+  assert "LIKE '%50%_off%'" not in sent_query
+
+
 def test_create_audience_rejects_non_user_list_exclusions(mock_ads_client):
   audience_service = mock.Mock()
   mock_ads_client.get_service.return_value = audience_service

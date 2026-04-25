@@ -27,9 +27,19 @@ from google.ads.googleads.v24.enums.types.audience_scope import (
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tools._gaql import build_where_clause
+from ads_mcp.tools._gaql import gaql_like_substring_pattern
+from ads_mcp.tools._gaql import gaql_quote_string
+from ads_mcp.tools._gaql import normalize_list_arg
+from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import run_gaql_query_page
 
 
+audience_read_tool = ads_read_tool(mcp, tags={"audiences", "discovery"})
 audience_tool = ads_mutation_tool(mcp, tags={"audiences"})
 
 _INCLUDE_SEGMENT_FIELD_BY_TYPE = {
@@ -42,6 +52,80 @@ _INCLUDE_SEGMENT_FIELD_BY_TYPE = {
         "detailed_demographic",
     ),
 }
+
+
+@audience_read_tool
+def search_user_interests(
+    customer_id: str,
+    query: str | None = None,
+    taxonomy_types: list[str] | str | None = None,
+    include_not_launched: bool = False,
+    limit: int = 50,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Searches user-interest audience taxonomy nodes.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      query: Optional case-insensitive name substring to search.
+      taxonomy_types: Optional taxonomy types such as AFFINITY or IN_MARKET.
+      include_not_launched: Whether to include interests not launched to all
+          customers.
+      limit: Maximum number of rows to return.
+      page_token: Token for the next page of results.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A paginated dict of user-interest rows with add_campaign_audiences-ready
+      resource names.
+  """
+  validate_limit(limit)
+  where_conditions = []
+  if query is not None:
+    if not isinstance(query, str):
+      raise ToolError("query must be a string.")
+    stripped_query = query.strip()
+    if stripped_query:
+      name_pattern = gaql_like_substring_pattern(stripped_query)
+      where_conditions.append(
+          "user_interest.name LIKE " f"{gaql_quote_string(name_pattern)}"
+      )
+  taxonomy_types = normalize_list_arg(taxonomy_types, "taxonomy_types")
+  if taxonomy_types:
+    where_conditions.append(
+        "user_interest.taxonomy_type IN "
+        f"({quote_enum_values(taxonomy_types)})"
+    )
+  if not include_not_launched:
+    where_conditions.append("user_interest.launched_to_all = TRUE")
+
+  query_text = f"""
+      SELECT
+        user_interest.resource_name,
+        user_interest.user_interest_id,
+        user_interest.name,
+        user_interest.taxonomy_type,
+        user_interest.user_interest_parent,
+        user_interest.launched_to_all
+      FROM user_interest
+      {build_where_clause(where_conditions)}
+      ORDER BY user_interest.name
+  """
+  page = run_gaql_query_page(
+      query=query_text,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      "user_interests",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
 
 
 def _normalize_segment(
