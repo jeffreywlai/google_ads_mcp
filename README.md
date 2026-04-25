@@ -2,10 +2,10 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP 3.1+](https://img.shields.io/badge/FastMCP-3.1+-green.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 93 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 104 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **93 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **104 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -22,6 +22,7 @@
 - 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, conversion goals, search terms, Shopping/cart data, landing pages, audience expansion, video, and placement diagnostics
 - 📄 **Cursor Pagination** — All list tools support `page_token` for paging through large result sets with total counts
 - ⚡ **Response Caching** — Docs, tool guide, campaign context, and paged queries are cached to reduce latency and token usage
+- 🛡️ **Hardened Inputs** — Enum, ID, and date filters are normalized and validated up front so bad inputs fail fast with clear messages
 - 📥 **CSV Export** — Export any GAQL query to CSV for bulk extraction and downstream analysis
 - 📈 **Optimization** — Recommendations, optimization score, bid/budget simulations, and search term analysis
 - 🏎️ **Performance Max** — Asset diagnostics, top combinations, and placement insights
@@ -34,7 +35,7 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (93)
+## 📋 Available Tools (104)
 
 ### 🔍 Query & Discovery
 
@@ -82,6 +83,7 @@
 | `list_campaign_search_term_insights` | Insight categories and search terms for a single campaign |
 | `list_customer_search_term_insights` | Account-level insight categories and search terms |
 | `analyze_search_terms` | Heuristic exact-match and negative keyword candidates |
+| `compare_search_terms` | Compare search-term performance between two date windows |
 
 ### 📊 Simulations
 
@@ -97,6 +99,7 @@
 |------|-------------|
 | `list_change_statuses` | Changed resources and last change timestamps |
 | `list_change_events` | Granular change events with field-level detail |
+| `get_change_history_extended` | Combined `change_status` + recent `change_event` rows for windows beyond 30 days |
 
 ### 🏎️ Performance Max
 
@@ -110,6 +113,11 @@
 
 | Tool | Description |
 |------|-------------|
+| `get_campaign_performance` | Core campaign performance with optional DATE/WEEK/MONTH/DEVICE/NETWORK segments |
+| `get_demographic_performance` | Age, gender, and income performance bundled into a single response |
+| `get_landing_page_performance` | Top landing pages with compact cost and conversion metrics |
+| `get_ad_inventory` | Ad creative inventory with optional recent performance |
+| `get_competitive_pressure_report` | Bundled impression-share pressure, auction insights, and change history |
 | `list_device_performance` | Campaign performance segmented by device |
 | `list_geographic_performance` | Campaign performance segmented by geography |
 | `list_impression_share` | Campaign impression share metrics |
@@ -148,12 +156,16 @@
 | `set_campaign_view_through_conversion_optimization` | Enable or disable view-through conversion optimization |
 | `add_campaign_audiences` | Add supported campaign audience criteria with partial failure handling |
 | `remove_campaign_audiences` | Remove campaign audience criteria by criterion ID |
+| `list_campaign_audiences` | List campaign-level audience criteria with copy-ready resource names |
+| `diff_campaign_audiences` | Compare two campaigns' audiences and return copy-ready differences |
+| `copy_audiences_between_campaigns` | Copy missing audiences from a source campaign to a target (dry-run by default) |
 
 ### 👥 Audience Management
 
 | Tool | Description |
 |------|-------------|
 | `create_audience` | Create a modern `audience` resource with AND/OR include logic and optional user-list exclusions |
+| `search_user_interests` | Search user-interest taxonomy nodes (AFFINITY, IN_MARKET, etc.) for audience targeting |
 
 Note: `create_audience` creates the modern `audience` resource, not legacy `combined_audience` rows. The current campaign attachment tool still targets the campaign criterion types exposed by `CampaignCriterion`, so it does not accept `type="AUDIENCE"`.
 
