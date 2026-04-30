@@ -14,15 +14,33 @@
 
 """Tools for managing ad groups in Google Ads."""
 
+from typing import Any
+
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tools._gaql import normalize_list_arg
+from ads_mcp.tools._gaql import quote_int_value
+from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools.api import get_ads_client
 
 
 ad_group_tool = ads_mutation_tool(mcp, tags={"ad_groups"})
+
+
+def _validate_numeric_id(value: str, field_name: str) -> str:
+  """Validates that an ID-like input can be safely treated as an integer."""
+  if isinstance(value, str) and not value.strip().isdigit():
+    raise ToolError(f"{field_name} must be an integer string.")
+  try:
+    normalized_value = quote_int_value(value, field_name)
+  except ToolError as exc:
+    raise ToolError(f"{field_name} must be an integer string.") from exc
+  if normalized_value.startswith("-"):
+    raise ToolError(f"{field_name} must be an integer string.")
+  return normalized_value
 
 
 @ad_group_tool
@@ -59,6 +77,75 @@ def set_ad_group_status(
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
+
+
+@ad_group_tool
+def set_ad_group_criterion_status(
+    customer_id: str,
+    ad_group_id: str,
+    criterion_ids: list[str] | str,
+    status: str,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Sets ad-group criterion statuses.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      ad_group_id: Ad group ID containing the criteria.
+      criterion_ids: Ad group criterion IDs. Accepts an array, JSON string,
+          comma-separated string, or single ID.
+      status: "PAUSED" or "ENABLED".
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A dict containing the updated resource names, criterion IDs, status,
+      and updated count.
+  """
+  status_upper = status.upper()
+  if status_upper not in ("PAUSED", "ENABLED"):
+    raise ToolError(f"Invalid status '{status}'. Use 'PAUSED' or 'ENABLED'.")
+
+  criterion_ids = normalize_list_arg(criterion_ids, "criterion_ids")
+  if not criterion_ids:
+    raise ToolError("criterion_ids must not be empty.")
+  criterion_ids = require_unique_values(
+      [
+          _validate_numeric_id(criterion_id, "criterion_ids")
+          for criterion_id in criterion_ids
+      ],
+      "criterion_ids",
+  )
+
+  ads_client = get_ads_client(login_customer_id)
+  criterion_service = ads_client.get_service("AdGroupCriterionService")
+
+  operations = []
+  for criterion_id in criterion_ids:
+    operation = ads_client.get_type("AdGroupCriterionOperation")
+    criterion = operation.update
+    criterion.resource_name = criterion_service.ad_group_criterion_path(
+        customer_id, ad_group_id, criterion_id
+    )
+    criterion.status = getattr(
+        ads_client.enums.AdGroupCriterionStatusEnum, status_upper
+    )
+    operation.update_mask.paths.append("status")
+    operations.append(operation)
+
+  try:
+    response = criterion_service.mutate_ad_group_criteria(
+        customer_id=customer_id, operations=operations
+    )
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+  resource_names = [result.resource_name for result in response.results]
+  return {
+      "resource_names": resource_names,
+      "criterion_ids": criterion_ids,
+      "status": status_upper,
+      "updated_count": len(resource_names),
+  }
 
 
 @ad_group_tool

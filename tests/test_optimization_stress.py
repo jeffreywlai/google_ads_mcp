@@ -790,6 +790,9 @@ class TestNewToolNamesExist:
   def test_set_ad_group_status(self):
     assert callable(ad_groups.set_ad_group_status)
 
+  def test_set_ad_group_criterion_status(self):
+    assert callable(ad_groups.set_ad_group_criterion_status)
+
   def test_set_ad_status(self):
     assert callable(ads.set_ad_status)
 
