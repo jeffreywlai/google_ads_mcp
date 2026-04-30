@@ -78,6 +78,7 @@ TOOL_MODULES = {
     ],
     ad_groups: [
         "set_ad_group_status",
+        "set_ad_group_criterion_status",
         "update_ad_group_bid",
     ],
     ads: [
@@ -206,9 +207,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_104(self):
+  def test_total_tool_count_is_105(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 104, f"Expected 104 tools, found {total}"
+    assert total == 105, f"Expected 105 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -543,6 +544,12 @@ class TestMutationFieldIntegrity:
     assert op.update_mask.paths == ["status"]
     p.stop()
 
+  def test_ad_group_criterion_status_only_sets_status(self):
+    p, op = self._make_mock("ads_mcp.tools.ad_groups")
+    ad_groups.set_ad_group_criterion_status("123", "456", "789", "PAUSED")
+    assert op.update_mask.paths == ["status"]
+    p.stop()
+
   def test_ad_group_bid_only_sets_cpc(self):
     p, op = self._make_mock("ads_mcp.tools.ad_groups")
     ad_groups.update_ad_group_bid("123", "456", 2_000_000)
@@ -581,7 +588,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 104
+    assert len(registered_tools) == 105
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
