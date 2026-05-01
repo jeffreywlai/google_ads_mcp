@@ -43,6 +43,20 @@ def _validate_numeric_id(value: str, field_name: str) -> str:
   return normalized_value
 
 
+def _normalize_criterion_ids(criterion_ids: list[str] | str) -> list[str]:
+  """Normalizes criterion ID inputs for criterion mutations."""
+  criterion_ids = normalize_list_arg(criterion_ids, "criterion_ids")
+  if not criterion_ids:
+    raise ToolError("criterion_ids must not be empty.")
+  return require_unique_values(
+      [
+          _validate_numeric_id(criterion_id, "criterion_ids")
+          for criterion_id in criterion_ids
+      ],
+      "criterion_ids",
+  )
+
+
 @ad_group_tool
 def set_ad_group_status(
     customer_id: str,
@@ -105,16 +119,7 @@ def set_ad_group_criterion_status(
   if status_upper not in ("PAUSED", "ENABLED"):
     raise ToolError(f"Invalid status '{status}'. Use 'PAUSED' or 'ENABLED'.")
 
-  criterion_ids = normalize_list_arg(criterion_ids, "criterion_ids")
-  if not criterion_ids:
-    raise ToolError("criterion_ids must not be empty.")
-  criterion_ids = require_unique_values(
-      [
-          _validate_numeric_id(criterion_id, "criterion_ids")
-          for criterion_id in criterion_ids
-      ],
-      "criterion_ids",
-  )
+  criterion_ids = _normalize_criterion_ids(criterion_ids)
 
   ads_client = get_ads_client(login_customer_id)
   criterion_service = ads_client.get_service("AdGroupCriterionService")
@@ -145,6 +150,52 @@ def set_ad_group_criterion_status(
       "criterion_ids": criterion_ids,
       "status": status_upper,
       "updated_count": len(resource_names),
+  }
+
+
+@ad_group_tool
+def remove_ad_group_audiences(
+    customer_id: str,
+    ad_group_id: str,
+    criterion_ids: list[str] | str,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Removes ad-group audience criteria by criterion ID.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      ad_group_id: Ad group ID.
+      criterion_ids: Ad group criterion IDs. Accepts an array, JSON string,
+          comma-separated string, or single ID.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      removed_resource_names.
+  """
+  criterion_ids = _normalize_criterion_ids(criterion_ids)
+
+  ads_client = get_ads_client(login_customer_id)
+  criterion_service = ads_client.get_service("AdGroupCriterionService")
+
+  operations = []
+  for criterion_id in criterion_ids:
+    operation = ads_client.get_type("AdGroupCriterionOperation")
+    operation.remove = criterion_service.ad_group_criterion_path(
+        customer_id,
+        ad_group_id,
+        criterion_id,
+    )
+    operations.append(operation)
+
+  try:
+    response = criterion_service.mutate_ad_group_criteria(
+        customer_id=customer_id, operations=operations
+    )
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+  return {
+      "removed_resource_names": [r.resource_name for r in response.results],
   }
 
 

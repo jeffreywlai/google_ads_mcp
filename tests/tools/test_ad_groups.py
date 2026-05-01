@@ -196,6 +196,101 @@ class TestSetAdGroupCriterionStatus:
     mock_ads_client.get_service.assert_not_called()
 
 
+class TestRemoveAdGroupAudiences:
+
+  @pytest.mark.parametrize(
+      "criterion_ids,expected_ids",
+      [
+          ("222", ["222"]),
+          ("222, 333", ["222", "333"]),
+          (["222", "333"], ["222", "333"]),
+          ('["222", "333"]', ["222", "333"]),
+      ],
+  )
+  def test_removes_ad_group_audiences(
+      self,
+      mock_ads_client,
+      criterion_ids,
+      expected_ids,
+  ):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_service.ad_group_criterion_path.side_effect = (
+        lambda customer_id, ad_group_id, criterion_id: (
+            f"customers/{customer_id}/adGroupCriteria/"
+            f"{ad_group_id}~{criterion_id}"
+        )
+    )
+    operations = []
+
+    def get_type(name):
+      assert name == "AdGroupCriterionOperation"
+      operation = mock.Mock()
+      operations.append(operation)
+      return operation
+
+    mock_ads_client.get_type.side_effect = get_type
+    mock_response = mock_service.mutate_ad_group_criteria.return_value
+    mock_response.results = [
+        mock.Mock(resource_name=f"customers/123/adGroupCriteria/111~{value}")
+        for value in expected_ids
+    ]
+
+    result = ad_groups.remove_ad_group_audiences(
+        CUSTOMER_ID,
+        AD_GROUP_ID,
+        criterion_ids,
+    )
+
+    assert result == {
+        "removed_resource_names": [
+            f"customers/123/adGroupCriteria/111~{value}"
+            for value in expected_ids
+        ]
+    }
+    assert [operation.remove for operation in operations] == [
+        f"customers/{CUSTOMER_ID}/adGroupCriteria/{AD_GROUP_ID}~{value}"
+        for value in expected_ids
+    ]
+    mock_service.mutate_ad_group_criteria.assert_called_once_with(
+        customer_id=CUSTOMER_ID,
+        operations=operations,
+    )
+
+  def test_sets_login_customer_id(self, mock_ads_client):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_response = mock_service.mutate_ad_group_criteria.return_value
+    mock_response.results = [mock.Mock(resource_name="x")]
+
+    ad_groups.remove_ad_group_audiences(
+        CUSTOMER_ID,
+        AD_GROUP_ID,
+        CRITERION_ID,
+        login_customer_id="999",
+    )
+    mock_ads_client._mock_get.assert_any_call("999")
+
+  @pytest.mark.parametrize(
+      "criterion_ids,match",
+      [
+          ([], "criterion_ids must not be empty"),
+          ("222 OR metrics.clicks > 0", "must be an integer string"),
+          (["222", "222"], "must not contain duplicates"),
+          ("222,222", "must not contain duplicates"),
+      ],
+  )
+  def test_rejects_bad_criterion_ids(
+      self, mock_ads_client, criterion_ids, match
+  ):
+    with pytest.raises(ToolError, match=match):
+      ad_groups.remove_ad_group_audiences(
+          CUSTOMER_ID,
+          AD_GROUP_ID,
+          criterion_ids,
+      )
+
+    mock_ads_client.get_service.assert_not_called()
+
+
 class TestUpdateAdGroupBid:
 
   def test_updates_bid(self, mock_ads_client):
