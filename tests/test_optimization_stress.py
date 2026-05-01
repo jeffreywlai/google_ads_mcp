@@ -820,6 +820,9 @@ class TestNewToolNamesExist:
   def test_remove_campaign_audiences_exists(self):
     assert callable(campaigns.remove_campaign_audiences)
 
+  def test_remove_ad_group_audiences_exists(self):
+    assert callable(ad_groups.remove_ad_group_audiences)
+
   def test_update_ad_group_bid_still_exists(self):
     assert callable(ad_groups.update_ad_group_bid)
 

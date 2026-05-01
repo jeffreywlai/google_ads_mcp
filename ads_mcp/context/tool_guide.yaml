@@ -125,6 +125,7 @@ categories:
     tools:
       set_ad_group_status: Pause or enable an ad group.
       set_ad_group_criterion_status: Pause or enable ad-group criteria such as USER_LIST audiences.
+      remove_ad_group_audiences: Remove ad-group audience criteria by criterion ID.
       update_ad_group_bid: Change default CPC bid for an ad group.
 
   ads:

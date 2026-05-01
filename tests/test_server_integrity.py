@@ -79,6 +79,7 @@ TOOL_MODULES = {
     ad_groups: [
         "set_ad_group_status",
         "set_ad_group_criterion_status",
+        "remove_ad_group_audiences",
         "update_ad_group_bid",
     ],
     ads: [
@@ -207,9 +208,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_105(self):
+  def test_total_tool_count_is_106(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 105, f"Expected 105 tools, found {total}"
+    assert total == 106, f"Expected 106 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -588,7 +589,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 105
+    assert len(registered_tools) == 106
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
