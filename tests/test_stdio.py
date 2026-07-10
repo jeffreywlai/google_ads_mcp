@@ -18,18 +18,18 @@ from unittest import mock
 
 from ads_mcp import server
 from ads_mcp import stdio
+import httpx
 
 
 @mock.patch("ads_mcp.stdio.mcp_server")
 @mock.patch("ads_mcp.stdio.api")
-@mock.patch("ads_mcp.stdio.update_views_yaml", new_callable=mock.Mock)
+@mock.patch("ads_mcp.stdio.refresh_view_docs_for_startup")
 @mock.patch("builtins.print")
-def test_main(mock_print, mock_update_views, mock_api, mock_mcp_server):
+def test_main(mock_print, mock_refresh_views, mock_api, mock_mcp_server):
   """Tests main function."""
-  with mock.patch("ads_mcp.stdio.asyncio.run"):
-    stdio.main()
+  stdio.main()
 
-  mock_update_views.assert_called_once()
+  mock_refresh_views.assert_called_once_with()
   mock_api.get_ads_client.assert_called_once()
   mock_print.assert_not_called()
   mock_mcp_server.run.assert_called_once_with(
@@ -42,3 +42,30 @@ def test_stdio_and_server_register_same_tool_modules():
   assert {module.__name__ for module in stdio.tools} == {
       module.__name__ for module in server.tools
   }
+
+
+def test_script_targets_are_importable_callables():
+  """Tests that both installed script targets resolve to callables."""
+  assert callable(stdio.main)
+  assert callable(server.main)
+
+
+@mock.patch("ads_mcp.stdio.mcp_server")
+@mock.patch("ads_mcp.stdio.api")
+@mock.patch(
+    "ads_mcp.scripts.generate_views.update_views_yaml",
+    new_callable=mock.AsyncMock,
+)
+def test_main_continues_when_view_update_times_out(
+    mock_update_views, mock_api, mock_mcp_server, caplog
+):
+  """A documentation timeout does not prevent the stdio server from booting."""
+  mock_update_views.side_effect = httpx.TimeoutException("request timed out")
+
+  stdio.main()
+
+  mock_api.get_ads_client.assert_called_once_with()
+  mock_mcp_server.run.assert_called_once_with(
+      transport="stdio", show_banner=False
+  )
+  assert "Unable to refresh reporting view documentation" in caplog.text
