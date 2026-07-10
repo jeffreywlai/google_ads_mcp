@@ -271,9 +271,10 @@ def test_live_execute_gaql_returns_structured_rows():
   assert result.structured_content["max_rows_applied"] == 1
 
 
-def test_live_export_gaql_csv_writes_csv(tmp_path):
+def test_live_export_gaql_csv_writes_csv(tmp_path, monkeypatch):
   customer_id = _live_customer_id()
   output_path = tmp_path / "customer_export.csv"
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
 
   result = asyncio.run(
       _call_tool(

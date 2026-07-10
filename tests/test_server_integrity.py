@@ -598,6 +598,17 @@ class TestFastMcpConfiguration:
       ), f"{tool_name} should have FastMCP annotations"
 
     assert registered_tools["execute_gaql"].annotations.readOnlyHint is True
+    assert (
+        registered_tools["export_gaql_csv"].annotations.readOnlyHint is False
+    )
+    assert (
+        registered_tools["export_gaql_csv"].annotations.destructiveHint is True
+    )
+    assert MUTATE_TAG not in registered_tools["export_gaql_csv"].tags
+    export_search_items = compact_search_result_serializer(
+        [registered_tools["export_gaql_csv"]]
+    )
+    assert export_search_items[0]["mode"] == "write"
     assert MUTATE_TAG in registered_tools["apply_recommendations"].tags
     assert registered_tools["delete_label"].annotations.destructiveHint is True
     assert (

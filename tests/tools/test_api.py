@@ -16,8 +16,11 @@
 
 # pylint: disable=protected-access
 
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 import os
+import tempfile
+import uuid
 
 from ads_mcp.tools import api
 from google.ads.googleads.errors import GoogleAdsException
@@ -28,16 +31,22 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reset_ads_client():
-  """Resets the cached GoogleAdsClient instance before each test."""
-  api._ADS_CLIENT = None  # pylint: disable=protected-access
-  api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
-  api._PAGED_QUERY_CACHE = api.OrderedDict()  # pylint: disable=protected-access
-  api._package_ads_assistant.cache_clear()  # pylint: disable=protected-access
+  """Resets cached GoogleAdsClient instances before each test."""
+  api._ADS_CLIENTS.clear()
+  api._ADS_CLIENT_BUILDS.clear()
+  api._ADS_CLIENTS_CREDENTIALS_MTIME = None
+  api._ADS_CLIENTS_CREDENTIALS_PATH = None
+  api._ADS_CONFIG_CACHE = {}
+  api._PAGED_QUERY_CACHE = api.OrderedDict()
+  api._package_ads_assistant.cache_clear()
   yield
-  api._ADS_CLIENT = None  # pylint: disable=protected-access
-  api._ADS_CONFIG_CACHE = {}  # pylint: disable=protected-access
-  api._PAGED_QUERY_CACHE = api.OrderedDict()  # pylint: disable=protected-access
-  api._package_ads_assistant.cache_clear()  # pylint: disable=protected-access
+  api._ADS_CLIENTS.clear()
+  api._ADS_CLIENT_BUILDS.clear()
+  api._ADS_CLIENTS_CREDENTIALS_MTIME = None
+  api._ADS_CLIENTS_CREDENTIALS_PATH = None
+  api._ADS_CONFIG_CACHE = {}
+  api._PAGED_QUERY_CACHE = api.OrderedDict()
+  api._package_ads_assistant.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -203,11 +212,14 @@ def _google_ads_exception(*messages):
 
 
 @mock.patch("ads_mcp.tools.api._load_ads_config", return_value={})
+@mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_list_accessible_accounts(mock_google_ads_client, _, mock_load_config):
+def test_list_accessible_accounts(
+    mock_google_ads_client, _, mock_getmtime, mock_load_config
+):
   """Tests the list_accessible_accounts function."""
-  del mock_load_config
+  del mock_getmtime, mock_load_config
   mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_service = mock_client_instance.get_service.return_value
   mock_service.list_accessible_customers.return_value.resource_names = [
@@ -218,11 +230,14 @@ def test_list_accessible_accounts(mock_google_ads_client, _, mock_load_config):
 
 
 @mock.patch("ads_mcp.tools.api._load_ads_config", return_value={})
+@mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_execute_gaql(mock_google_ads_client, _, mock_load_config):
+def test_execute_gaql(
+    mock_google_ads_client, _, mock_getmtime, mock_load_config
+):
   """Tests the execute_gaql function."""
-  del mock_load_config
+  del mock_getmtime, mock_load_config
   mock_client_instance = mock_google_ads_client.load_from_dict.return_value
   mock_ads_service = mock_client_instance.get_service.return_value
   mock_ads_service.search_stream.return_value = [
@@ -611,7 +626,8 @@ def test_build_paginated_list_response_returns_completeness_metadata():
   }
 
 
-def test_export_gaql_csv_writes_file_and_metadata(tmp_path):
+def test_export_gaql_csv_writes_file_and_metadata(tmp_path, monkeypatch):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
   output_path = tmp_path / "export.csv"
   rows = [
       {
@@ -650,7 +666,8 @@ def test_export_gaql_csv_writes_file_and_metadata(tmp_path):
   ]
 
 
-def test_export_gaql_csv_applies_max_rows(tmp_path):
+def test_export_gaql_csv_applies_max_rows(tmp_path, monkeypatch):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
   output_path = tmp_path / "limited.csv"
   rows = [
       {"campaign.id": "1"},
@@ -681,6 +698,158 @@ def test_export_gaql_csv_rejects_non_integer_max_rows(max_rows, tmp_path):
         output_path=str(tmp_path / "out.csv"),
         max_rows=max_rows,
     )
+
+
+def test_export_gaql_csv_rejects_path_outside_allowlist(tmp_path, monkeypatch):
+  allowed_dir = tmp_path / "allowed"
+  allowed_dir.mkdir()
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(allowed_dir))
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=[]):
+    with pytest.raises(api.ToolError, match="GOOGLE_ADS_MCP_EXPORT_DIR"):
+      api.export_gaql_csv(
+          query="SELECT campaign.id FROM campaign",
+          customer_id="123",
+          output_path=str(tmp_path / "outside.csv"),
+      )
+
+
+def test_export_gaql_csv_honors_env_allowlist(tmp_path, monkeypatch):
+  export_dir = tmp_path / "exports"
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(export_dir))
+  output_path = export_dir / "nested" / "export.csv"
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    result = api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=str(output_path),
+    )
+
+  assert result["file_path"] == str(output_path)
+  assert output_path.is_file()
+
+
+def test_export_gaql_csv_requires_explicit_overwrite(tmp_path, monkeypatch):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  output_path = tmp_path / "existing.csv"
+  output_path.write_text("original\n", encoding="utf-8")
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    with pytest.raises(api.ToolError, match="overwrite=True"):
+      api.export_gaql_csv(
+          query="SELECT campaign.id FROM campaign",
+          customer_id="123",
+          output_path=str(output_path),
+      )
+    result = api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=str(output_path),
+        overwrite=True,
+    )
+
+  assert result["file_path"] == str(output_path)
+  assert output_path.read_text(encoding="utf-8").splitlines() == [
+      "campaign.id",
+      "1",
+  ]
+
+
+def test_export_gaql_csv_defaults_to_temp_file(monkeypatch):
+  monkeypatch.delenv("GOOGLE_ADS_MCP_EXPORT_DIR", raising=False)
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    result = api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+    )
+
+  try:
+    temp_dir = os.path.realpath(tempfile.gettempdir())
+    assert (
+        os.path.commonpath([temp_dir, os.path.realpath(result["file_path"])])
+        == temp_dir
+    )
+    assert os.path.isfile(result["file_path"])
+  finally:
+    os.unlink(result["file_path"])
+
+
+def test_export_gaql_csv_rejects_directory_output_path(tmp_path, monkeypatch):
+  """An existing directory is rejected even when overwrite is requested."""
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=[]):
+    with pytest.raises(api.ToolError, match="not a directory"):
+      api.export_gaql_csv(
+          query="SELECT campaign.id FROM campaign",
+          customer_id="123",
+          output_path=str(tmp_path),
+          overwrite=True,
+      )
+
+
+def test_export_gaql_csv_validates_path_before_query(tmp_path, monkeypatch):
+  """A disallowed output_path fails before any GAQL work runs."""
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path / "allowed"))
+
+  with mock.patch("ads_mcp.tools.api.run_gaql_query") as mock_query:
+    with pytest.raises(api.ToolError, match="GOOGLE_ADS_MCP_EXPORT_DIR"):
+      api.export_gaql_csv(
+          query="SELECT campaign.id FROM campaign",
+          customer_id="123",
+          output_path=str(tmp_path / "outside.csv"),
+      )
+
+  mock_query.assert_not_called()
+
+
+@pytest.mark.skipif(not os.path.isdir("/tmp"), reason="POSIX /tmp required")
+def test_export_gaql_csv_allows_posix_tmp_by_default(monkeypatch):
+  """Explicit /tmp paths count as the system temp directory."""
+  monkeypatch.delenv("GOOGLE_ADS_MCP_EXPORT_DIR", raising=False)
+  output_path = f"/tmp/google_ads_mcp_test_{uuid.uuid4().hex}.csv"
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    result = api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=output_path,
+    )
+
+  try:
+    assert os.path.isfile(result["file_path"])
+  finally:
+    os.unlink(result["file_path"])
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW required"
+)
+def test_open_export_file_refuses_symlink_targets(tmp_path):
+  """A symlink planted at the export path cannot redirect the write."""
+  victim_path = tmp_path / "victim.txt"
+  victim_path.write_text("precious\n", encoding="utf-8")
+  link_path = tmp_path / "export.csv"
+  link_path.symlink_to(victim_path)
+
+  with pytest.raises(api.ToolError, match="Unable to write"):
+    api._open_export_file(str(link_path), overwrite=True)
+
+  assert victim_path.read_text(encoding="utf-8") == "precious\n"
 
 
 @mock.patch("ads_mcp.tools.api.Credentials")
@@ -727,21 +896,24 @@ def test_get_ads_client_caches_yaml_config_for_access_token(
     "ads_mcp.tools.api._default_ads_assistant", return_value="assistant-tag"
 )
 @mock.patch("ads_mcp.tools.api.get_access_token", return_value=None)
+@mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
-def test_get_ads_client_forces_proto_plus_before_storage_client_init(
+def test_get_ads_client_coerces_yaml_login_id_and_forces_proto_plus(
     mock_google_ads_client,
     mock_isfile_unused,
+    mock_getmtime_unused,
     mock_get_access_token_unused,
     mock_default_ads_assistant_unused,
 ):
   del (
       mock_isfile_unused,
+      mock_getmtime_unused,
       mock_get_access_token_unused,
       mock_default_ads_assistant_unused,
   )
   mock_client_instance = mock_google_ads_client.load_from_dict.return_value
-  mock_client_instance.login_customer_id = "default-login"
+  mock_client_instance.login_customer_id = "123456"
 
   with mock.patch(
       "ads_mcp.tools.api._load_ads_config",
@@ -751,7 +923,7 @@ def test_get_ads_client_forces_proto_plus_before_storage_client_init(
           "client_id": "client-id",
           "client_secret": "client-secret",
           "use_proto_plus": False,
-          "login_customer_id": "default-login",
+          "login_customer_id": 123456,
       },
   ) as mock_load_config:
     client = api.get_ads_client()
@@ -765,27 +937,30 @@ def test_get_ads_client_forces_proto_plus_before_storage_client_init(
           "client_id": "client-id",
           "client_secret": "client-secret",
           "use_proto_plus": True,
-          "login_customer_id": "default-login",
+          "login_customer_id": "123456",
           "ads_assistant": "assistant-tag",
       }
   )
-  assert client.login_customer_id == "default-login"
+  assert client.login_customer_id == "123456"
 
 
 @mock.patch(
     "ads_mcp.tools.api._default_ads_assistant", return_value="assistant-tag"
 )
 @mock.patch("ads_mcp.tools.api.get_access_token", return_value=None)
+@mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0)
 @mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True)
 @mock.patch("ads_mcp.tools.api.GoogleAdsClient")
 def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
     mock_google_ads_client,
     mock_isfile_unused,
+    mock_getmtime_unused,
     mock_get_access_token_unused,
     mock_default_ads_assistant_unused,
 ):
   del (
       mock_isfile_unused,
+      mock_getmtime_unused,
       mock_get_access_token_unused,
       mock_default_ads_assistant_unused,
   )
@@ -812,6 +987,218 @@ def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
           "ads_assistant": "assistant-tag",
       }
   )
+
+
+def test_get_ads_client_isolates_concurrent_login_customer_ids():
+  """Concurrent callers get immutable clients for their own manager IDs."""
+
+  def build_client(config):
+    client = mock.Mock()
+    client.login_customer_id = config.get("login_customer_id")
+    return client
+
+  requested_ids = ["111", "222"] * 50
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0),
+      mock.patch(
+          "ads_mcp.tools.api._load_ads_config",
+          return_value={"developer_token": "token"},
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(
+          api.GoogleAdsClient, "load_from_dict", side_effect=build_client
+      ) as mock_load,
+  ):
+    with ThreadPoolExecutor(max_workers=16) as executor:
+      clients = list(executor.map(api.get_ads_client, requested_ids))
+
+  assert [client.login_customer_id for client in clients] == requested_ids
+  assert mock_load.call_count == 2
+  assert {
+      call.args[0]["login_customer_id"] for call in mock_load.call_args_list
+  } == {"111", "222"}
+
+
+def test_get_ads_client_invalidates_cache_when_credentials_change():
+  """A credentials mtime change rebuilds the per-login client cache."""
+
+  def build_client(config):
+    client = mock.Mock()
+    client.login_customer_id = config["login_customer_id"]
+    return client
+
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch(
+          "ads_mcp.tools.api.os.path.getmtime",
+          side_effect=[100.0, 100.0, 200.0],
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._load_ads_config",
+          return_value={"login_customer_id": "default-login"},
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(
+          api.GoogleAdsClient, "load_from_dict", side_effect=build_client
+      ) as mock_load,
+  ):
+    first_client = api.get_ads_client()
+    cached_client = api.get_ads_client()
+    refreshed_client = api.get_ads_client()
+
+  assert first_client is cached_client
+  assert refreshed_client is not first_client
+  assert mock_load.call_count == 2
+
+
+def test_get_ads_client_omits_missing_default_login_customer_id():
+  """A missing YAML default is omitted rather than passed through as None."""
+  mock_client = mock.Mock(login_customer_id=None)
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0),
+      mock.patch("ads_mcp.tools.api._load_ads_config", return_value={}),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(
+          api.GoogleAdsClient, "load_from_dict", return_value=mock_client
+      ) as mock_load,
+  ):
+    assert api.get_ads_client() is mock_client
+
+  assert "login_customer_id" not in mock_load.call_args.args[0]
+
+
+def test_get_ads_client_normalizes_dashed_login_id():
+  """Dashed manager IDs share a cache entry with their plain form."""
+
+  def build_client(config):
+    client = mock.Mock()
+    client.login_customer_id = config.get("login_customer_id")
+    return client
+
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0),
+      mock.patch(
+          "ads_mcp.tools.api._load_ads_config",
+          return_value={"developer_token": "token"},
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(
+          api.GoogleAdsClient, "load_from_dict", side_effect=build_client
+      ) as mock_load,
+  ):
+    dashed_client = api.get_ads_client("123-456-7890")
+    plain_client = api.get_ads_client("1234567890")
+
+  assert dashed_client is plain_client
+  assert dashed_client.login_customer_id == "1234567890"
+  assert mock_load.call_count == 1
+
+
+def test_get_ads_client_rejects_non_numeric_login_id():
+  """Malformed manager IDs raise ToolError before any client build."""
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0),
+      mock.patch(
+          "ads_mcp.tools.api._load_ads_config",
+          return_value={"developer_token": "token"},
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(api.GoogleAdsClient, "load_from_dict") as mock_load,
+  ):
+    with pytest.raises(api.ToolError, match="login_customer_id"):
+      api.get_ads_client("not-a-customer")
+
+  mock_load.assert_not_called()
+
+
+def test_get_ads_client_wraps_config_validation_errors():
+  """Client config validation failures surface as retryable ToolErrors."""
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0),
+      mock.patch(
+          "ads_mcp.tools.api._load_ads_config",
+          return_value={"developer_token": "token"},
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(
+          api.GoogleAdsClient,
+          "load_from_dict",
+          side_effect=ValueError("login customer ID is invalid"),
+      ) as mock_load,
+  ):
+    with pytest.raises(
+        api.ToolError, match="Invalid Google Ads client config"
+    ):
+      api.get_ads_client("12345678901")
+    with pytest.raises(
+        api.ToolError, match="Invalid Google Ads client config"
+    ):
+      api.get_ads_client("12345678901")
+
+  assert mock_load.call_count == 2
+
+
+def test_get_ads_client_evicts_least_recently_used_clients():
+  """The per-login client cache stays bounded under many manager IDs."""
+
+  def build_client(config):
+    client = mock.Mock()
+    client.login_customer_id = config.get("login_customer_id")
+    return client
+
+  login_ids = [
+      str(1000000000 + index)
+      for index in range(api._ADS_CLIENTS_MAX_ENTRIES + 1)
+  ]
+  with (
+      mock.patch("ads_mcp.tools.api.get_access_token", return_value=None),
+      mock.patch("ads_mcp.tools.api.os.path.isfile", return_value=True),
+      mock.patch("ads_mcp.tools.api.os.path.getmtime", return_value=123.0),
+      mock.patch(
+          "ads_mcp.tools.api._load_ads_config",
+          return_value={"developer_token": "token"},
+      ),
+      mock.patch(
+          "ads_mcp.tools.api._default_ads_assistant", return_value=None
+      ),
+      mock.patch.object(
+          api.GoogleAdsClient, "load_from_dict", side_effect=build_client
+      ) as mock_load,
+  ):
+    for login_id in login_ids:
+      api.get_ads_client(login_id)
+
+    assert len(api._ADS_CLIENTS) == api._ADS_CLIENTS_MAX_ENTRIES
+    assert mock_load.call_count == len(login_ids)
+
+    api.get_ads_client(login_ids[-1])
+    assert mock_load.call_count == len(login_ids)
+
+    api.get_ads_client(login_ids[0])
+    assert mock_load.call_count == len(login_ids) + 1
 
 
 def test_apply_ads_client_defaults_preserves_explicit_assistant():

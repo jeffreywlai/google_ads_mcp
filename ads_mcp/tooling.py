@@ -24,6 +24,7 @@ from mcp.types import ToolAnnotations
 
 READ_TAG = "read"
 MUTATE_TAG = "mutate"
+WRITE_TAG = "write"
 
 _COMMON_DISCOVERY_ARGS = {
     "customer_id",
@@ -31,7 +32,7 @@ _COMMON_DISCOVERY_ARGS = {
     "limit",
     "partial_failure",
 }
-_GENERIC_TAGS = {READ_TAG, MUTATE_TAG, "control"}
+_GENERIC_TAGS = {READ_TAG, MUTATE_TAG, WRITE_TAG, "control"}
 _WORKFLOW_TAG_PRIORITY = [
     "guide",
     "profiles",
@@ -148,6 +149,25 @@ def local_read_tool(
   )
 
 
+def local_write_tool(
+    mcp: Any,
+    *,
+    tags: set[str] | None = None,
+    **kwargs: Any,
+) -> Callable[..., Any]:
+  """Registers a local filesystem write tool that can replace files."""
+  return mcp.tool(
+      tags=_merge_tags([WRITE_TAG], tags),
+      annotations=_build_annotations(
+          read_only=False,
+          destructive=True,
+          idempotent=False,
+          open_world=True,
+      ),
+      **kwargs,
+  )
+
+
 def session_control_tool(
     mcp: Any,
     *,
@@ -218,6 +238,8 @@ def compact_search_result_serializer(
       mode = "mutate"
     elif READ_TAG in tags:
       mode = "read"
+    elif WRITE_TAG in tags:
+      mode = "write"
     else:
       mode = "control"
 
