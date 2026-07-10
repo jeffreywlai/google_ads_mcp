@@ -17,7 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
-      - run: uv sync --frozen
+      - run: uv sync --locked
       - run: uv run pyink --check .
       - run: uv run pylint ads_mcp tests --fail-under=9.5
       - run: uv run pytest -q
