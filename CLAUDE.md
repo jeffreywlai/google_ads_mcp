@@ -70,4 +70,5 @@ uv run pylint ads_mcp tests      # Lint
 
 - Managed with `uv` (see `pyproject.toml`)
 - `google-ads>=30.1.0,<31.0.0` (Google Ads API v24)
-- `fastmcp>=3.2.2`
+- `fastmcp>=3.2.2,<3.3` (upper bound: coordinator.py relies on FastMCP
+  private APIs; bump deliberately with tests)
