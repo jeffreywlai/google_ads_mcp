@@ -16,13 +16,10 @@ wheels/
 # Google Ads
 google-ads.yaml
 
-# temp file
-.api-version
-.mcp-server-version
-
 # Env files
 .env
 
 # Test files
 .coverage
 .pytest_cache
+.DS_Store

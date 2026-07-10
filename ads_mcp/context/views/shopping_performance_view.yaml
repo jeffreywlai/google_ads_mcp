@@ -1,0 +1,371 @@
+display_name: Shopping Performance View
+name: shopping_performance_view
+description: '<p>Shopping performance view.</p>
+
+  <p>Provides Shopping campaign and Performance Max campaign statistics aggregated
+
+  at several product dimension levels. Product dimension values from
+
+  Merchant Center such as brand, category, custom attributes, product
+
+  condition, and product type will reflect the state of each dimension as of
+
+  the date and time when the corresponding event was recorded.</p>
+
+  <p>The number of impressions and clicks that <code>shopping_performance_view</code>
+
+  returns stats for may be different from campaign reports.
+
+  <code>shopping_performance_view</code> shows impressions and clicks on products
+
+  appearing in ads, while campaign reports show impressions and clicks on the
+
+  ads themselves. Depending on the format, an ad can show from zero to several
+
+  products, so the numbers may not match.</p>
+
+  <p>In Google Ads UI, you can query impressions and clicks of products
+
+  appearing in ads by selecting a column from "Product attributes" in the
+
+  report editor. For example, selecting the "Brand" column is equivalent to
+
+  selecting <code>segments.product_brand</code>.</p>'
+attributed_views:
+- customer
+attributes:
+- shopping_performance_view.resource_name
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+segments:
+- ad_group.ad_rotation_mode
+- ad_group.ai_max_ad_group_setting.disable_search_term_matching
+- ad_group.audience_setting.use_audience_grouped
+- ad_group.base_ad_group
+- ad_group.campaign
+- ad_group.cpc_bid_micros
+- ad_group.cpm_bid_micros
+- ad_group.cpv_bid_micros
+- ad_group.demand_gen_ad_group_settings.channel_controls.channel_config
+- ad_group.demand_gen_ad_group_settings.channel_controls.channel_strategy
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.discover
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.display
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.gmail
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.maps
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.youtube_in_feed
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.youtube_in_stream
+- ad_group.demand_gen_ad_group_settings.channel_controls.selected_channels.youtube_shorts
+- ad_group.display_custom_bid_dimension
+- ad_group.effective_cpc_bid_micros
+- ad_group.effective_target_cpa_micros
+- ad_group.effective_target_cpa_source
+- ad_group.effective_target_cpc
+- ad_group.effective_target_cpc_source
+- ad_group.effective_target_roas
+- ad_group.effective_target_roas_source
+- ad_group.exclude_demographic_expansion
+- ad_group.excluded_parent_asset_field_types
+- ad_group.excluded_parent_asset_set_types
+- ad_group.final_url_suffix
+- ad_group.fixed_cpm_micros
+- ad_group.id
+- ad_group.labels
+- ad_group.name
+- ad_group.optimized_targeting_enabled
+- ad_group.percent_cpc_bid_micros
+- ad_group.primary_status
+- ad_group.primary_status_reasons
+- ad_group.resource_name
+- ad_group.status
+- ad_group.target_cpa_micros
+- ad_group.target_cpc_micros
+- ad_group.target_cpm_micros
+- ad_group.target_cpv_micros
+- ad_group.target_roas
+- ad_group.targeting_setting.target_restrictions
+- ad_group.tracking_url_template
+- ad_group.type
+- ad_group.url_custom_parameters
+- ad_group.vertical_ads_format_setting.disable_text_ads
+- ad_group.vertical_ads_format_setting.enable_booking_links
+- ad_group.vertical_ads_format_setting.enable_vertical_promotion_ads
+- ad_group.video_ad_group_settings.video_ad_sequence.step_id
+- campaign.accessible_bidding_strategy
+- campaign.ad_serving_optimization_status
+- campaign.advertising_channel_sub_type
+- campaign.advertising_channel_type
+- campaign.ai_max_setting.bundling_required
+- campaign.ai_max_setting.enable_ai_max
+- campaign.app_campaign_setting.app_id
+- campaign.app_campaign_setting.app_store
+- campaign.app_campaign_setting.bidding_strategy_goal_type
+- campaign.asset_automation_settings
+- campaign.audience_setting.use_audience_grouped
+- campaign.base_campaign
+- campaign.bidding_strategy
+- campaign.bidding_strategy_system_status
+- campaign.bidding_strategy_type
+- campaign.brand_guidelines.accent_color
+- campaign.brand_guidelines.main_color
+- campaign.brand_guidelines.predefined_font_family
+- campaign.brand_guidelines_enabled
+- campaign.campaign_budget
+- campaign.campaign_group
+- campaign.commission.commission_rate_micros
+- campaign.contains_eu_political_advertising
+- campaign.demand_gen_campaign_settings.upgraded_targeting
+- campaign.dynamic_search_ads_setting.domain_name
+- campaign.dynamic_search_ads_setting.language_code
+- campaign.dynamic_search_ads_setting.use_supplied_urls_only
+- campaign.end_date_time
+- campaign.excluded_parent_asset_field_types
+- campaign.excluded_parent_asset_set_types
+- campaign.experiment_type
+- campaign.feed_types
+- campaign.final_url_suffix
+- campaign.fixed_cpm.goal
+- campaign.fixed_cpm.target_frequency_info.target_count
+- campaign.fixed_cpm.target_frequency_info.time_unit
+- campaign.frequency_caps
+- campaign.geo_target_type_setting.negative_geo_target_type
+- campaign.geo_target_type_setting.positive_geo_target_type
+- campaign.hotel_property_asset_set
+- campaign.hotel_setting.disable_hotel_setting
+- campaign.hotel_setting.hotel_center_id
+- campaign.id
+- campaign.keyword_match_type
+- campaign.labels
+- campaign.listing_type
+- campaign.local_campaign_setting.location_source_type
+- campaign.local_services_campaign_settings.category_bids
+- campaign.manual_cpa
+- campaign.manual_cpc.enhanced_cpc_enabled
+- campaign.manual_cpm
+- campaign.manual_cpv
+- campaign.maximize_conversion_value.target_roas
+- campaign.maximize_conversion_value.target_roas_tolerance_percent_millis
+- campaign.maximize_conversions.target_cpa_micros
+- campaign.missing_eu_political_advertising_declaration
+- campaign.name
+- campaign.network_settings.target_content_network
+- campaign.network_settings.target_google_search
+- campaign.network_settings.target_google_tv_network
+- campaign.network_settings.target_partner_search_network
+- campaign.network_settings.target_search_network
+- campaign.network_settings.target_youtube
+- campaign.optimization_goal_setting.optimization_goal_types
+- campaign.optimization_score
+- campaign.payment_mode
+- campaign.percent_cpc.cpc_bid_ceiling_micros
+- campaign.percent_cpc.enhanced_cpc_enabled
+- campaign.performance_max_upgrade.performance_max_campaign
+- campaign.performance_max_upgrade.pre_upgrade_campaign
+- campaign.performance_max_upgrade.status
+- campaign.pmax_campaign_settings.brand_targeting_overrides.ignore_exclusions_for_shopping_ads
+- campaign.pmax_campaign_settings.local_services_enabled
+- campaign.pmax_campaign_settings.local_services_pmax_campaign_settings.country_code
+- campaign.pmax_campaign_settings.local_services_pmax_campaign_settings.founding_year
+- campaign.pmax_campaign_settings.local_services_pmax_campaign_settings.navigational_query_leads_enabled
+- campaign.pmax_campaign_settings.local_services_pmax_campaign_settings.phone_numbers
+- campaign.primary_status
+- campaign.primary_status_reasons
+- campaign.real_time_bidding_setting.opt_in
+- campaign.resource_name
+- campaign.selective_optimization.conversion_actions
+- campaign.serving_status
+- campaign.shopping_setting.advertising_partner_ids
+- campaign.shopping_setting.campaign_priority
+- campaign.shopping_setting.disable_product_feed
+- campaign.shopping_setting.enable_local
+- campaign.shopping_setting.feed_label
+- campaign.shopping_setting.ignore_brand_exclusion_in_shopping_ads
+- campaign.shopping_setting.merchant_id
+- campaign.shopping_setting.use_vehicle_inventory
+- campaign.start_date_time
+- campaign.status
+- campaign.target_cpa.cpc_bid_ceiling_micros
+- campaign.target_cpa.cpc_bid_floor_micros
+- campaign.target_cpa.target_cpa_micros
+- campaign.target_cpc.target_cpc_micros
+- campaign.target_cpm.target_frequency_goal.target_count
+- campaign.target_cpm.target_frequency_goal.time_unit
+- campaign.target_cpv
+- campaign.target_impression_share.cpc_bid_ceiling_micros
+- campaign.target_impression_share.location
+- campaign.target_impression_share.location_fraction_micros
+- campaign.target_roas.cpc_bid_ceiling_micros
+- campaign.target_roas.cpc_bid_floor_micros
+- campaign.target_roas.target_roas
+- campaign.target_roas.target_roas_tolerance_percent_millis
+- campaign.target_spend.cpc_bid_ceiling_micros
+- campaign.target_spend.target_spend_micros
+- campaign.targeting_setting.target_restrictions
+- campaign.text_guidelines.messaging_restrictions
+- campaign.text_guidelines.term_exclusions
+- campaign.third_party_integration_partners.brand_lift_integration_partners
+- campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.reach_integration_partners
+- campaign.third_party_integration_partners.viewability_integration_partners
+- campaign.tracking_setting.tracking_url
+- campaign.tracking_url_template
+- campaign.travel_campaign_settings.travel_account_id
+- campaign.url_custom_parameters
+- campaign.vanity_pharma.vanity_pharma_display_url_mode
+- campaign.vanity_pharma.vanity_pharma_text
+- campaign.video_campaign_settings.booking_details.cancellation_date_time
+- campaign.video_campaign_settings.booking_details.hold_expiration_date_time
+- campaign.video_campaign_settings.booking_details.status
+- campaign.video_campaign_settings.reservation_ad_category_self_disclosure.alcohol
+- campaign.video_campaign_settings.reservation_ad_category_self_disclosure.gambling
+- campaign.video_campaign_settings.reservation_ad_category_self_disclosure.politics
+- campaign.video_campaign_settings.video_ad_format_control.format_restriction
+- campaign.video_campaign_settings.video_ad_format_control.non_skippable_in_stream_restrictions.max_duration
+- campaign.video_campaign_settings.video_ad_format_control.non_skippable_in_stream_restrictions.min_duration
+- campaign.video_campaign_settings.video_ad_inventory_control.allow_in_feed
+- campaign.video_campaign_settings.video_ad_inventory_control.allow_in_stream
+- campaign.video_campaign_settings.video_ad_inventory_control.allow_non_skippable_in_stream
+- campaign.video_campaign_settings.video_ad_inventory_control.allow_shorts
+- campaign.video_campaign_settings.video_ad_sequence.minimum_duration
+- campaign.video_campaign_settings.video_ad_sequence.steps
+- campaign.view_through_conversion_optimization_enabled
+- segments.ad_network_type
+- segments.ad_sub_network_type
+- segments.click_type
+- segments.conversion_action
+- segments.conversion_action_category
+- segments.conversion_action_name
+- segments.conversion_attribution_event_type
+- segments.date
+- segments.day_of_week
+- segments.device
+- segments.external_conversion_source
+- segments.month
+- segments.product_aggregator_id
+- segments.product_brand
+- segments.product_category_level1
+- segments.product_category_level2
+- segments.product_category_level3
+- segments.product_category_level4
+- segments.product_category_level5
+- segments.product_channel
+- segments.product_channel_exclusivity
+- segments.product_condition
+- segments.product_country
+- segments.product_custom_attribute0
+- segments.product_custom_attribute1
+- segments.product_custom_attribute2
+- segments.product_custom_attribute3
+- segments.product_custom_attribute4
+- segments.product_feed_label
+- segments.product_item_id
+- segments.product_language
+- segments.product_merchant_id
+- segments.product_store_id
+- segments.product_title
+- segments.product_type_l1
+- segments.product_type_l2
+- segments.product_type_l3
+- segments.product_type_l4
+- segments.product_type_l5
+- segments.quarter
+- segments.week
+- segments.year
+metrics:
+- metrics.all_average_cart_size
+- metrics.all_average_order_value_micros
+- metrics.all_conversions
+- metrics.all_conversions_by_conversion_date
+- metrics.all_conversions_from_interactions_rate
+- metrics.all_conversions_value
+- metrics.all_conversions_value_by_conversion_date
+- metrics.all_cost_of_goods_sold_micros
+- metrics.all_cross_sell_cost_of_goods_sold_micros
+- metrics.all_cross_sell_gross_profit_micros
+- metrics.all_cross_sell_revenue_micros
+- metrics.all_cross_sell_units_sold
+- metrics.all_gross_profit_margin
+- metrics.all_gross_profit_micros
+- metrics.all_lead_cost_of_goods_sold_micros
+- metrics.all_lead_gross_profit_micros
+- metrics.all_lead_revenue_micros
+- metrics.all_lead_units_sold
+- metrics.all_orders
+- metrics.all_revenue_micros
+- metrics.all_units_sold
+- metrics.average_cart_size
+- metrics.average_cpc
+- metrics.average_order_value_micros
+- metrics.clicks
+- metrics.conversions
+- metrics.conversions_by_conversion_date
+- metrics.conversions_from_interactions_rate
+- metrics.conversions_value
+- metrics.conversions_value_by_conversion_date
+- metrics.cost_micros
+- metrics.cost_of_goods_sold_micros
+- metrics.cost_per_all_conversions
+- metrics.cost_per_conversion
+- metrics.cross_device_conversions
+- metrics.cross_device_conversions_value_micros
+- metrics.cross_sell_cost_of_goods_sold_micros
+- metrics.cross_sell_gross_profit_micros
+- metrics.cross_sell_revenue_micros
+- metrics.cross_sell_units_sold
+- metrics.ctr
+- metrics.gross_profit_margin
+- metrics.gross_profit_micros
+- metrics.impressions
+- metrics.lead_cost_of_goods_sold_micros
+- metrics.lead_gross_profit_micros
+- metrics.lead_revenue_micros
+- metrics.lead_units_sold
+- metrics.orders
+- metrics.revenue_micros
+- metrics.search_absolute_top_impression_share
+- metrics.search_budget_lost_absolute_top_impression_share
+- metrics.search_budget_lost_impression_share
+- metrics.search_click_share
+- metrics.search_impression_share
+- metrics.search_rank_lost_absolute_top_impression_share
+- metrics.search_rank_lost_impression_share
+- metrics.units_sold
+- metrics.value_per_all_conversions
+- metrics.value_per_all_conversions_by_conversion_date
+- metrics.value_per_conversion
+- metrics.value_per_conversions_by_conversion_date

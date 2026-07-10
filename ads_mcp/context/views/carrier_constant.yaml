@@ -1,0 +1,11 @@
+display_name: Carrier Constant
+name: carrier_constant
+description: <p>A carrier criterion that can be used in campaign targeting.</p>
+attributed_views: []
+attributes:
+- carrier_constant.country_code
+- carrier_constant.id
+- carrier_constant.name
+- carrier_constant.resource_name
+segments: []
+metrics: []

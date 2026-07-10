@@ -1,0 +1,16 @@
+display_name: Life Event
+name: life_event
+description: '<p>A life event: a particular interest-based vertical to be targeted
+  to reach
+
+  users when they are in the midst of important life milestones.</p>'
+attributed_views: []
+attributes:
+- life_event.availabilities
+- life_event.id
+- life_event.launched_to_all
+- life_event.name
+- life_event.parent
+- life_event.resource_name
+segments: []
+metrics: []

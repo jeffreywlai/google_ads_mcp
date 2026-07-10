@@ -1,0 +1,92 @@
+display_name: Account Budget Proposal
+name: account_budget_proposal
+description: '<p>An account-level budget proposal.</p>
+
+  <p>All fields prefixed with ''proposed'' may not necessarily be applied directly.
+
+  For example, proposed spending limits may be adjusted before their
+
+  application.  This is true if the ''proposed'' field has an ''approved''
+
+  counterpart, for example, spending limits.</p>
+
+  <p>Note that the proposal type (proposal_type) changes which fields are
+
+  required and which must remain empty.</p>'
+attributed_views:
+- customer
+- billing_setup
+attributes:
+- account_budget_proposal.account_budget
+- account_budget_proposal.approval_date_time
+- account_budget_proposal.approved_end_date_time
+- account_budget_proposal.approved_end_time_type
+- account_budget_proposal.approved_spending_limit_micros
+- account_budget_proposal.approved_spending_limit_type
+- account_budget_proposal.approved_start_date_time
+- account_budget_proposal.billing_setup
+- account_budget_proposal.creation_date_time
+- account_budget_proposal.id
+- account_budget_proposal.proposal_type
+- account_budget_proposal.proposed_end_date_time
+- account_budget_proposal.proposed_end_time_type
+- account_budget_proposal.proposed_name
+- account_budget_proposal.proposed_notes
+- account_budget_proposal.proposed_purchase_order_number
+- account_budget_proposal.proposed_spending_limit_micros
+- account_budget_proposal.proposed_spending_limit_type
+- account_budget_proposal.proposed_start_date_time
+- account_budget_proposal.resource_name
+- account_budget_proposal.status
+- billing_setup.end_date_time
+- billing_setup.end_time_type
+- billing_setup.id
+- billing_setup.payments_account
+- billing_setup.payments_account_info.payments_account_id
+- billing_setup.payments_account_info.payments_account_name
+- billing_setup.payments_account_info.payments_profile_id
+- billing_setup.payments_account_info.payments_profile_name
+- billing_setup.payments_account_info.secondary_payments_profile_id
+- billing_setup.resource_name
+- billing_setup.start_date_time
+- billing_setup.status
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+segments: []
+metrics: []

@@ -14,8 +14,10 @@
 """Generates YAML files for Google Ads API reporting views."""
 
 import asyncio
+from importlib import metadata
 import logging
 import os
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -24,29 +26,33 @@ import yaml
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 ADS_API_VERSION = "v24"
-MCP_SERVER_VERSION = "v0.6.3"
+try:
+  MCP_SERVER_VERSION = f"v{metadata.version("google-ads-mcp")}"
+except metadata.PackageNotFoundError:
+  MCP_SERVER_VERSION = "v0.6.3"
 VIEW_JSON_URL_PATH = (
     f"https://gaql-query-builder.uc.r.appspot.com/schemas/{ADS_API_VERSION}/"
 )
 MODULE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTEXT_PATH = f"{MODULE_ROOT}/context"
 
-http_client = httpx.AsyncClient(http2=True)
-
 
 def get_view_json_url(view: str) -> str:
   return f"{VIEW_JSON_URL_PATH}{view}.json"
 
 
-async def get_view_json(view: str) -> dict[str, Any]:
+async def get_view_json(
+    view: str, http_client: httpx.AsyncClient | None = None
+) -> dict[str, Any]:
   """Fetches the JSON definition for a given reporting view."""
-  http_res = await http_client.get(get_view_json_url(view))
+  if http_client is None:
+    async with httpx.AsyncClient(http2=True) as client:
+      return await get_view_json(view, client)
+
+  http_res = await http_client.get(get_view_json_url(view), timeout=15.0)
+  http_res.raise_for_status()
   view_json = http_res.json()
   return view_json
-
-
-# def get_view_json(view: str):
-#     return json.load(open("ad_group_ad_asset_combination_view.json"))
 
 
 def get_fields_obj(
@@ -78,9 +84,13 @@ def get_fields_obj(
   return {field: details(field) for field in view_json[category]}
 
 
-async def save_view_yaml(view: str, path: str = "."):
+async def save_view_yaml(
+    view: str,
+    path: str = ".",
+    http_client: httpx.AsyncClient | None = None,
+):
   """Saves the reporting view metadata as a YAML file."""
-  view_json = await get_view_json(view)
+  view_json = await get_view_json(view, http_client)
 
   attributed_views = set(
       v.split(".")[0]
@@ -139,29 +149,97 @@ def check_context_version() -> bool:
   return True
 
 
+def _read_views_manifest() -> set[str] | None:
+  """Reads the set of views covered by the last fully successful run."""
+  manifest_path = f"{CONTEXT_PATH}/.views-manifest"
+  if not os.path.isfile(manifest_path):
+    return None
+  with open(manifest_path, "r", encoding="utf-8") as f:
+    return {line.strip() for line in f if line.strip()}
+
+
+def _write_views_manifest(declared_views: list[str]) -> None:
+  """Records a fully successful run so partial failures keep retrying."""
+  with open(f"{CONTEXT_PATH}/.views-manifest", "w", encoding="utf-8") as f:
+    f.write("\n".join(sorted(declared_views)))
+
+
+def should_regenerate_views(
+    declared_views: list[str], present_views: set[str]
+) -> bool:
+  """Returns whether reporting view context needs regeneration.
+
+  The manifest comparison keeps retrying after partial failures: view files
+  written by a failed batch satisfy the declared-vs-present check, but the
+  manifest is only rewritten when every view (and fields.yaml) succeeded.
+  """
+  return (
+      not check_context_version()
+      or bool(set(declared_views) - present_views)
+      or _read_views_manifest() != set(declared_views)
+  )
+
+
 async def update_views_yaml():
   """Updates the YAML files for all reporting views."""
-  if check_context_version():
-    return
-
   with open(f"{CONTEXT_PATH}/views.yaml", "r", encoding="utf-8") as f:
     views = yaml.safe_load(f)
 
-  tasks = [save_view_yaml(view, f"{CONTEXT_PATH}/views") for view in views]
-  views_data = await asyncio.gather(*tasks)
+  views_path = Path(CONTEXT_PATH) / "views"
+  present_views = {path.stem for path in views_path.glob("*.yaml")}
+  if not should_regenerate_views(views, present_views):
+    return
+
+  semaphore = asyncio.Semaphore(10)
+
+  async with httpx.AsyncClient(http2=True) as http_client:
+
+    async def save_with_limit(view: str):
+      async with semaphore:
+        return await save_view_yaml(view, str(views_path), http_client)
+
+    tasks = [save_with_limit(view) for view in views]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+  failed_views = [
+      view
+      for view, result in zip(views, results)
+      if isinstance(result, BaseException)
+  ]
+  if failed_views:
+    logging.warning(
+        "Failed to refresh reporting views: %s", ", ".join(failed_views)
+    )
+    return
+
   all_fields = {}
-  for view in views_data:
+  for view in results:
     all_fields.update(view["attributes"])
     all_fields.update(view["segments"])
     all_fields.update(view["metrics"])
 
   with open(f"{CONTEXT_PATH}/fields.yaml", "w", encoding="utf-8") as f:
-    views = yaml.safe_dump(all_fields, f, sort_keys=True)
+    yaml.safe_dump(all_fields, f, sort_keys=True)
 
   with open(f"{CONTEXT_PATH}/.api-version", "w", encoding="utf-8") as f:
     f.write(ADS_API_VERSION)
   with open(f"{CONTEXT_PATH}/.mcp-server-version", "w", encoding="utf-8") as f:
     f.write(MCP_SERVER_VERSION)
+  _write_views_manifest(views)
+
+
+def refresh_view_docs_for_startup(timeout_seconds: float = 30.0) -> None:
+  """Refreshes view docs with a boot deadline; never blocks serving."""
+
+  async def _bounded_update() -> None:
+    await asyncio.wait_for(update_views_yaml(), timeout=timeout_seconds)
+
+  try:
+    asyncio.run(_bounded_update())
+  except Exception as error:  # pylint: disable=broad-exception-caught
+    logging.warning(
+        "Unable to refresh reporting view documentation: %s", error
+    )
 
 
 if __name__ == "__main__":

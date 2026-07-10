@@ -1,0 +1,16 @@
+display_name: Topic Constant
+name: topic_constant
+description: '<p>Use topics to target or exclude placements in the Google Display
+  Network
+
+  based on the category into which the placement falls (for example,
+
+  "Pets &amp; Animals/Pets/Dogs").</p>'
+attributed_views: []
+attributes:
+- topic_constant.id
+- topic_constant.path
+- topic_constant.resource_name
+- topic_constant.topic_constant_parent
+segments: []
+metrics: []

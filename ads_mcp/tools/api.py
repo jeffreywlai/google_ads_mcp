@@ -15,6 +15,7 @@
 """This module contains tools for interacting with the Google Ads API."""
 
 from collections import OrderedDict
+from concurrent import futures
 import csv
 from copy import deepcopy
 import difflib
@@ -25,6 +26,7 @@ import math
 import os
 import re
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -44,15 +46,20 @@ import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tooling import local_write_tool
 from ads_mcp.tools._gaql import gaql_quote_string as _gaql_quote_string
 from ads_mcp.tools._gaql import preprocess_gaql_query
 from ads_mcp.utils import MODULE_DIR
 from ads_mcp.utils import ROOT_DIR
 
 
-_ADS_CLIENT: GoogleAdsClient | None = None
+_ADS_CLIENTS: OrderedDict[str | None, GoogleAdsClient] = OrderedDict()
+_ADS_CLIENT_BUILDS: dict[str | None, futures.Future] = {}
+_ADS_CLIENTS_LOCK = threading.Lock()
+_ADS_CLIENTS_MAX_ENTRIES = 8
+_ADS_CLIENTS_CREDENTIALS_MTIME: float | None = None
+_ADS_CLIENTS_CREDENTIALS_PATH: str | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_DEFAULT_LOGIN_CUSTOMER_ID: str | None = None
 _PAGED_QUERY_CACHE_TTL_SECONDS = 90.0
 _PAGED_QUERY_CACHE_MAX_ENTRIES = 2
 _PAGED_QUERY_CACHE: OrderedDict[
@@ -178,9 +185,12 @@ def _apply_ads_client_defaults(ads_config: dict[str, Any]) -> dict[str, Any]:
   return normalized_config
 
 
-def _load_ads_config(credentials_path: str) -> dict[str, Any]:
+def _load_ads_config(
+    credentials_path: str, cache_mtime: float | None = None
+) -> dict[str, Any]:
   """Loads the Google Ads YAML config with mtime-based caching."""
-  cache_mtime = os.path.getmtime(credentials_path)
+  if cache_mtime is None:
+    cache_mtime = os.path.getmtime(credentials_path)
   cache_entry = _ADS_CONFIG_CACHE.get(credentials_path)
   if cache_entry and cache_entry[0] == cache_mtime:
     return cache_entry[1]
@@ -192,26 +202,72 @@ def _load_ads_config(credentials_path: str) -> dict[str, Any]:
   return ads_config
 
 
+def _normalize_login_customer_id(login_customer_id: Any) -> str | None:
+  """Normalizes a caller-provided manager account ID to digits only."""
+  if login_customer_id in (None, ""):
+    return None
+  normalized_id = re.sub(r"[\s-]", "", str(login_customer_id))
+  if not normalized_id.isdigit():
+    raise ToolError(
+        "login_customer_id must be a numeric Google Ads customer ID "
+        "(dashes and spaces are allowed)."
+    )
+  return normalized_id
+
+
+def _default_login_customer_id_key(default_value: Any) -> str | None:
+  """Normalizes the YAML default login ID without rejecting it locally.
+
+  Malformed YAML defaults are passed through so client construction reports
+  them; only caller-supplied IDs get strict local validation.
+  """
+  if default_value in (None, ""):
+    return None
+  normalized_id = re.sub(r"[\s-]", "", str(default_value))
+  if normalized_id.isdigit():
+    return normalized_id
+  return str(default_value)
+
+
+def _build_ads_client(
+    ads_config: dict[str, Any],
+    key: str | None,
+) -> GoogleAdsClient:
+  """Builds an immutable GoogleAdsClient for one login_customer_id key."""
+  build_config = dict(ads_config)
+  if key is None:
+    build_config.pop("login_customer_id", None)
+  else:
+    build_config["login_customer_id"] = key
+  try:
+    return GoogleAdsClient.load_from_dict(build_config)
+  except ValueError as exc:
+    raise ToolError(f"Invalid Google Ads client config: {exc}") from exc
+
+
 def get_ads_client(
     login_customer_id: str | None = None,
 ) -> GoogleAdsClient:
   """Gets a GoogleAdsClient instance.
 
   Looks for an access token from the environment or loads credentials from
-  a YAML file. Resets login_customer_id to the YAML-configured default
-  before each call to prevent state pollution between tool invocations.
+  a YAML file. YAML-backed clients are cached immutably per manager account
+  so concurrent calls cannot change another request's login_customer_id.
+  Clients are built outside the cache lock because construction refreshes
+  OAuth tokens over the network.
 
   Args:
       login_customer_id: Optional manager account ID to use for this
-          request. Resets to the YAML default when not provided.
+          request. Uses the YAML default when not provided.
 
   Returns:
       A GoogleAdsClient instance.
 
   Raises:
       FileNotFoundError: If the credentials YAML file is not found.
+      ToolError: If login_customer_id or the client config is invalid.
   """
-  global _ADS_CLIENT, _DEFAULT_LOGIN_CUSTOMER_ID
+  global _ADS_CLIENTS_CREDENTIALS_MTIME, _ADS_CLIENTS_CREDENTIALS_PATH
 
   access_token = get_access_token()
   if access_token:
@@ -238,19 +294,57 @@ def get_ads_client(
       client.login_customer_id = login_customer_id
     return client
 
-  if not _ADS_CLIENT:
-    ads_config = _apply_ads_client_defaults(_load_ads_config(credentials_path))
-    _ADS_CLIENT = GoogleAdsClient.load_from_dict(ads_config)
-    _DEFAULT_LOGIN_CUSTOMER_ID = getattr(
-        _ADS_CLIENT, "login_customer_id", None
-    )
-
-  # Always reset to prevent state pollution from previous calls.
-  _ADS_CLIENT.login_customer_id = (
-      login_customer_id or _DEFAULT_LOGIN_CUSTOMER_ID
+  credentials_mtime = os.path.getmtime(credentials_path)
+  ads_config = _apply_ads_client_defaults(
+      _load_ads_config(credentials_path, credentials_mtime)
   )
+  key = _normalize_login_customer_id(login_customer_id)
+  if key is None:
+    key = _default_login_customer_id_key(ads_config.get("login_customer_id"))
 
-  return _ADS_CLIENT
+  with _ADS_CLIENTS_LOCK:
+    if (
+        credentials_path != _ADS_CLIENTS_CREDENTIALS_PATH
+        or credentials_mtime != _ADS_CLIENTS_CREDENTIALS_MTIME
+    ):
+      _ADS_CLIENTS.clear()
+      _ADS_CLIENT_BUILDS.clear()
+      _ADS_CLIENTS_CREDENTIALS_PATH = credentials_path
+      _ADS_CLIENTS_CREDENTIALS_MTIME = credentials_mtime
+
+    cached_client = _ADS_CLIENTS.get(key)
+    if cached_client is not None:
+      _ADS_CLIENTS.move_to_end(key)
+      return cached_client
+
+    build = _ADS_CLIENT_BUILDS.get(key)
+    owns_build = build is None
+    if owns_build:
+      build = futures.Future()
+      _ADS_CLIENT_BUILDS[key] = build
+
+  if not owns_build:
+    return build.result()
+
+  try:
+    client = _build_ads_client(ads_config, key)
+  except BaseException as exc:
+    with _ADS_CLIENTS_LOCK:
+      _ADS_CLIENT_BUILDS.pop(key, None)
+    build.set_exception(exc)
+    raise
+
+  with _ADS_CLIENTS_LOCK:
+    _ADS_CLIENT_BUILDS.pop(key, None)
+    if (
+        credentials_path == _ADS_CLIENTS_CREDENTIALS_PATH
+        and credentials_mtime == _ADS_CLIENTS_CREDENTIALS_MTIME
+    ):
+      _ADS_CLIENTS[key] = client
+      while len(_ADS_CLIENTS) > _ADS_CLIENTS_MAX_ENTRIES:
+        _ADS_CLIENTS.popitem(last=False)
+  build.set_result(client)
+  return client
 
 
 @ads_read_tool(mcp, tags={"accounts", "discovery"})
@@ -505,25 +599,94 @@ def _csv_cell_value(value: Any) -> Any:
   return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
+def _allowed_export_bases() -> list[str]:
+  """Returns real paths explicit export paths must stay within."""
+  configured_base = os.environ.get("GOOGLE_ADS_MCP_EXPORT_DIR")
+  if configured_base:
+    return [os.path.realpath(configured_base)]
+
+  allowed_bases = [os.path.realpath(tempfile.gettempdir())]
+  # macOS gettempdir() is the per-user $TMPDIR; users reasonably expect
+  # /tmp to count as the system temp directory too.
+  if os.path.isdir("/tmp"):
+    posix_tmp = os.path.realpath("/tmp")
+    if posix_tmp not in allowed_bases:
+      allowed_bases.append(posix_tmp)
+  return allowed_bases
+
+
+def _resolve_export_path(
+    output_path: str | None,
+    overwrite: bool,
+) -> str | None:
+  """Validates an explicit export path before any query work runs."""
+  if not output_path:
+    return None
+
+  allowed_bases = _allowed_export_bases()
+  resolved_path = os.path.realpath(output_path)
+  for allowed_base in allowed_bases:
+    try:
+      if os.path.commonpath([allowed_base, resolved_path]) == allowed_base:
+        break
+    except ValueError:
+      continue
+  else:
+    raise ToolError(
+        "output_path must be inside GOOGLE_ADS_MCP_EXPORT_DIR "
+        f"(currently {allowed_bases[0]}). Omit output_path to write a "
+        "uniquely named temp file instead."
+    )
+  if os.path.isdir(resolved_path):
+    raise ToolError("output_path must be a file path, not a directory.")
+  if os.path.exists(resolved_path) and not overwrite:
+    raise ToolError(
+        "output_path already exists; pass overwrite=True to replace it."
+    )
+  return resolved_path
+
+
+def _open_export_file(resolved_path: str, overwrite: bool) -> Any:
+  """Opens an export target without following final-component symlinks."""
+  open_flags = os.O_WRONLY | os.O_CREAT
+  open_flags |= os.O_TRUNC if overwrite else os.O_EXCL
+  open_flags |= getattr(os, "O_NOFOLLOW", 0)
+  try:
+    file_descriptor = os.open(resolved_path, open_flags, 0o644)
+  except FileExistsError as exc:
+    raise ToolError(
+        "output_path already exists; pass overwrite=True to replace it."
+    ) from exc
+  except IsADirectoryError as exc:
+    raise ToolError(
+        "output_path must be a file path, not a directory."
+    ) from exc
+  except OSError as exc:
+    raise ToolError(f"Unable to write output_path: {exc}") from exc
+  return os.fdopen(file_descriptor, "w", newline="", encoding="utf-8")
+
+
 def _write_csv_rows(
     rows: list[dict[str, Any]],
-    output_path: str | None = None,
+    resolved_output_path: str | None = None,
+    overwrite: bool = False,
 ) -> tuple[str, list[str], int]:
   """Writes GAQL rows to CSV and returns the path, columns, and size."""
-  if output_path:
-    resolved_path = os.path.abspath(output_path)
+  if resolved_output_path:
+    resolved_path = resolved_output_path
     parent_dir = os.path.dirname(resolved_path)
     if parent_dir:
       os.makedirs(parent_dir, exist_ok=True)
+    csv_file = _open_export_file(resolved_path, overwrite)
   else:
     file_descriptor, resolved_path = tempfile.mkstemp(
         prefix="google_ads_mcp_",
         suffix=".csv",
     )
-    os.close(file_descriptor)
+    csv_file = os.fdopen(file_descriptor, "w", newline="", encoding="utf-8")
 
   columns = _csv_columns(rows)
-  with open(resolved_path, "w", newline="", encoding="utf-8") as csv_file:
+  with csv_file:
     writer = csv.writer(csv_file)
     if columns:
       writer.writerow(columns)
@@ -701,7 +864,7 @@ def execute_gaql(
   }
 
 
-@ads_read_tool(
+@local_write_tool(
     mcp,
     tags={"gaql", "reporting", "export"},
     output_schema=_EXPORT_GAQL_CSV_OUTPUT_SCHEMA,
@@ -710,6 +873,7 @@ def export_gaql_csv(
     query: str,
     customer_id: str,
     output_path: str | None = None,
+    overwrite: bool = False,
     max_rows: int | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -721,7 +885,9 @@ def export_gaql_csv(
   Args:
       query: GAQL query to export.
       customer_id: Google Ads customer ID.
-      output_path: Optional destination path. Defaults to a temp CSV file.
+      output_path: Optional destination path inside GOOGLE_ADS_MCP_EXPORT_DIR.
+        Defaults to a uniquely named CSV file in the system temp directory.
+      overwrite: Whether to replace an existing explicit output path.
       max_rows: Optional row cap for partial exports.
       login_customer_id: Optional manager account ID.
 
@@ -729,6 +895,7 @@ def export_gaql_csv(
       A dict with the CSV path and export metadata.
   """
   _validate_optional_positive_int(max_rows, "max_rows")
+  resolved_output_path = _resolve_export_path(output_path, overwrite)
 
   rows = run_gaql_query(
       query=query,
@@ -737,7 +904,7 @@ def export_gaql_csv(
   )
   exported_rows = rows if max_rows is None else rows[:max_rows]
   file_path, columns, bytes_written = _write_csv_rows(
-      exported_rows, output_path
+      exported_rows, resolved_output_path, overwrite
   )
 
   result = {

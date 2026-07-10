@@ -1,0 +1,15 @@
+display_name: Geo Target Constant
+name: geo_target_constant
+description: <p>A geo target constant.</p>
+attributed_views: []
+attributes:
+- geo_target_constant.canonical_name
+- geo_target_constant.country_code
+- geo_target_constant.id
+- geo_target_constant.name
+- geo_target_constant.parent_geo_target
+- geo_target_constant.resource_name
+- geo_target_constant.status
+- geo_target_constant.target_type
+segments: []
+metrics: []

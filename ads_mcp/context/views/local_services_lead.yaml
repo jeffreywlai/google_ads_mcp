@@ -1,0 +1,67 @@
+display_name: Local Services Lead
+name: local_services_lead
+description: '<p>Data from Local Services Lead.
+
+  Contains details of Lead which is generated when user calls, messages or
+
+  books service from advertiser.
+
+  More info: <a href="https://ads.google.com/local-services-ads">https://ads.google.com/local-services-ads</a></p>'
+attributed_views:
+- customer
+attributes:
+- local_services_lead.category_id
+- local_services_lead.contact_details
+- local_services_lead.creation_date_time
+- local_services_lead.credit_details.credit_state
+- local_services_lead.credit_details.credit_state_last_update_date_time
+- local_services_lead.id
+- local_services_lead.lead_charged
+- local_services_lead.lead_feedback_submitted
+- local_services_lead.lead_status
+- local_services_lead.lead_type
+- local_services_lead.locale
+- local_services_lead.note.description
+- local_services_lead.note.edit_date_time
+- local_services_lead.resource_name
+- local_services_lead.service_id
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+segments: []
+metrics: []

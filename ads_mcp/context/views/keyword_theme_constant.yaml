@@ -1,0 +1,11 @@
+display_name: Keyword Theme Constant
+name: keyword_theme_constant
+description: <p>A Smart Campaign keyword theme constant.</p>
+attributed_views: []
+attributes:
+- keyword_theme_constant.country_code
+- keyword_theme_constant.display_name
+- keyword_theme_constant.language_code
+- keyword_theme_constant.resource_name
+segments: []
+metrics: []

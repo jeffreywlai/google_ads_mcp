@@ -1,0 +1,68 @@
+display_name: Keyword Plan Ad Group
+name: keyword_plan_ad_group
+description: '<p>A Keyword Planner ad group.
+
+  Max number of keyword plan ad groups per plan: 200.</p>'
+attributed_views:
+- keyword_plan_campaign
+- customer
+- keyword_plan
+attributes:
+- keyword_plan_ad_group.cpc_bid_micros
+- keyword_plan_ad_group.id
+- keyword_plan_ad_group.keyword_plan_campaign
+- keyword_plan_ad_group.name
+- keyword_plan_ad_group.resource_name
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+- keyword_plan.forecast_period
+- keyword_plan.id
+- keyword_plan.name
+- keyword_plan.resource_name
+- keyword_plan_campaign.cpc_bid_micros
+- keyword_plan_campaign.geo_targets
+- keyword_plan_campaign.geo_targets.geo_target_constant
+- keyword_plan_campaign.id
+- keyword_plan_campaign.keyword_plan
+- keyword_plan_campaign.keyword_plan_network
+- keyword_plan_campaign.language_constants
+- keyword_plan_campaign.name
+- keyword_plan_campaign.resource_name
+segments: []
+metrics: []

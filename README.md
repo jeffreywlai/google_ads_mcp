@@ -261,6 +261,8 @@ Don't have one? Generate it using the [authentication example](https://github.co
 
 #### Option A: Claude Code (recommended)
 
+The `run-mcp-server` script uses the stdio transport expected by Claude Code.
+
 ```bash
 # Install from repo
 claude mcp add --transport stdio GoogleAds \
@@ -289,7 +291,7 @@ Add to your Gemini configuration:
       "command": "pipx",
       "args": [
         "run", "--spec",
-        "git+https://github.com/google-marketing-solutions/google_ads_mcp.git",
+        "git+https://github.com/jeffreywlai/google_ads_mcp.git",
         "run-mcp-server"
       ],
       "env": {
@@ -309,6 +311,9 @@ uv run -m ads_mcp.server
 
 #### Hosted Auth / Transport Options
 
+Use `run-mcp-server-http` to launch the streamable-HTTP server. The
+`run-mcp-server` script is reserved for stdio clients.
+
 When running the HTTP server with Google OAuth enabled, these optional env vars
 control the new hardening and resumability behavior:
 
@@ -317,6 +322,9 @@ control the new hardening and resumability behavior:
 - `FASTMCP_SERVER_PING_INTERVAL_MS`: Ping cadence for long-lived HTTP sessions.
 - `FASTMCP_STREAMABLE_HTTP_RETRY_INTERVAL_MS`: Suggested retry interval for
   resumable streamable-http reconnects.
+- `GOOGLE_ADS_MCP_EXPORT_DIR`: Directory that explicit `export_gaql_csv`
+  output paths must stay within. Defaults to the OS temp directory
+  (explicit paths under `/tmp` are also accepted on POSIX systems).
 - `GOOGLE_ADS_ADS_ASSISTANT`: Override the Google Ads request tag. By default,
   the server sends a compact `google-ads-mcp-<version>` tag automatically.
 

@@ -13,10 +13,8 @@
 # limitations under the License.
 
 """The server for the Google Ads API MCP."""
-import asyncio
-
 from ads_mcp.coordinator import mcp_server
-from ads_mcp.scripts.generate_views import update_views_yaml
+from ads_mcp.scripts.generate_views import refresh_view_docs_for_startup
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
@@ -65,7 +63,7 @@ tools = [
 
 def main():
   """Initializes and runs the MCP server."""
-  asyncio.run(update_views_yaml())  # Check and update docs resource
+  refresh_view_docs_for_startup()  # Check and update docs resource
   api.get_ads_client()  # Check Google Ads credentials
   mcp_server.run(
       transport="stdio",

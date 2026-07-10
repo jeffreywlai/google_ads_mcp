@@ -22,6 +22,7 @@ from unittest import mock
 from ads_mcp import server
 from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
 from fastmcp.server.middleware.ping import PingMiddleware
+import httpx
 import pytest
 
 
@@ -33,9 +34,9 @@ import pytest
 )
 @mock.patch("ads_mcp.server.api")
 @mock.patch("ads_mcp.server.mcp_server")
-@mock.patch("ads_mcp.server.update_views_yaml", new_callable=mock.Mock)
+@mock.patch("ads_mcp.server.refresh_view_docs_for_startup")
 def test_main(
-    mock_update_views,
+    mock_refresh_views,
     mock_mcp_server,
     mock_api,
     mock_build_auth_provider,
@@ -44,16 +45,42 @@ def test_main(
     mock_print,
 ):
   """Tests main function."""
-  with mock.patch("ads_mcp.server.asyncio.run"):
-    server.main()
+  server.main()
 
-  mock_update_views.assert_called_once()
+  mock_refresh_views.assert_called_once_with()
   mock_api.get_ads_client.assert_called_once()
   mock_build_auth_provider.assert_called_once_with()
   assert mock_mcp_server.auth == "auth-provider"
   mock_build_app.assert_called_once_with()
   mock_serve_app.assert_called_once_with("app")
   mock_print.assert_called_once_with("mcp server starting...")
+
+
+def test_main_continues_when_view_update_returns_404(caplog):
+  """A documentation HTTP error does not block the HTTP server."""
+  request = httpx.Request("GET", "https://example.test/missing.json")
+  response = httpx.Response(404, request=request)
+  http_error = httpx.HTTPStatusError(
+      "not found", request=request, response=response
+  )
+
+  with (
+      mock.patch(
+          "ads_mcp.scripts.generate_views.update_views_yaml",
+          new=mock.AsyncMock(side_effect=http_error),
+      ),
+      mock.patch("ads_mcp.server.api") as mock_api,
+      mock.patch("ads_mcp.server._build_auth_provider", return_value=None),
+      mock.patch(
+          "ads_mcp.server._build_streamable_http_app", return_value="app"
+      ),
+      mock.patch("ads_mcp.server._serve_streamable_http_app") as mock_serve,
+  ):
+    server.main()
+
+  mock_api.get_ads_client.assert_called_once_with()
+  mock_serve.assert_called_once_with("app")
+  assert "Unable to refresh reporting view documentation" in caplog.text
 
 
 @mock.patch.dict(
