@@ -1,0 +1,10 @@
+display_name: Mobile App Category Constant
+name: mobile_app_category_constant
+description: <p>A mobile application category constant.</p>
+attributed_views: []
+attributes:
+- mobile_app_category_constant.id
+- mobile_app_category_constant.name
+- mobile_app_category_constant.resource_name
+segments: []
+metrics: []

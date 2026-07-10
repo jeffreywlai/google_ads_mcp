@@ -1,0 +1,83 @@
+display_name: Audience
+name: audience
+description: '<p>Audience is an effective targeting option that lets you
+
+  intersect different segment attributes, such as detailed demographics and
+
+  affinities, to create audiences that represent sections of your target
+
+  segments.</p>'
+attributed_views:
+- asset_group
+- customer
+attributes:
+- audience.asset_group
+- audience.description
+- audience.dimensions
+- audience.dimensions.audience_segments.segments.custom_audience.custom_audience
+- audience.dimensions.audience_segments.segments.detailed_demographic.detailed_demographic
+- audience.dimensions.audience_segments.segments.life_event.life_event
+- audience.dimensions.audience_segments.segments.user_interest.user_interest_category
+- audience.dimensions.audience_segments.segments.user_list.user_list
+- audience.exclusion_dimension
+- audience.exclusion_dimension.exclusions.user_list.user_list
+- audience.id
+- audience.name
+- audience.resource_name
+- audience.scope
+- audience.status
+- asset_group.ad_strength
+- asset_group.asset_coverage.ad_strength_action_items
+- asset_group.campaign
+- asset_group.final_mobile_urls
+- asset_group.final_urls
+- asset_group.google_local_services_info.callouts
+- asset_group.google_local_services_info.category_id
+- asset_group.id
+- asset_group.name
+- asset_group.path1
+- asset_group.path2
+- asset_group.primary_status
+- asset_group.primary_status_reasons
+- asset_group.resource_name
+- asset_group.status
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+segments: []
+metrics: []

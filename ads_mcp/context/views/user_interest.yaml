@@ -1,0 +1,14 @@
+display_name: User Interest
+name: user_interest
+description: '<p>A user interest: a particular interest-based vertical to be targeted.</p>'
+attributed_views: []
+attributes:
+- user_interest.availabilities
+- user_interest.launched_to_all
+- user_interest.name
+- user_interest.resource_name
+- user_interest.taxonomy_type
+- user_interest.user_interest_id
+- user_interest.user_interest_parent
+segments: []
+metrics: []

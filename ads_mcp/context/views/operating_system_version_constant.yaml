@@ -1,0 +1,18 @@
+display_name: Operating System Version Constant
+name: operating_system_version_constant
+description: '<p>A mobile operating system version or a range of versions, depending
+  on
+
+  <code>operator_type</code>. List of available mobile platforms at
+
+  <a href="https://developers.google.com/google-ads/api/reference/data/codes-formats#mobile-platforms">https://developers.google.com/google-ads/api/reference/data/codes-formats#mobile-platforms</a></p>'
+attributed_views: []
+attributes:
+- operating_system_version_constant.id
+- operating_system_version_constant.name
+- operating_system_version_constant.operator_type
+- operating_system_version_constant.os_major_version
+- operating_system_version_constant.os_minor_version
+- operating_system_version_constant.resource_name
+segments: []
+metrics: []

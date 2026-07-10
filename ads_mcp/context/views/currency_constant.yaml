@@ -1,0 +1,12 @@
+display_name: Currency Constant
+name: currency_constant
+description: <p>A currency constant.</p>
+attributed_views: []
+attributes:
+- currency_constant.billable_unit_micros
+- currency_constant.code
+- currency_constant.name
+- currency_constant.resource_name
+- currency_constant.symbol
+segments: []
+metrics: []

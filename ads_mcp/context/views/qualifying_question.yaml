@@ -1,0 +1,11 @@
+display_name: Qualifying Question
+name: qualifying_question
+description: <p>Qualifying Questions for Lead Form.</p>
+attributed_views: []
+attributes:
+- qualifying_question.locale
+- qualifying_question.qualifying_question_id
+- qualifying_question.resource_name
+- qualifying_question.text
+segments: []
+metrics: []

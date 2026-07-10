@@ -1,0 +1,96 @@
+display_name: Bidding Strategy Simulation
+name: bidding_strategy_simulation
+description: '<p>A bidding strategy simulation. Supported combinations of simulation
+  type
+
+  and simulation modification method are detailed below respectively.</p>
+
+  <ol>
+
+  <li>TARGET_CPA - UNIFORM</li>
+
+  <li>TARGET_ROAS - UNIFORM</li>
+
+  </ol>'
+attributed_views:
+- customer
+- bidding_strategy
+attributes:
+- bidding_strategy_simulation.bidding_strategy_id
+- bidding_strategy_simulation.end_date
+- bidding_strategy_simulation.modification_method
+- bidding_strategy_simulation.resource_name
+- bidding_strategy_simulation.start_date
+- bidding_strategy_simulation.target_cpa_point_list.points
+- bidding_strategy_simulation.target_roas_point_list.points
+- bidding_strategy_simulation.type
+- bidding_strategy.aligned_campaign_budget_id
+- bidding_strategy.campaign_count
+- bidding_strategy.currency_code
+- bidding_strategy.effective_currency_code
+- bidding_strategy.enhanced_cpc
+- bidding_strategy.id
+- bidding_strategy.maximize_conversion_value.cpc_bid_ceiling_micros
+- bidding_strategy.maximize_conversion_value.cpc_bid_floor_micros
+- bidding_strategy.maximize_conversion_value.target_roas
+- bidding_strategy.maximize_conversion_value.target_roas_tolerance_percent_millis
+- bidding_strategy.maximize_conversions.cpc_bid_ceiling_micros
+- bidding_strategy.maximize_conversions.cpc_bid_floor_micros
+- bidding_strategy.maximize_conversions.target_cpa_micros
+- bidding_strategy.name
+- bidding_strategy.non_removed_campaign_count
+- bidding_strategy.resource_name
+- bidding_strategy.status
+- bidding_strategy.target_cpa.cpc_bid_ceiling_micros
+- bidding_strategy.target_cpa.cpc_bid_floor_micros
+- bidding_strategy.target_cpa.target_cpa_micros
+- bidding_strategy.target_impression_share.cpc_bid_ceiling_micros
+- bidding_strategy.target_impression_share.location
+- bidding_strategy.target_impression_share.location_fraction_micros
+- bidding_strategy.target_roas.cpc_bid_ceiling_micros
+- bidding_strategy.target_roas.cpc_bid_floor_micros
+- bidding_strategy.target_roas.target_roas
+- bidding_strategy.target_roas.target_roas_tolerance_percent_millis
+- bidding_strategy.target_spend.cpc_bid_ceiling_micros
+- bidding_strategy.target_spend.target_spend_micros
+- bidding_strategy.type
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+segments: []
+metrics: []

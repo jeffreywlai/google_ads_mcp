@@ -68,4 +68,10 @@ package = true
 include-package-data = true
 
 [tool.setuptools.package-data]
-"ads_mcp" = ["**/*.md", "**/*.yaml", "**/.gitkeep"]
+"ads_mcp" = [
+    "**/*.md",
+    "**/*.yaml",
+    "context/.api-version",
+    "context/.mcp-server-version",
+    "context/.views-manifest",
+]

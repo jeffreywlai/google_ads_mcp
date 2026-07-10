@@ -1,0 +1,54 @@
+display_name: Customer Label
+name: customer_label
+description: '<p>Represents a relationship between a customer and a label. This customer
+  may
+
+  not have access to all the labels attached to it. Additional CustomerLabels
+
+  may be returned by increasing permissions with login-customer-id.</p>'
+attributed_views:
+- customer
+attributes:
+- customer_label.customer
+- customer_label.label
+- customer_label.resource_name
+- customer.auto_tagging_enabled
+- customer.call_reporting_setting.call_conversion_action
+- customer.call_reporting_setting.call_conversion_reporting_enabled
+- customer.call_reporting_setting.call_reporting_enabled
+- customer.contains_eu_political_advertising
+- customer.conversion_tracking_setting.accepted_customer_data_terms
+- customer.conversion_tracking_setting.conversion_tracking_id
+- customer.conversion_tracking_setting.conversion_tracking_status
+- customer.conversion_tracking_setting.cross_account_conversion_tracking_id
+- customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled
+- customer.conversion_tracking_setting.google_ads_conversion_customer
+- customer.currency_code
+- customer.customer_agreement_setting.accepted_lead_form_terms
+- customer.descriptive_name
+- customer.final_url_suffix
+- customer.has_partners_badge
+- customer.id
+- customer.image_asset_auto_migration_done
+- customer.image_asset_auto_migration_done_date_time
+- customer.local_services_settings.granular_insurance_statuses
+- customer.local_services_settings.granular_license_statuses
+- customer.location_asset_auto_migration_done
+- customer.location_asset_auto_migration_done_date_time
+- customer.manager
+- customer.optimization_score
+- customer.optimization_score_weight
+- customer.pay_per_conversion_eligibility_failure_reasons
+- customer.remarketing_setting.google_global_site_tag
+- customer.resource_name
+- customer.status
+- customer.test_account
+- customer.time_zone
+- customer.tracking_url_template
+- customer.video_brand_safety_suitability
+- customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
+- customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.reach_integration_partners
+- customer.video_customer.third_party_integration_partners.viewability_integration_partners
+segments: []
+metrics: []
