@@ -19,6 +19,7 @@ google-ads.yaml
 # temp file
 .api-version
 .mcp-server-version
+.views-manifest
 
 # Env files
 .env
@@ -26,3 +27,4 @@ google-ads.yaml
 # Test files
 .coverage
 .pytest_cache
+.DS_Store
