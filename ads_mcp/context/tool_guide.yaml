@@ -16,8 +16,9 @@ principles:
     JSON tool output.
   - For change history, preserve explicit requested dates. If the user asks
     for full, all, or maximum history without dates, use
-    export_change_history_csv for the 90-day change_status window plus the
-    30-day granular change_event overlay; do not limit all history to 30 days.
+    export_change_history_csv for daily change_status slices across 90 days
+    plus the 30-day granular change_event overlay; do not limit all history to
+    30 days or imply that status rows are field-level events.
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.
@@ -195,12 +196,12 @@ categories:
       list_ad_group_criterion_simulations: Keyword-level CPC bid simulations.
 
   change_history:
-    summary: Audit requested dates or the full retained change history.
+    summary: Audit requested dates or the maximum retrievable change data.
     tools:
       list_change_statuses: Changed resources and last change timestamps.
       list_change_events: Granular change events for the last 30 days without full old/new resource blobs.
-      export_change_history_csv: Use for full, all, or maximum history; exports the available 90-day status window plus the 30-day granular event overlay with automatic cap subdivision.
-      get_change_history_extended: Use for a contextual bounded preview; explicit dates are preserved, while omitted dates preview 90-day status plus the 30-day event overlay.
+      export_change_history_csv: Use for full, all, maximum, or downloadable history; exports daily latest-status slices across 90 days plus the 30-day granular event overlay with automatic cap subdivision.
+      get_change_history_extended: Use for a contextual bounded preview; explicit dates are preserved, while omitted dates preview 90-day latest-status data plus the 30-day event overlay.
 
   performance_max:
     summary: Performance Max diagnostics.

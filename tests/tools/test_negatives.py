@@ -27,6 +27,12 @@ SHARED_SET_ID = "111"
 CAMPAIGN_ID = "222"
 
 
+def _reference_count_response(reference_count):
+  row = mock.Mock()
+  row.shared_set.reference_count = reference_count
+  return [mock.Mock(results=[row])]
+
+
 @pytest.fixture(autouse=True)
 def mock_ads_client():
   """Patches get_ads_client for all tests."""
@@ -114,7 +120,10 @@ class TestDeleteSharedSet:
 
   def test_deletes_shared_set(self, mock_ads_client):
     ads_service = mock.Mock()
-    ads_service.search_stream.return_value = []
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+    ]
     shared_set_service = mock.Mock()
     mock_ads_client.get_service.side_effect = lambda name: {
         "GoogleAdsService": ads_service,
@@ -138,7 +147,10 @@ class TestDeleteSharedSet:
     row.campaign.id = 222
     row.campaign.name = "Brand Search"
     ads_service = mock.Mock()
-    ads_service.search_stream.return_value = [mock.Mock(results=[row])]
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(1),
+        [mock.Mock(results=[row])],
+    ]
     shared_set_service = mock.Mock()
     mock_ads_client.get_service.side_effect = lambda name: {
         "GoogleAdsService": ads_service,
@@ -150,10 +162,19 @@ class TestDeleteSharedSet:
     assert result == {
         "deleted": False,
         "shared_set_id": SHARED_SET_ID,
-        "attached_campaigns": [{"id": CAMPAIGN_ID, "name": "Brand Search"}],
+        "reference_count": 1,
+        "attached_campaigns": [
+            {
+                "customer_id": CUSTOMER_ID,
+                "campaign_id": CAMPAIGN_ID,
+                "name": "Brand Search",
+            }
+        ],
+        "attachments_complete": True,
         "next_step": (
             "Call detach_shared_set_from_campaign first for each attached "
-            "campaign, then retry delete_shared_set."
+            "campaign using its customer_id and campaign_id, then retry "
+            "delete_shared_set."
         ),
     }
     query = ads_service.search_stream.call_args.kwargs["query"]
@@ -169,7 +190,9 @@ class TestDeleteSharedSet:
     row.campaign.name = "Brand Search"
     ads_service = mock.Mock()
     ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
         [],
+        _reference_count_response(1),
         [mock.Mock(results=[row])],
     ]
     shared_set_service = mock.Mock()
@@ -193,10 +216,76 @@ class TestDeleteSharedSet:
 
     assert result["deleted"] is False
     assert result["attached_campaigns"] == [
-        {"id": CAMPAIGN_ID, "name": "Brand Search"}
+        {
+            "customer_id": CUSTOMER_ID,
+            "campaign_id": CAMPAIGN_ID,
+            "name": "Brand Search",
+        }
     ]
+    assert result["attachments_complete"] is True
     assert "detach_shared_set_from_campaign first" in result["next_step"]
-    assert ads_service.search_stream.call_count == 2
+    assert ads_service.search_stream.call_count == 4
+
+  def test_reports_cross_account_references_without_empty_detach_loop(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(2),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["reference_count"] == 2
+    assert result["attached_campaigns"] == []
+    assert result["attachments_complete"] is False
+    assert "managed client accounts" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+    assert "child customer_id" in result["next_step"]
+    shared_set_service.mutate_shared_sets.assert_not_called()
+
+  def test_reports_incomplete_cross_account_usage_after_delete_race(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _reference_count_response(2),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    error = mock.Mock()
+    error.__str__ = lambda self: "SHARED_SET_IN_USE"
+    shared_set_service.mutate_shared_sets.side_effect = GoogleAdsException(
+        error=mock.Mock(),
+        failure=mock.Mock(errors=[error]),
+        call=mock.Mock(),
+        request_id="test",
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["reference_count"] == 2
+    assert result["attached_campaigns"] == []
+    assert result["attachments_complete"] is False
+    assert "2 campaign references" in result["warning"]
+    assert "managed client accounts" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
 
 
 # ---------------------------------------------------------------------------

@@ -1573,7 +1573,8 @@ def get_demographic_performance(
       login_customer_id: Optional manager account ID.
 
   Returns:
-      A dict keyed by demographic type with compact performance rows.
+      A dict keyed by demographic type with compact performance rows,
+      per-type truncation flags, and CSV export guidance.
   """
   validate_limit(limit_per_type)
   if demographic_types:
@@ -1587,6 +1588,7 @@ def get_demographic_performance(
 
   performance_by_type = {}
   returned_counts = {}
+  truncated_by_type = {}
   for demographic_type in selected_types:
     from_resource, segment_field, resource_name_field = (
         _DEMOGRAPHIC_VIEW_FIELDS[demographic_type]
@@ -1610,13 +1612,15 @@ def get_demographic_performance(
         from_resource,
         where_conditions,
         "metrics.cost_micros DESC",
-        limit_per_type,
+        limit_per_type + 1,
     )
     rows = run_gaql_query(query, customer_id, login_customer_id)
-    performance_by_type[demographic_type] = rows
-    returned_counts[demographic_type] = len(rows)
+    truncated_by_type[demographic_type] = len(rows) > limit_per_type
+    returned_rows = rows[:limit_per_type]
+    performance_by_type[demographic_type] = returned_rows
+    returned_counts[demographic_type] = len(returned_rows)
 
-  return {
+  result = {
       "date_range": date_range_label(date_range),
       "campaign_ids": normalize_list_arg(campaign_ids, "campaign_ids"),
       "ad_group_ids": normalize_list_arg(ad_group_ids, "ad_group_ids"),
@@ -1624,7 +1628,18 @@ def get_demographic_performance(
       "limit_per_type": limit_per_type,
       "demographic_performance": performance_by_type,
       "returned_counts": returned_counts,
+      "truncated_by_type": truncated_by_type,
+      "has_more_by_type": dict(truncated_by_type),
+      "truncated": any(truncated_by_type.values()),
+      "bulk_export_tool": "export_gaql_csv",
   }
+  if result["truncated"]:
+    result["next_step"] = (
+        "For complete rows, call export_gaql_csv with the same SELECT, FROM, "
+        "and filters for each demographic type marked true in "
+        "truncated_by_type."
+    )
+  return result
 
 
 @reporting_tool

@@ -683,6 +683,7 @@ def _write_csv_rows(
     rows: list[dict[str, Any]],
     resolved_output_path: str | None = None,
     overwrite: bool = False,
+    columns: list[str] | None = None,
 ) -> tuple[str, list[str], int]:
   """Writes GAQL rows to CSV and returns the path, columns, and size."""
   if resolved_output_path:
@@ -698,7 +699,7 @@ def _write_csv_rows(
     )
     csv_file = os.fdopen(file_descriptor, "w", newline="", encoding="utf-8")
 
-  columns = _csv_columns(rows)
+  columns = list(columns) if columns is not None else _csv_columns(rows)
   with csv_file:
     writer = csv.writer(csv_file)
     if columns:
@@ -713,9 +714,44 @@ def _write_csv_rows(
 
 def write_rows_to_temp_csv(
     rows: list[dict[str, Any]],
+    columns: list[str] | None = None,
 ) -> tuple[str, list[str], int]:
   """Writes already-fetched rows to a uniquely named temporary CSV file."""
-  return _write_csv_rows(rows)
+  return _write_csv_rows(rows, columns=columns)
+
+
+def _remove_export_file(file_path: str) -> None:
+  """Removes an export file if it still exists."""
+  with contextlib.suppress(OSError):
+    os.remove(file_path)
+
+
+def merge_temp_csv_files(
+    fragment_paths: list[str],
+    columns: list[str],
+) -> tuple[str, list[str], int]:
+  """Merges temporary CSV fragments and removes them after the attempt."""
+  with contextlib.ExitStack() as fragment_cleanup:
+    for fragment_path in fragment_paths:
+      fragment_cleanup.callback(_remove_export_file, fragment_path)
+
+    output_path, output_columns, _ = _write_csv_rows([], columns=columns)
+    with contextlib.ExitStack() as output_cleanup:
+      output_cleanup.callback(_remove_export_file, output_path)
+      with open(output_path, "a", newline="", encoding="utf-8") as output_file:
+        writer = csv.writer(output_file)
+        for fragment_path in fragment_paths:
+          with open(
+              fragment_path,
+              "r",
+              newline="",
+              encoding="utf-8",
+          ) as fragment_file:
+            reader = csv.reader(fragment_file)
+            next(reader, None)
+            writer.writerows(reader)
+      output_cleanup.pop_all()
+    return output_path, output_columns, os.path.getsize(output_path)
 
 
 def run_gaql_query(

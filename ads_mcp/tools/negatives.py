@@ -86,7 +86,8 @@ def _list_attached_campaigns(
       for row in batch.results:
         attached_campaigns.append(
             {
-                "id": str(row.campaign.id),
+                "customer_id": customer_id,
+                "campaign_id": str(row.campaign.id),
                 "name": row.campaign.name,
             }
         )
@@ -94,20 +95,80 @@ def _list_attached_campaigns(
   return attached_campaigns
 
 
+def _get_shared_set_reference_count(
+    ads_client: Any,
+    customer_id: str,
+    shared_set_id: str,
+) -> int | None:
+  """Returns Google's campaign-reference count for a shared set."""
+  ads_service = ads_client.get_service("GoogleAdsService")
+  query = f"""
+      SELECT
+        shared_set.reference_count
+      FROM shared_set
+      WHERE shared_set.id = {shared_set_id}
+  """
+
+  with handle_google_ads_errors():
+    response = _search_stream(ads_service, query, customer_id)
+    for batch in response:
+      for row in batch.results:
+        return int(row.shared_set.reference_count)
+
+  return None
+
+
 def _shared_set_in_use_response(
+    customer_id: str,
     shared_set_id: str,
     attached_campaigns: list[dict[str, str]],
+    reference_count: int | None,
+    api_reported_in_use: bool = False,
 ) -> dict[str, Any]:
   """Builds an actionable response for an attached shared set."""
-  return {
+  attachments_complete = (
+      reference_count is not None
+      and reference_count == len(attached_campaigns)
+      and not (api_reported_in_use and not attached_campaigns)
+  )
+  response = {
       "deleted": False,
       "shared_set_id": shared_set_id,
+      "reference_count": reference_count,
       "attached_campaigns": attached_campaigns,
-      "next_step": (
-          "Call detach_shared_set_from_campaign first for each attached "
-          "campaign, then retry delete_shared_set."
-      ),
+      "attachments_complete": attachments_complete,
   }
+  if attachments_complete:
+    response["next_step"] = (
+        "Call detach_shared_set_from_campaign first for each attached "
+        "campaign using its customer_id and campaign_id, then retry "
+        "delete_shared_set."
+    )
+    return response
+
+  if reference_count is not None and reference_count > len(attached_campaigns):
+    response["warning"] = (
+        f"Google reports {reference_count} campaign references, but only "
+        f"{len(attached_campaigns)} were found in customer {customer_id}. "
+        "Missing attachments may be in managed client accounts."
+    )
+  elif api_reported_in_use:
+    response["warning"] = (
+        "Google returned SHARED_SET_IN_USE, but the attached campaigns could "
+        "not be completely enumerated. They may be in managed client accounts."
+    )
+  else:
+    response["warning"] = (
+        "The attached campaigns could not be completely enumerated. Missing "
+        "attachments may be in managed client accounts."
+    )
+  response["next_step"] = (
+      "Inspect accessible child accounts with list_campaign_shared_sets "
+      f"filtered to shared_set_id={shared_set_id}, then call "
+      "detach_shared_set_from_campaign using each child customer_id and "
+      "campaign_id before retrying delete_shared_set."
+  )
+  return response
 
 
 @negative_read_tool
@@ -191,13 +252,23 @@ def delete_shared_set(
   """
   shared_set_id = quote_int_value(shared_set_id, "shared_set_id")
   ads_client = get_ads_client(login_customer_id)
+  reference_count = _get_shared_set_reference_count(
+      ads_client,
+      customer_id,
+      shared_set_id,
+  )
   attached_campaigns = _list_attached_campaigns(
       ads_client,
       customer_id,
       shared_set_id,
   )
-  if attached_campaigns:
-    return _shared_set_in_use_response(shared_set_id, attached_campaigns)
+  if attached_campaigns or (reference_count or 0) > 0:
+    return _shared_set_in_use_response(
+        customer_id,
+        shared_set_id,
+        attached_campaigns,
+        reference_count,
+    )
 
   shared_set_service = ads_client.get_service("SharedSetService")
 
@@ -215,12 +286,23 @@ def delete_shared_set(
   except ToolError as exc:
     if "SHARED_SET_IN_USE" not in str(exc):
       raise
+    reference_count = _get_shared_set_reference_count(
+        ads_client,
+        customer_id,
+        shared_set_id,
+    )
     attached_campaigns = _list_attached_campaigns(
         ads_client,
         customer_id,
         shared_set_id,
     )
-    return _shared_set_in_use_response(shared_set_id, attached_campaigns)
+    return _shared_set_in_use_response(
+        customer_id,
+        shared_set_id,
+        attached_campaigns,
+        reference_count,
+        api_reported_in_use=True,
+    )
 
   return {"resource_name": response.results[0].resource_name}
 

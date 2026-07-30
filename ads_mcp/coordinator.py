@@ -52,26 +52,119 @@ _SEARCH_TOOL_OUTPUT_SCHEMA = {
     "required": ["result"],
     "x-fastmcp-wrap-result": True,
 }
-_FULL_HISTORY_TERMS = {"all", "complete", "entire", "full", "maximum"}
-_CHANGE_HISTORY_TERMS = {"change", "changes", "history", "trail"}
 _FULL_CHANGE_HISTORY_TOOL = "export_change_history_csv"
+_PREVIEW_CHANGE_HISTORY_TOOL = "get_change_history_extended"
+_GRANULAR_CHANGE_HISTORY_TOOL = "list_change_events"
+_CHANGE_HISTORY_TOOLS = {
+    _FULL_CHANGE_HISTORY_TOOL,
+    _PREVIEW_CHANGE_HISTORY_TOOL,
+    _GRANULAR_CHANGE_HISTORY_TOOL,
+    "list_change_statuses",
+}
+_FULL_HISTORY_TERMS = {
+    "all",
+    "complete",
+    "entire",
+    "every",
+    "everything",
+    "exhaustive",
+    "full",
+    "max",
+    "maximum",
+    "whole",
+}
+_CHANGE_HISTORY_PHRASES = (
+    r"\baudit (?:log|trail)\b",
+    r"\bchange (?:history|log|record|records)\b",
+)
+_NOUN_CHANGE_TERMS = r"(?:changes?|edits?|modifications?)"
+_MUTATION_PREFIX = re.compile(
+    r"^(?:"
+    r"add|adjust|apply|attach|change|copy|create|decrease|delete|detach|"
+    r"dismiss|edit|enable|increase|link|make|pause|remove|replace|set|unlink|"
+    r"update|upload"
+    r")\b"
+)
 
 
-def _prioritize_full_change_history_export(
+def _prioritize_search_tool(
+    tool_name: str,
     tools: Sequence[Tool],
     results: Sequence[Tool],
 ) -> list[Tool]:
-  """Places the full-history export first without changing other rankings."""
-  export_tool = next(
-      (tool for tool in tools if tool.name == _FULL_CHANGE_HISTORY_TOOL),
+  """Places one intent-selected tool first without changing other rankings."""
+  selected_tool = next(
+      (tool for tool in tools if tool.name == tool_name),
       None,
   )
-  if export_tool is None:
+  if selected_tool is None:
     return list(results)
-  other_results = [
-      tool for tool in results if tool.name != _FULL_CHANGE_HISTORY_TOOL
-  ]
-  return [export_tool, *other_results]
+  other_results = [tool for tool in results if tool.name != tool_name]
+  return [selected_tool, *other_results]
+
+
+def _deprioritize_change_history_tools(results: Sequence[Tool]) -> list[Tool]:
+  """Moves change-history tools behind results for unrelated mutations."""
+  return [
+      tool for tool in results if tool.name not in _CHANGE_HISTORY_TOOLS
+  ] + [tool for tool in results if tool.name in _CHANGE_HISTORY_TOOLS]
+
+
+def _normalized_search_query(query: str) -> str:
+  """Normalizes natural-language search text for phrase matching."""
+  return " ".join(re.findall(r"[a-z0-9]+", query.lower()))
+
+
+def _has_change_history_context(query: str) -> bool:
+  """Returns whether a query asks about historical account changes."""
+  if any(re.search(pattern, query) for pattern in _CHANGE_HISTORY_PHRASES):
+    return True
+  if re.search(r"\bwhat (?:has )?changed\b", query):
+    return True
+  if _MUTATION_PREFIX.search(query):
+    return False
+  return bool(
+      re.search(rf"\b{_NOUN_CHANGE_TERMS}\b", query)
+      or (
+          re.search(r"\b\d{4} \d{2} \d{2}\b", query)
+          and re.search(r"\bchange\b", query)
+      )
+  )
+
+
+def _is_full_change_history_query(query: str) -> bool:
+  """Returns whether all available change-history rows are requested."""
+  if not _has_change_history_context(query):
+    return False
+  query_terms = set(query.split())
+  if query_terms & _FULL_HISTORY_TERMS:
+    return True
+  if query_terms & {"download", "export"}:
+    return True
+  return bool(re.search(r"\bmost\b.*\b(?:available|possible)\b", query))
+
+
+def _is_granular_change_history_query(query: str) -> bool:
+  """Returns whether a bounded granular change-event read is requested."""
+  if re.search(r"\bchange events?\b", query):
+    return True
+  detail_terms = r"(?:event level|field level|granular)"
+  return bool(
+      re.search(rf"\b{detail_terms}\b.*\b{_NOUN_CHANGE_TERMS}\b", query)
+      or re.search(rf"\b{_NOUN_CHANGE_TERMS}\b.*\b{detail_terms}\b", query)
+  )
+
+
+def _change_history_search_target(query: str) -> str | None:
+  """Selects a change-history tool only when intent is unambiguous."""
+  normalized_query = _normalized_search_query(query)
+  if _is_full_change_history_query(normalized_query):
+    return _FULL_CHANGE_HISTORY_TOOL
+  if _is_granular_change_history_query(normalized_query):
+    return _GRANULAR_CHANGE_HISTORY_TOOL
+  if _has_change_history_context(normalized_query):
+    return _PREVIEW_CHANGE_HISTORY_TOOL
+  return None
 
 
 async def _mutation_tools_unlocked() -> bool:
@@ -108,14 +201,15 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
       """Search for tools using natural language."""
       visible_tools = await transform._get_visible_tools(ctx)
       results = await transform._search(visible_tools, query)
-      query_terms = set(re.findall(r"[a-z0-9]+", query.lower()))
-      if query_terms & _FULL_HISTORY_TERMS and (
-          query_terms & _CHANGE_HISTORY_TERMS
-      ):
-        results = _prioritize_full_change_history_export(
+      target_tool = _change_history_search_target(query)
+      if target_tool:
+        results = _prioritize_search_tool(
+            target_tool,
             visible_tools,
             results,
         )[: max(1, len(results))]
+      elif _MUTATION_PREFIX.search(_normalized_search_query(query)):
+        results = _deprioritize_change_history_tools(results)
       return await transform._render_results(results)
 
     return Tool.from_function(

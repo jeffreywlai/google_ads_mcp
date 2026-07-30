@@ -1017,7 +1017,7 @@ class TestFastMcpConfiguration:
       async with Client(mcp_server) as client:
         populated = await client.call_tool(
             "search_tools",
-            {"query": "change events history"},
+            {"query": "recent change history"},
         )
         empty = await client.call_tool(
             "search_tools",
@@ -1034,18 +1034,108 @@ class TestFastMcpConfiguration:
 
     asyncio.run(_run())
 
-  def test_client_search_tools_routes_full_history_to_csv_export(self):
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "full change history",
+          "every account change",
+          "all account edits",
+          "full audit log",
+          "exhaustive account change log",
+          "download all changes",
+          "export change history",
+          "maximum available change history",
+      ],
+  )
+  def test_client_search_tools_routes_full_history_to_csv_export(self, query):
     async def _run():
       async with Client(mcp_server) as client:
         result = await client.call_tool(
             "search_tools",
-            {"query": "full change history"},
+            {"query": query},
         )
 
         assert result.structured_content["result"][0]["name"] == (
             "export_change_history_csv"
         )
         assert result.data[0].name == "export_change_history_csv"
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "show change history for campaign 123",
+          "changes in the last week",
+          "show changes from 2026-06-01 to 2026-07-03",
+          "recent audit trail",
+      ],
+  )
+  def test_client_search_tools_routes_contextual_history_to_preview(
+      self, query
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "search_tools",
+            {"query": query},
+        )
+
+        assert result.structured_content["result"][0]["name"] == (
+            "get_change_history_extended"
+        )
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "change events history",
+          "granular changes yesterday",
+          "show field-level changes",
+      ],
+  )
+  def test_client_search_tools_leaves_granular_history_with_events(
+      self, query
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "search_tools",
+            {"query": query},
+        )
+
+        assert result.structured_content["result"][0]["name"] == (
+            "list_change_events"
+        )
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "change all campaign budgets",
+          "change the maximum CPC for all keywords",
+          "edit campaign ads",
+          "apply all recommendation changes",
+          "full recommendation history",
+          "maximum campaign performance history",
+          "complete account audit",
+      ],
+  )
+  def test_client_search_tools_does_not_force_unrelated_history_export(
+      self, query
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "search_tools",
+            {"query": query},
+        )
+
+        assert result.structured_content["result"][0]["name"] != (
+            "export_change_history_csv"
+        )
 
     asyncio.run(_run())
 

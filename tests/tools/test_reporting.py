@@ -1429,10 +1429,12 @@ def test_get_demographic_performance_fans_out_selected_views():
   assert "ad_group_criterion.age_range.type" in age_query
   assert "campaign.id IN (111)" in age_query
   assert "ad_group.id IN (222)" in age_query
-  assert "LIMIT 12" in age_query
+  assert "LIMIT 13" in age_query
   assert "FROM gender_view" in gender_query
   assert result["demographic_types"] == ["AGE", "GENDER"]
   assert result["returned_counts"] == {"AGE": 1, "GENDER": 1}
+  assert result["truncated_by_type"] == {"AGE": False, "GENDER": False}
+  assert result["truncated"] is False
 
 
 def test_get_demographic_performance_uses_token_safe_default_limit():
@@ -1445,8 +1447,31 @@ def test_get_demographic_performance_uses_token_safe_default_limit():
         demographic_types=["age"],
     )
 
-  assert "LIMIT 10" in mock_run.call_args.args[0]
+  assert "LIMIT 11" in mock_run.call_args.args[0]
   assert result["limit_per_type"] == 10
+
+
+def test_get_demographic_performance_flags_and_slices_truncated_types():
+  rows = [
+      {"ad_group_criterion.age_range.type": f"AGE_RANGE_{index}"}
+      for index in range(11)
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=rows,
+  ):
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age"],
+    )
+
+  assert len(result["demographic_performance"]["AGE"]) == 10
+  assert result["returned_counts"] == {"AGE": 10}
+  assert result["truncated_by_type"] == {"AGE": True}
+  assert result["has_more_by_type"] == {"AGE": True}
+  assert result["truncated"] is True
+  assert result["bulk_export_tool"] == "export_gaql_csv"
+  assert "export_gaql_csv" in result["next_step"]
 
 
 def test_get_landing_page_performance_uses_expanded_view_and_device():
