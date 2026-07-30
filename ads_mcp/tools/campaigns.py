@@ -800,7 +800,7 @@ def list_campaign_audiences(
     customer_id: str,
     campaign_ids: list[str] | str,
     include_negative: bool | None = None,
-    limit: int = 100,
+    limit: int = 25,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -812,7 +812,8 @@ def list_campaign_audiences(
           comma-separated string, or single ID.
       include_negative: Optional filter for exclusions (`true`) or positive
           audiences (`false`). Leave unset to include both.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. The token-safe default is 25;
+          use page_token for additional rows.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 

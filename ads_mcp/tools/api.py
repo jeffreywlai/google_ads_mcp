@@ -16,6 +16,7 @@
 
 from collections import OrderedDict
 from concurrent import futures
+import contextlib
 import csv
 from copy import deepcopy
 import difflib
@@ -41,6 +42,7 @@ from google.protobuf.field_mask_pb2 import FieldMask
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtobufMessage
 from google.oauth2.credentials import Credentials
+from google.api_core import exceptions as google_exceptions
 import proto
 import yaml
 
@@ -439,6 +441,17 @@ def _format_google_ads_error(error: GoogleAdsException) -> str:
   if not hints:
     return message
   return message + "\n\nHints:\n- " + "\n- ".join(hints)
+
+
+@contextlib.contextmanager
+def handle_google_ads_errors():
+  """Converts Google Ads API errors into hint-formatted ToolErrors."""
+  try:
+    yield
+  except GoogleAdsException as exc:
+    raise ToolError(_format_google_ads_error(exc)) from exc
+  except google_exceptions.GoogleAPICallError as exc:
+    raise ToolError(str(exc)) from exc
 
 
 def _google_ads_error_text(error: GoogleAdsException) -> str:

@@ -1441,7 +1441,7 @@ def list_audience_performance(
     campaign_ids: list[str] | str | None = None,
     ad_group_ids: list[str] | str | None = None,
     date_range: str | dict[str, str] = "LAST_30_DAYS",
-    limit: int = 100,
+    limit: int = 25,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1453,7 +1453,8 @@ def list_audience_performance(
       campaign_ids: Optional campaign IDs to filter to.
       ad_group_ids: Optional ad group IDs to filter to when scope is AD_GROUP.
       date_range: GAQL date range such as LAST_30_DAYS.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. The token-safe default is 25;
+          use page_token for additional rows.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
@@ -1555,7 +1556,7 @@ def get_demographic_performance(
     ad_group_ids: list[str] | str | None = None,
     demographic_types: list[str] | str | None = None,
     date_range: str | dict[str, str] = "LAST_30_DAYS",
-    limit_per_type: int = 100,
+    limit_per_type: int = 10,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Fans out age, gender, and income performance into one response.
@@ -1567,6 +1568,8 @@ def get_demographic_performance(
       demographic_types: Optional subset of AGE, GENDER, and INCOME.
       date_range: GAQL date range or {start_date, end_date}.
       limit_per_type: Maximum rows returned for each demographic resource.
+          The token-safe default is 10; request one demographic type at a
+          time before increasing it substantially.
       login_customer_id: Optional manager account ID.
 
   Returns:

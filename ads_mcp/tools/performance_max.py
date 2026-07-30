@@ -48,9 +48,10 @@ def list_asset_group_assets(
     asset_group_id: str | None = None,
     asset_group_ids: list[str] | str | None = None,
     date_range: str | dict[str, str] | None = None,
-    limit: int = 50,
+    limit: int = 25,
     page_token: str | None = None,
     login_customer_id: str | None = None,
+    include_primary_status_details: bool = False,
 ) -> dict[str, Any]:
   """Lists Performance Max asset links and their serving diagnostics.
 
@@ -62,9 +63,11 @@ def list_asset_group_assets(
       asset_group_ids: Optional asset group IDs to filter to.
       date_range: Optional GAQL date range used for conversion metrics.
           Leave unset to list linked assets regardless of recent activity.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. The token-safe default is 25.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
+      include_primary_status_details: Whether to include the potentially large
+          nested primary-status detail payload. Defaults to false.
 
   Returns:
       A dict containing asset group asset diagnostics.
@@ -88,23 +91,31 @@ def list_asset_group_assets(
     )
     where_conditions.append(f"asset_group.id IN ({asset_group_id_values})")
 
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      "asset_group.id",
+      "asset_group.name",
+      "asset.id",
+      "asset.name",
+      "asset.type",
+      "asset_group_asset.asset",
+      "asset_group_asset.field_type",
+      "asset_group_asset.primary_status",
+      "asset_group_asset.status",
+      "metrics.conversions",
+      "metrics.conversions_value",
+      "metrics.value_per_conversion",
+  ]
+  if include_primary_status_details:
+    select_fields.insert(
+        select_fields.index("asset_group_asset.status"),
+        "asset_group_asset.primary_status_details",
+    )
+
   query = f"""
       SELECT
-        campaign.id,
-        campaign.name,
-        asset_group.id,
-        asset_group.name,
-        asset.id,
-        asset.name,
-        asset.type,
-        asset_group_asset.asset,
-        asset_group_asset.field_type,
-        asset_group_asset.primary_status,
-        asset_group_asset.primary_status_details,
-        asset_group_asset.status,
-        metrics.conversions,
-        metrics.conversions_value,
-        metrics.value_per_conversion
+        {", ".join(select_fields)}
       FROM asset_group_asset
       {build_where_clause(where_conditions)}
       ORDER BY metrics.conversions DESC
@@ -116,13 +127,15 @@ def list_asset_group_assets(
       page_token=page_token,
       login_customer_id=login_customer_id,
   )
-  return build_paginated_list_response(
+  result = build_paginated_list_response(
       "asset_group_assets",
       page["rows"],
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
   )
+  result["primary_status_details_included"] = include_primary_status_details
+  return result
 
 
 @performance_max_tool

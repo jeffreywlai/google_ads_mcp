@@ -1370,6 +1370,7 @@ def test_list_audience_performance_campaign_scope_uses_campaign_view():
   assert "campaign_criterion.user_list.user_list" in query
   assert "campaign_criterion.custom_audience.custom_audience" in query
   assert "campaign.id IN (111)" in query
+  assert mock_run.call_args.kwargs["page_size"] == 25
   assert result["returned_count"] == 0
 
 
@@ -1393,6 +1394,7 @@ def test_list_audience_performance_ad_group_scope_uses_ad_group_view():
   assert "ad_group_criterion.audience.audience" in query
   assert "campaign.id IN (111)" in query
   assert "ad_group.id IN (222)" in query
+  assert mock_run.call_args.kwargs["page_size"] == 25
   assert result["returned_count"] == 0
 
 
@@ -1431,6 +1433,20 @@ def test_get_demographic_performance_fans_out_selected_views():
   assert "FROM gender_view" in gender_query
   assert result["demographic_types"] == ["AGE", "GENDER"]
   assert result["returned_counts"] == {"AGE": 1, "GENDER": 1}
+
+
+def test_get_demographic_performance_uses_token_safe_default_limit():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[],
+  ) as mock_run:
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age"],
+    )
+
+  assert "LIMIT 10" in mock_run.call_args.args[0]
+  assert result["limit_per_type"] == 10
 
 
 def test_get_landing_page_performance_uses_expanded_view_and_device():

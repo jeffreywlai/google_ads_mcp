@@ -51,7 +51,7 @@ def _parse_date(value: str, field_name: str) -> date:
 
 def _oldest_change_event_start() -> str:
   return (
-      date.today() - timedelta(days=_CHANGE_EVENT_MAX_LOOKBACK_DAYS)
+      date.today() - timedelta(days=_CHANGE_EVENT_MAX_LOOKBACK_DAYS - 1)
   ).isoformat()
 
 
@@ -166,6 +166,14 @@ def _change_event_coverage(
       "lookback_days": _CHANGE_EVENT_MAX_LOOKBACK_DAYS,
       "api_result_cap": _CHANGE_HISTORY_RESULT_CAP,
   }
+  if event_window_used and event_window_used["start_date"] > start_date:
+    coverage.update(
+        {
+            "start_date_clamped": True,
+            "requested_start_date": start_date,
+            "effective_start_date": event_window_used["start_date"],
+        }
+    )
 
   unavailable_window = _unavailable_change_event_window(
       start_date,
@@ -401,6 +409,13 @@ def get_change_history_extended(
       f"{_CHANGE_EVENT_MAX_LOOKBACK_DAYS} days and are capped at "
       f"{_CHANGE_HISTORY_RESULT_CAP} rows per query."
   )
+  if event_window_used and event_window_used["start_date"] > start_date:
+    effective_start_date = event_window_used["start_date"]
+    coverage_note += (
+        f" Requested change_event start_date {start_date} was clamped to "
+        f"{effective_start_date} to keep the date range within "
+        "the 30-day inclusive API window."
+    )
   if not include_recent_events:
     coverage_note += " Granular change_event rows were not requested."
   elif not event_window_used:

@@ -260,13 +260,13 @@ def test_get_change_history_extended_stitches_statuses_and_recent_events():
   mock_statuses.assert_called_once()
   event_kwargs = mock_events.call_args.kwargs
   assert event_kwargs["change_resource_types"] == ["campaign"]
-  assert event_kwargs["start_date"] == (today - timedelta(days=30)).isoformat()
+  assert event_kwargs["start_date"] == (today - timedelta(days=29)).isoformat()
   assert result["change_statuses"] == [{"change_status.resource_name": "x"}]
   assert result["recent_change_events"] == [
       {"change_event.resource_name": "y"}
   ]
   assert result["change_event_window"] == {
-      "start_date": (today - timedelta(days=30)).isoformat(),
+      "start_date": (today - timedelta(days=29)).isoformat(),
       "end_date": end_date,
   }
   coverage = result["change_event_coverage"]
@@ -274,13 +274,63 @@ def test_get_change_history_extended_stitches_statuses_and_recent_events():
   assert coverage["full_requested_range_covered"] is False
   assert coverage["lookback_days"] == 30
   assert coverage["api_result_cap"] == 10000
+  assert coverage["start_date_clamped"] is True
+  assert coverage["requested_start_date"] == start_date
+  assert (
+      coverage["effective_start_date"]
+      == (today - timedelta(days=29)).isoformat()
+  )
   assert coverage["unavailable_window"] == {
       "start_date": start_date,
-      "end_date": (today - timedelta(days=31)).isoformat(),
+      "end_date": (today - timedelta(days=30)).isoformat(),
   }
   assert (
       "Older granular change_event rows are unavailable" in coverage["reason"]
   )
+  assert "clamped" in result["coverage_note"]
+
+
+def test_get_change_history_extended_clamps_31_date_inclusive_window():
+  today = date.today()
+  requested_start = (today - timedelta(days=30)).isoformat()
+  effective_start = (today - timedelta(days=29)).isoformat()
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value={
+          "change_statuses": [],
+          "returned_count": 0,
+          "total_count": 0,
+          "truncated": False,
+      },
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+        return_value={
+            "change_events": [],
+            "returned_count": 0,
+            "total_count": 0,
+            "total_page_count": 0,
+            "truncated": False,
+            "next_page_token": None,
+            "page_size": 100,
+        },
+    ) as mock_events:
+      result = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          start_date=requested_start,
+          end_date=today.isoformat(),
+      )
+
+  assert mock_events.call_args.kwargs["start_date"] == effective_start
+  assert result["change_event_coverage"]["start_date_clamped"] is True
+  assert result["change_event_coverage"]["requested_start_date"] == (
+      requested_start
+  )
+  assert result["change_event_coverage"]["effective_start_date"] == (
+      effective_start
+  )
+  assert requested_start in result["coverage_note"]
+  assert effective_start in result["coverage_note"]
 
 
 def test_get_change_history_extended_skips_events_when_range_is_too_old():

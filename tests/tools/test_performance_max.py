@@ -43,10 +43,30 @@ def test_list_asset_group_assets_builds_query():
   assert "asset_group.id IN (222)" in query
   assert "asset_group_asset.status != REMOVED" in query
   assert "asset_group_asset.primary_status" in query
+  assert "asset_group_asset.primary_status_details" not in query
   assert "asset_group_asset.performance_label" not in query
   assert "segments.date DURING" not in query
+  assert mock_query.call_args.kwargs["page_size"] == 25
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
+
+
+def test_list_asset_group_assets_can_include_primary_status_details():
+  with mock.patch(
+      "ads_mcp.tools.performance_max.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    performance_max.list_asset_group_assets(
+        CUSTOMER_ID,
+        include_primary_status_details=True,
+    )
+
+  query = mock_query.call_args.kwargs["query"]
+  assert "asset_group_asset.primary_status_details" in query
 
 
 def test_list_asset_group_assets_accepts_singular_id_aliases():

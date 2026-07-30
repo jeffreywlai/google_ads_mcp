@@ -26,6 +26,7 @@ from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import preprocess_gaql_query
 from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import require_unique_values
+from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import get_ads_client
 
 
@@ -59,6 +60,54 @@ def _normalize_criterion_ids(criterion_ids: list[str] | str) -> list[str]:
       for criterion_id in normalized_values
   ]
   return require_unique_values(normalized_ids, "criterion_ids")
+
+
+def _list_attached_campaigns(
+    ads_client: Any,
+    customer_id: str,
+    shared_set_id: str,
+) -> list[dict[str, str]]:
+  """Returns enabled campaigns currently attached to a shared set."""
+  ads_service = ads_client.get_service("GoogleAdsService")
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name
+      FROM campaign_shared_set
+      WHERE shared_set.id = {shared_set_id}
+        AND campaign_shared_set.status = 'ENABLED'
+      ORDER BY campaign.name
+  """
+
+  with handle_google_ads_errors():
+    response = _search_stream(ads_service, query, customer_id)
+    attached_campaigns = []
+    for batch in response:
+      for row in batch.results:
+        attached_campaigns.append(
+            {
+                "id": str(row.campaign.id),
+                "name": row.campaign.name,
+            }
+        )
+
+  return attached_campaigns
+
+
+def _shared_set_in_use_response(
+    shared_set_id: str,
+    attached_campaigns: list[dict[str, str]],
+) -> dict[str, Any]:
+  """Builds an actionable response for an attached shared set."""
+  return {
+      "deleted": False,
+      "shared_set_id": shared_set_id,
+      "attached_campaigns": attached_campaigns,
+      "next_step": (
+          "Call detach_shared_set_from_campaign first for each attached "
+          "campaign, then retry delete_shared_set."
+      ),
+  }
 
 
 @negative_read_tool
@@ -128,9 +177,28 @@ def delete_shared_set(
     customer_id: str,
     shared_set_id: str,
     login_customer_id: str | None = None,
-) -> dict[str, str]:
-  """Deletes a shared negative keyword list."""
+) -> dict[str, Any]:
+  """Deletes a shared negative keyword list when no campaigns use it.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      shared_set_id: Shared negative keyword list ID.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      The deleted resource name, or attached campaigns and the detach-first
+      next step when the shared set is still in use.
+  """
+  shared_set_id = quote_int_value(shared_set_id, "shared_set_id")
   ads_client = get_ads_client(login_customer_id)
+  attached_campaigns = _list_attached_campaigns(
+      ads_client,
+      customer_id,
+      shared_set_id,
+  )
+  if attached_campaigns:
+    return _shared_set_in_use_response(shared_set_id, attached_campaigns)
+
   shared_set_service = ads_client.get_service("SharedSetService")
 
   resource_name = shared_set_service.shared_set_path(
@@ -140,11 +208,19 @@ def delete_shared_set(
   operation.remove = resource_name
 
   try:
-    response = shared_set_service.mutate_shared_sets(
-        customer_id=customer_id, operations=[operation]
+    with handle_google_ads_errors():
+      response = shared_set_service.mutate_shared_sets(
+          customer_id=customer_id, operations=[operation]
+      )
+  except ToolError as exc:
+    if "SHARED_SET_IN_USE" not in str(exc):
+      raise
+    attached_campaigns = _list_attached_campaigns(
+        ads_client,
+        customer_id,
+        shared_set_id,
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+    return _shared_set_in_use_response(shared_set_id, attached_campaigns)
 
   return {"resource_name": response.results[0].resource_name}
 

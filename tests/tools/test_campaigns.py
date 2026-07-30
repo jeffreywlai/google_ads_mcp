@@ -256,6 +256,23 @@ class TestUpdateCampaignTargetingSetting:
 
 class TestAddCampaignAudiences:
 
+  def test_list_campaign_audiences_uses_token_safe_default_page_size(self):
+    with mock.patch(
+        "ads_mcp.tools.campaigns.run_gaql_query_page",
+        return_value={
+            "rows": [],
+            "next_page_token": None,
+            "total_results_count": 0,
+        },
+    ) as mock_query:
+      result = campaigns.list_campaign_audiences(
+          CUSTOMER_ID,
+          [CAMPAIGN_ID],
+      )
+
+    assert mock_query.call_args.kwargs["page_size"] == 25
+    assert result["page_size"] == 25
+
   @pytest.mark.parametrize("campaign_ids", ["", [], "[]"])
   def test_list_campaign_audiences_rejects_empty_campaign_ids(
       self, campaign_ids

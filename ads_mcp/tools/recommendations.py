@@ -127,7 +127,7 @@ def list_recommendations(
     recommendation_types: list[str] | str | None = None,
     campaign_ids: list[str] | str | None = None,
     include_dismissed: bool = False,
-    limit: int = 500,
+    limit: int = 50,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -139,7 +139,8 @@ def list_recommendations(
           CAMPAIGN_BUDGET or KEYWORD.
       campaign_ids: Optional campaign IDs to filter to.
       include_dismissed: Whether dismissed recommendations should be included.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. The token-safe default is 50;
+          use page_token for additional rows.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
