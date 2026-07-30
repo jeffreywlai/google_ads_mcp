@@ -21,12 +21,137 @@ from datetime import timedelta
 import os
 from unittest import mock
 
+from ads_mcp.tools import api
 from ads_mcp.tools import changes
 from fastmcp.exceptions import ToolError
 import pytest
 
 
 CUSTOMER_ID = "1234567890"
+
+
+def _daily_fragment_collection(
+    start_day: date,
+    day_count: int,
+    *,
+    prefix: str,
+) -> dict:
+  fragments = [
+      {
+          "start": datetime.combine(
+              start_day + timedelta(days=index),
+              datetime.min.time(),
+          ),
+          "end_exclusive": datetime.combine(
+              start_day + timedelta(days=index + 1),
+              datetime.min.time(),
+          ),
+          "fragment_path": f"/tmp/{prefix}-{index}.csv",
+          "row_count": 1,
+      }
+      for index in range(day_count)
+  ]
+  return {
+      "fragment_paths": [fragment["fragment_path"] for fragment in fragments],
+      "fragments": fragments,
+      "row_count": day_count,
+      "query_count": day_count,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+
+
+@pytest.fixture(autouse=True)
+def mock_account_today():
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      return_value=(date.today(), "Etc/UTC"),
+  ):
+    yield
+  changes._customer_time_zone_for_credential.cache_clear()  # pylint: disable=protected-access
+
+
+def test_customer_time_zone_is_queried_and_validated():
+  changes._customer_time_zone_for_credential.cache_clear()  # pylint: disable=protected-access
+  with mock.patch(
+      "ads_mcp.tools.changes.get_ads_credential_cache_scope",
+      return_value="test-credentials",
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        return_value=[{"customer.time_zone": "Pacific/Kiritimati"}],
+    ) as mock_query:
+      customer_zone = changes._customer_time_zone(  # pylint: disable=protected-access
+          CUSTOMER_ID,
+          None,
+      )
+
+  assert customer_zone.key == "Pacific/Kiritimati"
+  assert "customer.time_zone" in mock_query.call_args.args[0]
+
+
+def test_customer_time_zone_cache_is_partitioned_by_principal():
+  changes._customer_time_zone_for_credential.cache_clear()  # pylint: disable=protected-access
+  with mock.patch(
+      "ads_mcp.tools.changes.get_ads_credential_cache_scope",
+      side_effect=["oauth:principal-a", "oauth:principal-b"],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        side_effect=[
+            [{"customer.time_zone": "Etc/UTC"}],
+            [{"customer.time_zone": "Pacific/Kiritimati"}],
+        ],
+    ) as mock_query:
+      principal_a_zone = changes._customer_time_zone(  # pylint: disable=protected-access
+          CUSTOMER_ID,
+          None,
+      )
+      principal_b_zone = changes._customer_time_zone(  # pylint: disable=protected-access
+          CUSTOMER_ID,
+          None,
+      )
+
+  assert principal_a_zone.key == "Etc/UTC"
+  assert principal_b_zone.key == "Pacific/Kiritimati"
+  assert mock_query.call_count == 2
+
+
+def test_extended_history_uses_account_calendar_for_retention():
+  account_today = date(2026, 7, 31)
+  empty_statuses = {
+      "change_statuses": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  empty_events = {
+      "change_events": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      return_value=(account_today, "Pacific/Kiritimati"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_statuses",
+        return_value=empty_statuses,
+    ) as mock_statuses:
+      with mock.patch(
+          "ads_mcp.tools.changes.list_change_events",
+          return_value=empty_events,
+      ) as mock_events:
+        result = changes.get_change_history_extended(CUSTOMER_ID)
+
+  assert result["account_today"] == "2026-07-31"
+  assert result["account_time_zone"] == "Pacific/Kiritimati"
+  assert result["date_range"]["start_date"] == "2026-05-03"
+  assert mock_statuses.call_args.kwargs["start_date"] == "2026-05-03"
+  assert mock_events.call_args.kwargs["start_date"] == "2026-07-02"
 
 
 def test_list_change_statuses_builds_query():
@@ -254,6 +379,70 @@ def test_list_change_statuses_defaults_start_date_when_only_end_date_provided():
   )
 
 
+@pytest.mark.parametrize(
+    ("tool", "item_key"),
+    [
+        (changes.list_change_statuses, "change_statuses"),
+        (changes.list_change_events, "change_events"),
+    ],
+)
+def test_direct_change_pagination_keeps_omitted_dates_across_midnight(
+    tool,
+    item_key,
+):
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, next_day])
+  with api._PAGED_QUERY_CACHE_LOCK:  # pylint: disable=protected-access
+    api._PAGED_QUERY_CACHE.clear()  # pylint: disable=protected-access
+    api._PAGED_QUERY_BUILDS.clear()  # pylint: disable=protected-access
+
+  rows = [{"row": "first"}, {"row": "second"}, {"row": "third"}]
+  try:
+    with mock.patch(
+        "ads_mcp.tools.changes._account_today",
+        side_effect=lambda *_args: (
+            next(account_days),
+            "Pacific/Kiritimati",
+        ),
+    ):
+      with mock.patch(
+          "ads_mcp.tools.api._page_cache_scope",
+          return_value="test-scope",
+      ):
+        with mock.patch(
+            "ads_mcp.tools.api.run_gaql_query",
+            return_value=rows,
+        ) as mock_query:
+          first_page = tool(CUSTOMER_ID, limit=1)
+          second_page = tool(
+              CUSTOMER_ID,
+              limit=1,
+              page_token=first_page["next_page_token"],
+          )
+  finally:
+    with api._PAGED_QUERY_CACHE_LOCK:  # pylint: disable=protected-access
+      api._PAGED_QUERY_CACHE.clear()  # pylint: disable=protected-access
+      api._PAGED_QUERY_BUILDS.clear()  # pylint: disable=protected-access
+
+  expected_range = {
+      "start_date": (first_day - timedelta(days=7)).isoformat(),
+      "end_date": first_day.isoformat(),
+  }
+  assert "|" in first_page["next_page_token"]
+  assert first_page["resolved_date_range"] == expected_range
+  assert first_page["continuation"]["arguments"]["start_date"] == (
+      expected_range["start_date"]
+  )
+  assert first_page["continuation"]["arguments"]["end_date"] == (
+      expected_range["end_date"]
+  )
+  assert second_page[item_key] == [{"row": "second"}]
+  assert second_page["resolved_date_range"] == expected_range
+  assert second_page["account_today"] == next_day.isoformat()
+  mock_query.assert_called_once()
+
+
 def test_get_change_history_extended_stitches_statuses_and_recent_events():
   today = date.today()
   start_date = (today - timedelta(days=60)).isoformat()
@@ -433,13 +622,238 @@ def test_get_change_history_extended_clamps_status_and_exposes_continuations():
   assert result["continuation_guidance"]["change_status"] == {
       "tool": "list_change_statuses",
       "page_token": "100",
+      "arguments": {
+          "customer_id": CUSTOMER_ID,
+          "resource_types": [],
+          "start_date": effective_start,
+          "end_date": today.isoformat(),
+          "limit": 100,
+          "page_token": "100",
+          "login_customer_id": None,
+      },
       "instruction": (
-          "Call list_change_statuses again with the same filters and this "
-          "page_token."
+          "Call list_change_statuses with the arguments exactly as shown."
       ),
   }
   assert result["bulk_export_tool"] == "export_change_history_csv"
   assert "90 inclusive days" in result["coverage_note"]
+
+
+def test_extended_continuation_arguments_use_live_snapshot_across_midnight():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  outside_context_calls = 0
+
+  def _moving_account_today(*_args):
+    nonlocal outside_context_calls
+    override = changes._ACCOUNT_TODAY_OVERRIDE.get()  # pylint: disable=protected-access
+    if override is not None:
+      return override
+    outside_context_calls += 1
+    current_day = first_day if outside_context_calls == 1 else next_day
+    return current_day, "Pacific/Kiritimati"
+
+  with api._PAGED_QUERY_CACHE_LOCK:  # pylint: disable=protected-access
+    api._PAGED_QUERY_CACHE.clear()  # pylint: disable=protected-access
+    api._PAGED_QUERY_BUILDS.clear()  # pylint: disable=protected-access
+
+  rows = [{"row": "first"}, {"row": "second"}, {"row": "third"}]
+  try:
+    with mock.patch(
+        "ads_mcp.tools.changes._account_today",
+        side_effect=_moving_account_today,
+    ):
+      with mock.patch(
+          "ads_mcp.tools.api._page_cache_scope",
+          return_value="test-scope",
+      ):
+        with mock.patch(
+            "ads_mcp.tools.api.run_gaql_query",
+            return_value=rows,
+        ) as mock_query:
+          result = changes.get_change_history_extended(
+              CUSTOMER_ID,
+              resource_types=["CAMPAIGN"],
+              start_date=(first_day - timedelta(days=89)).isoformat(),
+              end_date=first_day.isoformat(),
+              limit=1,
+              login_customer_id="9876543210",
+          )
+
+          status_guidance = result["continuation_guidance"]["change_status"]
+          event_guidance = result["continuation_guidance"]["change_event"]
+          status_page = changes.list_change_statuses(
+              **status_guidance["arguments"]
+          )
+          event_page = changes.list_change_events(
+              **event_guidance["arguments"]
+          )
+  finally:
+    with api._PAGED_QUERY_CACHE_LOCK:  # pylint: disable=protected-access
+      api._PAGED_QUERY_CACHE.clear()  # pylint: disable=protected-access
+      api._PAGED_QUERY_BUILDS.clear()  # pylint: disable=protected-access
+
+  assert status_guidance["arguments"] == {
+      "customer_id": CUSTOMER_ID,
+      "resource_types": ["CAMPAIGN"],
+      "start_date": (next_day - timedelta(days=89)).isoformat(),
+      "end_date": first_day.isoformat(),
+      "limit": 1,
+      "page_token": status_guidance["page_token"],
+      "login_customer_id": "9876543210",
+  }
+  assert event_guidance["arguments"] == {
+      "customer_id": CUSTOMER_ID,
+      "change_resource_types": ["CAMPAIGN"],
+      "start_date": (next_day - timedelta(days=29)).isoformat(),
+      "end_date": first_day.isoformat(),
+      "limit": 1,
+      "page_token": event_guidance["page_token"],
+      "login_customer_id": "9876543210",
+  }
+  assert status_page["change_statuses"] == [{"row": "second"}]
+  assert event_page["change_events"] == [{"row": "second"}]
+  assert status_page["account_today"] == next_day.isoformat()
+  assert event_page["account_today"] == next_day.isoformat()
+  assert mock_query.call_count == 2
+
+
+def test_extended_recovers_status_preview_when_retention_advances():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, next_day, next_day])
+  status_response = {
+      "change_statuses": [{"row": "status"}],
+      "returned_count": 1,
+      "total_count": 2,
+      "truncated": True,
+      "next_page_token": "status-next",
+  }
+  event_response = {
+      "change_events": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_statuses",
+        side_effect=[ToolError("START_DATE_TOO_OLD"), status_response],
+    ) as mock_statuses:
+      with mock.patch(
+          "ads_mcp.tools.changes.list_change_events",
+          return_value=event_response,
+      ) as mock_events:
+        result = changes.get_change_history_extended(CUSTOMER_ID)
+
+  assert mock_statuses.call_count == 2
+  assert (
+      mock_statuses.call_args_list[0].kwargs["start_date"]
+      == (first_day - timedelta(days=89)).isoformat()
+  )
+  assert (
+      mock_statuses.call_args_list[1].kwargs["start_date"]
+      == (next_day - timedelta(days=89)).isoformat()
+  )
+  assert mock_statuses.call_args_list[1].kwargs["end_date"] == (
+      next_day.isoformat()
+  )
+  assert (
+      mock_events.call_args.kwargs["start_date"]
+      == (next_day - timedelta(days=29)).isoformat()
+  )
+  status_arguments = result["continuation_guidance"]["change_status"][
+      "arguments"
+  ]
+  assert (
+      status_arguments["start_date"]
+      == (next_day - timedelta(days=89)).isoformat()
+  )
+  assert status_arguments["end_date"] == next_day.isoformat()
+  assert result["date_range"] == {
+      "start_date": (next_day - timedelta(days=89)).isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert "change_status retention advanced" in result["retention_refresh_note"]
+
+
+def test_extended_recovers_event_and_refreshes_status_preview():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, first_day, next_day])
+  old_status_response = {
+      "change_statuses": [{"row": "old-status"}],
+      "returned_count": 1,
+      "total_count": 2,
+      "truncated": True,
+      "next_page_token": "old-status-next",
+  }
+  refreshed_status_response = {
+      "change_statuses": [{"row": "refreshed-status"}],
+      "returned_count": 1,
+      "total_count": 2,
+      "truncated": True,
+      "next_page_token": "refreshed-status-next",
+  }
+  event_response = {
+      "change_events": [{"row": "event"}],
+      "returned_count": 1,
+      "total_count": 2,
+      "truncated": True,
+      "next_page_token": "event-next",
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_statuses",
+        side_effect=[old_status_response, refreshed_status_response],
+    ) as mock_statuses:
+      with mock.patch(
+          "ads_mcp.tools.changes.list_change_events",
+          side_effect=[ToolError("START_DATE_TOO_OLD"), event_response],
+      ) as mock_events:
+        result = changes.get_change_history_extended(CUSTOMER_ID)
+
+  assert mock_statuses.call_count == 2
+  assert mock_events.call_count == 2
+  assert (
+      mock_statuses.call_args.kwargs["start_date"]
+      == (next_day - timedelta(days=89)).isoformat()
+  )
+  assert mock_statuses.call_args.kwargs["end_date"] == next_day.isoformat()
+  assert (
+      mock_events.call_args.kwargs["start_date"]
+      == (next_day - timedelta(days=29)).isoformat()
+  )
+  assert mock_events.call_args.kwargs["end_date"] == next_day.isoformat()
+  assert result["change_statuses"] == [{"row": "refreshed-status"}]
+  assert result["recent_change_events"] == [{"row": "event"}]
+  assert (
+      result["continuation_guidance"]["change_status"]["arguments"][
+          "page_token"
+      ]
+      == "refreshed-status-next"
+  )
+  assert (
+      result["continuation_guidance"]["change_event"]["arguments"][
+          "page_token"
+      ]
+      == "event-next"
+  )
+  assert result["account_today"] == next_day.isoformat()
+  assert "change_event retention advanced" in result["retention_refresh_note"]
 
 
 def test_collect_complete_change_rows_splits_capped_windows():
@@ -493,19 +907,39 @@ def test_collect_complete_change_rows_splits_capped_windows():
   ]
 
 
-def test_collect_complete_change_rows_reports_unsplittable_second():
+def test_collect_complete_change_rows_splits_capped_one_second_without_gap():
   timestamp = datetime(2026, 7, 1, 0, 0, 0)
+
+  def query_builder(start, end):
+    return changes._build_export_query(  # pylint: disable=protected-access
+        ["change_event.change_date_time"],
+        "change_event",
+        "change_event.change_date_time",
+        "change_event.change_resource_type",
+        [],
+        start,
+        end,
+    )
+
   with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
     with mock.patch(
         "ads_mcp.tools.changes.run_gaql_query",
-        return_value=[{"id": "1"}, {"id": "2"}],
-    ):
+        side_effect=[
+            [{"id": "probe-1"}, {"id": "probe-2"}],
+            [{"id": "later"}],
+            [{"id": "earlier"}],
+        ],
+    ) as mock_query:
       with mock.patch(
           "ads_mcp.tools.changes.write_rows_to_temp_csv",
-          return_value=("/tmp/one-second.csv", ["id"], 10),
+          side_effect=[
+              ("/tmp/probe.csv", ["id"], 10),
+              ("/tmp/later.csv", ["id"], 10),
+              ("/tmp/earlier.csv", ["id"], 10),
+          ],
       ):
         result = changes._collect_complete_change_rows(  # pylint: disable=protected-access
-            lambda start, end: f"{start}..{end}",
+            query_builder,
             CUSTOMER_ID,
             timestamp,
             timestamp + timedelta(seconds=1),
@@ -514,13 +948,52 @@ def test_collect_complete_change_rows_reports_unsplittable_second():
             columns=["id"],
         )
 
+  assert result["complete"] is True
+  assert result["row_count"] == 2
+  later_query = mock_query.call_args_list[1].kwargs["query"]
+  earlier_query = mock_query.call_args_list[2].kwargs["query"]
+  assert (
+      "change_event.change_date_time >= '2026-07-01 00:00:00.500000'"
+      in later_query
+  )
+  assert (
+      "change_event.change_date_time < '2026-07-01 00:00:00.500000'"
+      in earlier_query
+  )
+  assert "change_event.change_date_time < '2026-07-01 00:00:01'" in later_query
+  assert (
+      "change_event.change_date_time >= '2026-07-01 00:00:00'" in earlier_query
+  )
+
+
+def test_collect_complete_change_rows_reports_unsplittable_microsecond():
+  timestamp = datetime(2026, 7, 1, 0, 0, 0)
+  with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        return_value=[{"id": "1"}, {"id": "2"}],
+    ):
+      with mock.patch(
+          "ads_mcp.tools.changes.write_rows_to_temp_csv",
+          return_value=("/tmp/one-microsecond.csv", ["id"], 10),
+      ):
+        result = changes._collect_complete_change_rows(  # pylint: disable=protected-access
+            lambda start, end: f"{start}..{end}",
+            CUSTOMER_ID,
+            timestamp,
+            timestamp + timedelta(microseconds=1),
+            None,
+            max_queries=10,
+            columns=["id"],
+        )
+
   assert result["complete"] is False
   assert result["row_count"] == 2
   assert result["unresolved_windows"][0]["reason"] == (
-      "api_cap_reached_within_one_second"
+      "api_cap_reached_within_one_microsecond"
   )
   assert result["unresolved_windows"][0]["end_date_time_exclusive"] == (
-      "2026-07-01 00:00:01"
+      "2026-07-01 00:00:00.000001"
   )
 
 
@@ -637,6 +1110,880 @@ def test_export_change_history_csv_returns_files_and_complete_coverage():
   )
 
 
+def test_export_moves_omitted_maximum_bounds_at_status_boundary():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, next_day])
+  collection = {
+      "fragment_paths": ["/tmp/status-fragment.csv"],
+      "row_count": 1,
+      "query_count": 90,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        return_value=collection,
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          return_value=(
+              "/tmp/status.csv",
+              ["change_status.resource_name"],
+              10,
+          ),
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            include_recent_events=False,
+        )
+
+  expected_start = next_day - timedelta(days=89)
+  status_call = mock_collect.call_args
+  assert status_call.args[2].date() == expected_start
+  assert status_call.args[3].date() == next_day + timedelta(days=1)
+  assert result["requested_date_range"] == {
+      "start_date": expected_start.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["change_status_export"]["window"] == {
+      "start_date": expected_start.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["requested_range_fully_available"] is True
+  assert result["account_today"] == next_day.isoformat()
+
+
+def test_export_realigns_status_delta_at_event_boundary():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, next_day])
+  status_collection = _daily_fragment_collection(
+      first_day - timedelta(days=89),
+      90,
+      prefix="status",
+  )
+  status_delta_collection = _daily_fragment_collection(
+      next_day,
+      1,
+      prefix="status-delta",
+  )
+  event_collection = {
+      "fragment_paths": ["/tmp/event.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            status_collection,
+            status_delta_collection,
+            event_collection,
+        ],
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 10),
+              ("/tmp/events.csv", ["change_event.resource_name"], 10),
+          ],
+      ) as mock_merge:
+        result = changes.export_change_history_csv(CUSTOMER_ID)
+
+  delta_start = datetime.combine(next_day, datetime.min.time())
+  delta_call = mock_collect.call_args_list[1]
+  assert delta_call.args[5] == 110
+  assert delta_call.kwargs["initial_windows"] == [
+      (delta_start, delta_start + timedelta(days=1))
+  ]
+  status_fragment_paths = mock_merge.call_args_list[0].args[0]
+  assert "/tmp/status-0.csv" not in status_fragment_paths
+  assert "/tmp/status-delta-0.csv" in status_fragment_paths
+  assert len(status_fragment_paths) == 90
+  assert result["change_status_export"]["row_count"] == 90
+  assert result["change_status_export"]["query_count"] == 91
+  assert result["change_status_export"]["window"] == {
+      "start_date": (next_day - timedelta(days=89)).isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["change_status_export"]["complete"] is True
+  assert (
+      result["change_status_coverage"]["full_requested_range_covered"] is True
+  )
+  assert result["complete"] is True
+
+
+def test_export_rollover_never_exceeds_exhausted_status_budget():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  old_start = datetime.combine(
+      first_day - timedelta(days=89),
+      datetime.min.time(),
+  )
+  old_end = datetime.combine(
+      first_day + timedelta(days=1),
+      datetime.min.time(),
+  )
+  midpoint = old_start + timedelta(days=45)
+  status_collection = {
+      "fragment_paths": [
+          "/tmp/status-older.csv",
+          "/tmp/status-newer.csv",
+      ],
+      "fragments": [
+          {
+              "start": old_start,
+              "end_exclusive": midpoint,
+              "fragment_path": "/tmp/status-older.csv",
+              "row_count": 1,
+          },
+          {
+              "start": midpoint,
+              "end_exclusive": old_end,
+              "fragment_path": "/tmp/status-newer.csv",
+              "row_count": 1,
+          },
+      ],
+      "row_count": 2,
+      "query_count": 2,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  event_collection = {
+      "fragment_paths": ["/tmp/event.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  account_days = iter([first_day, first_day, next_day])
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[status_collection, event_collection],
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 10),
+              ("/tmp/events.csv", ["change_event.resource_name"], 10),
+          ],
+      ) as mock_merge:
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            max_queries_per_resource=2,
+        )
+
+  assert mock_collect.call_count == 2
+  assert mock_merge.call_args_list[0].args[0] == ["/tmp/status-newer.csv"]
+  assert result["change_status_export"]["query_count"] == 2
+  assert result["change_status_export"]["complete"] is False
+  assert result["change_status_export"]["unresolved_windows"]
+  assert all(
+      window["reason"] == "retention_advanced_after_query_budget_exhausted"
+      for window in result["change_status_export"]["unresolved_windows"]
+  )
+  assert result["available_data_complete"] is False
+  assert result["complete"] is False
+  assert "Rerun the same export" in result["next_step"]
+
+
+def test_export_midnight_preserves_fully_explicit_bounds():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  start_date = (first_day - timedelta(days=1)).isoformat()
+  end_date = first_day.isoformat()
+  account_days = iter([first_day, first_day, next_day])
+  status_collection = {
+      "fragment_paths": ["/tmp/status.csv"],
+      "row_count": 1,
+      "query_count": 2,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  event_collection = {
+      "fragment_paths": ["/tmp/event.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[status_collection, event_collection],
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 10),
+              ("/tmp/events.csv", ["change_event.resource_name"], 10),
+          ],
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+  assert mock_collect.call_count == 2
+  assert result["requested_date_range"] == {
+      "start_date": start_date,
+      "end_date": end_date,
+  }
+  assert result["change_status_export"]["window"] == {
+      "start_date": start_date,
+      "end_date": end_date,
+  }
+
+
+def test_export_explicit_future_end_adds_newly_available_status_day():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  explicit_start = first_day - timedelta(days=1)
+  account_days = iter([first_day, first_day, next_day])
+  status_collection = _daily_fragment_collection(
+      explicit_start,
+      2,
+      prefix="status-explicit",
+  )
+  status_delta_collection = _daily_fragment_collection(
+      next_day,
+      1,
+      prefix="status-explicit-delta",
+  )
+  event_collection = {
+      "fragment_paths": ["/tmp/event.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            status_collection,
+            status_delta_collection,
+            event_collection,
+        ],
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 10),
+              ("/tmp/events.csv", ["change_event.resource_name"], 10),
+          ],
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            start_date=explicit_start.isoformat(),
+            end_date=next_day.isoformat(),
+        )
+
+  delta_start = datetime.combine(next_day, datetime.min.time())
+  assert mock_collect.call_args_list[1].kwargs["initial_windows"] == [
+      (delta_start, delta_start + timedelta(days=1))
+  ]
+  assert result["requested_date_range"] == {
+      "start_date": explicit_start.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["change_status_export"]["window"] == {
+      "start_date": explicit_start.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["change_status_export"]["row_count"] == 3
+  assert result["change_status_export"]["query_count"] == 3
+  assert (
+      result["change_status_coverage"]["full_requested_range_covered"] is True
+  )
+  assert result["complete"] is True
+
+
+def test_export_explicit_start_preserves_fetched_older_status_fragment():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  explicit_start = first_day - timedelta(days=89)
+  account_days = iter([first_day, first_day, next_day])
+  status_collection = _daily_fragment_collection(
+      explicit_start,
+      90,
+      prefix="status-explicit-oldest",
+  )
+  status_delta_collection = _daily_fragment_collection(
+      next_day,
+      1,
+      prefix="status-explicit-new",
+  )
+  event_collection = {
+      "fragment_paths": ["/tmp/event.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            status_collection,
+            status_delta_collection,
+            event_collection,
+        ],
+    ):
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 10),
+              ("/tmp/events.csv", ["change_event.resource_name"], 10),
+          ],
+      ) as mock_merge:
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            start_date=explicit_start.isoformat(),
+            end_date=next_day.isoformat(),
+        )
+
+  status_paths = mock_merge.call_args_list[0].args[0]
+  assert "/tmp/status-explicit-oldest-0.csv" in status_paths
+  assert "/tmp/status-explicit-new-0.csv" in status_paths
+  assert len(status_paths) == 91
+  assert result["change_status_export"]["window"] == {
+      "start_date": explicit_start.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["change_status_export"]["row_count"] == 91
+  assert result["change_status_export"]["query_count"] == 91
+  assert (
+      result["change_status_coverage"]["full_requested_range_covered"] is True
+  )
+
+
+def test_partial_default_midnight_never_inverts_requested_range():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  explicit_end = first_day - timedelta(days=89)
+  account_days = iter([first_day, next_day])
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          return_value=(
+              "/tmp/status.csv",
+              ["change_status.resource_name"],
+              0,
+          ),
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            end_date=explicit_end.isoformat(),
+            include_recent_events=False,
+        )
+
+  mock_collect.assert_not_called()
+  assert result["requested_date_range"] == {
+      "start_date": explicit_end.isoformat(),
+      "end_date": explicit_end.isoformat(),
+  }
+  assert result["change_status_export"]["window"] is None
+  assert result["change_status_coverage"]["available"] is False
+  assert result["complete"] is True
+
+
+def test_omitted_end_moves_without_changing_explicit_start():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  collection = {
+      "fragment_paths": ["/tmp/status.csv"],
+      "row_count": 1,
+      "query_count": 2,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  account_days = iter([first_day, next_day])
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        return_value=collection,
+    ):
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          return_value=(
+              "/tmp/status.csv",
+              ["change_status.resource_name"],
+              10,
+          ),
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            start_date=first_day.isoformat(),
+            include_recent_events=False,
+        )
+
+  assert result["requested_date_range"] == {
+      "start_date": first_day.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["change_status_export"]["window"] == {
+      "start_date": first_day.isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+
+
+def test_preview_partial_default_midnight_never_inverts_requested_range():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  explicit_end = first_day - timedelta(days=89)
+  account_days = iter([first_day, next_day])
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_statuses",
+    ) as mock_statuses:
+      result = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          end_date=explicit_end.isoformat(),
+          include_recent_events=False,
+      )
+
+  mock_statuses.assert_not_called()
+  assert result["date_range"] == {
+      "start_date": explicit_end.isoformat(),
+      "end_date": explicit_end.isoformat(),
+  }
+  assert result["change_status_window"] is None
+  assert result["change_status_coverage"]["available"] is False
+
+
+def test_export_recovers_once_when_event_retention_advances_at_midnight():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, first_day, next_day])
+  status_start = first_day - timedelta(days=89)
+  status_fragments = [
+      {
+          "start": datetime.combine(
+              status_start + timedelta(days=index),
+              datetime.min.time(),
+          ),
+          "end_exclusive": datetime.combine(
+              status_start + timedelta(days=index + 1),
+              datetime.min.time(),
+          ),
+          "fragment_path": f"/tmp/status-{index}.csv",
+          "row_count": 1,
+      }
+      for index in range(90)
+  ]
+  status_collection = {
+      "fragment_paths": [
+          fragment["fragment_path"] for fragment in status_fragments
+      ],
+      "fragments": status_fragments,
+      "row_count": 90,
+      "query_count": 90,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  delta_start = datetime.combine(next_day, datetime.min.time())
+  status_delta_collection = {
+      "fragment_paths": ["/tmp/status-delta.csv"],
+      "fragments": [
+          {
+              "start": delta_start,
+              "end_exclusive": delta_start + timedelta(days=1),
+              "fragment_path": "/tmp/status-delta.csv",
+              "row_count": 1,
+          }
+      ],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  event_collection = {
+      "fragment_paths": ["/tmp/event.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            status_collection,
+            ToolError("START_DATE_TOO_OLD"),
+            status_delta_collection,
+            event_collection,
+        ],
+    ) as mock_collect:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 10),
+              ("/tmp/events.csv", ["change_event.resource_name"], 20),
+          ],
+      ):
+        result = changes.export_change_history_csv(CUSTOMER_ID)
+
+  first_event_call = mock_collect.call_args_list[1]
+  status_delta_call = mock_collect.call_args_list[2]
+  retry_event_call = mock_collect.call_args_list[3]
+  assert first_event_call.args[2].date() == first_day - timedelta(days=29)
+  assert retry_event_call.args[2].date() == next_day - timedelta(days=29)
+  assert first_event_call.args[5] == 200
+  assert status_delta_call.args[5] == 110
+  assert status_delta_call.kwargs["initial_windows"] == [
+      (delta_start, delta_start + timedelta(days=1))
+  ]
+  assert retry_event_call.args[5] == 199
+  assert result["change_status_export"]["query_count"] == 91
+  assert result["change_status_export"]["row_count"] == 90
+  assert result["change_event_export"]["query_count"] == 2
+  assert (
+      result["change_event_export"]["window"]["start_date"]
+      == (next_day - timedelta(days=29)).isoformat()
+  )
+  assert result["account_today"] == next_day.isoformat()
+  assert "change_event retention advanced" in result["retention_refresh_note"]
+
+
+def test_event_recovery_reports_attempt_when_slice_expires():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  oldest_event_day = first_day - timedelta(days=29)
+  account_days = iter([first_day, first_day, first_day, next_day])
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        side_effect=ToolError("START_DATE_TOO_OLD"),
+    ) as mock_query:
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              (
+                  "/tmp/status.csv",
+                  ["change_status.resource_name"],
+                  0,
+              ),
+              (
+                  "/tmp/events.csv",
+                  ["change_event.resource_name"],
+                  0,
+              ),
+          ],
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            resource_types=["AD"],
+            start_date=oldest_event_day.isoformat(),
+            end_date=oldest_event_day.isoformat(),
+        )
+
+  mock_query.assert_called_once()
+  assert result["change_event_export"]["file_path"] == "/tmp/events.csv"
+  assert result["change_event_export"]["row_count"] == 0
+  assert result["change_event_export"]["query_count"] == 1
+  assert result["change_event_export"]["window"] is None
+  assert result["change_event_export"]["complete"] is True
+  assert result["change_event_coverage"]["available"] is False
+  assert result["available_data_complete"] is True
+  assert result["complete"] is True
+
+
+def test_late_status_retention_recovery_uses_only_remaining_query_budget():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, next_day])
+  capped_rows = [{"id": "1"}, {"id": "2"}]
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+      with mock.patch(
+          "ads_mcp.tools.changes.run_gaql_query",
+          side_effect=[
+              capped_rows,
+              [{"id": "middle"}],
+              [{"id": "newest"}],
+              [{"id": "later"}],
+              ToolError("START_DATE_TOO_OLD"),
+              [{"id": "coarsened-retry"}],
+          ],
+      ) as mock_query:
+        with mock.patch(
+            "ads_mcp.tools.changes.write_rows_to_temp_csv",
+            side_effect=[
+                ("/tmp/status-oldest.csv", ["id"], 10),
+                ("/tmp/status-middle.csv", ["id"], 10),
+                ("/tmp/status-newest.csv", ["id"], 10),
+                ("/tmp/status-later.csv", ["id"], 10),
+                ("/tmp/status-coarsened-retry.csv", ["id"], 10),
+            ],
+        ):
+          with mock.patch(
+              "ads_mcp.tools.changes.merge_temp_csv_files",
+              return_value=(
+                  "/tmp/status.csv",
+                  ["change_status.resource_name"],
+                  10,
+              ),
+          ):
+            result = changes.export_change_history_csv(
+                CUSTOMER_ID,
+                start_date=(first_day - timedelta(days=2)).isoformat(),
+                end_date=first_day.isoformat(),
+                include_recent_events=False,
+                max_queries_per_resource=6,
+            )
+
+  assert mock_query.call_count == 6
+  assert result["change_status_export"]["query_count"] == 6
+  assert result["change_status_export"]["complete"] is True
+  assert result["requested_date_range"] == {
+      "start_date": (first_day - timedelta(days=2)).isoformat(),
+      "end_date": first_day.isoformat(),
+  }
+  assert result["change_status_export"]["partitioning"]["window_count"] == 1
+  assert (
+      result["change_status_export"]["partitioning"]["strategy"]
+      == "budget_coarsened_contiguous_windows"
+  )
+  assert "change_status retention advanced" in result["retention_refresh_note"]
+
+
+def test_late_event_retention_recovery_uses_only_remaining_query_budget():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, first_day, next_day])
+  capped_rows = [{"id": "1"}, {"id": "2"}]
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+      with mock.patch(
+          "ads_mcp.tools.changes.run_gaql_query",
+          side_effect=[
+              capped_rows,
+              [{"id": "later"}],
+              ToolError("START_DATE_TOO_OLD"),
+              [{"id": "retry"}],
+          ],
+      ) as mock_query:
+        with mock.patch(
+            "ads_mcp.tools.changes.write_rows_to_temp_csv",
+            side_effect=[
+                ("/tmp/event-initial.csv", ["id"], 10),
+                ("/tmp/event-later.csv", ["id"], 10),
+                ("/tmp/event-retry.csv", ["id"], 10),
+            ],
+        ):
+          with mock.patch(
+              "ads_mcp.tools.changes.merge_temp_csv_files",
+              side_effect=[
+                  (
+                      "/tmp/status.csv",
+                      ["change_status.resource_name"],
+                      0,
+                  ),
+                  (
+                      "/tmp/events.csv",
+                      ["change_event.resource_name"],
+                      10,
+                  ),
+              ],
+          ):
+            result = changes.export_change_history_csv(
+                CUSTOMER_ID,
+                resource_types=["AD"],
+                start_date=(first_day - timedelta(days=1)).isoformat(),
+                end_date=first_day.isoformat(),
+                max_queries_per_resource=4,
+            )
+
+  assert mock_query.call_count == 4
+  assert result["change_event_export"]["query_count"] == 4
+  assert result["change_event_export"]["complete"] is True
+  assert "change_event retention advanced" in result["retention_refresh_note"]
+
+
+def test_late_retention_failure_with_no_budget_stops_actionably():
+  first_day = date(2026, 7, 31)
+  capped_rows = [{"id": "1"}, {"id": "2"}]
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      return_value=(first_day, "Pacific/Kiritimati"),
+  ):
+    with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+      with mock.patch(
+          "ads_mcp.tools.changes.run_gaql_query",
+          side_effect=[
+              capped_rows,
+              [{"id": "later"}],
+              ToolError("START_DATE_TOO_OLD"),
+          ],
+      ) as mock_query:
+        with mock.patch(
+            "ads_mcp.tools.changes.write_rows_to_temp_csv",
+            side_effect=[
+                ("/tmp/status-initial.csv", ["id"], 10),
+                ("/tmp/status-later.csv", ["id"], 10),
+            ],
+        ):
+          with pytest.raises(
+              ToolError,
+              match=(
+                  "after 3 query attempts, exhausting the configured "
+                  "max_queries_per_resource=3.*No recovery query was sent"
+              ),
+          ):
+            changes.export_change_history_csv(
+                CUSTOMER_ID,
+                start_date=first_day.isoformat(),
+                end_date=first_day.isoformat(),
+                include_recent_events=False,
+                max_queries_per_resource=3,
+            )
+
+  assert mock_query.call_count == 3
+
+
+def test_cap_export_guidance_arguments_are_directly_executable():
+  today = date.today()
+  truncated_statuses = {
+      "change_statuses": [],
+      "returned_count": 10_000,
+      "total_count": 10_000,
+      "truncated": True,
+      "next_page_token": None,
+  }
+  empty_events = {
+      "change_events": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value=truncated_statuses,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+        return_value=empty_events,
+    ):
+      preview = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          resource_types=["CAMPAIGN"],
+          start_date=(today - timedelta(days=6)).isoformat(),
+          end_date=today.isoformat(),
+          limit=10_000,
+      )
+
+  guidance = preview["continuation_guidance"]["change_status"]
+  complete_collection = {
+      "fragment_paths": ["/tmp/status-fragment.csv"],
+      "row_count": 1,
+      "query_count": 7,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._collect_complete_change_rows",
+      return_value=complete_collection,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.merge_temp_csv_files",
+        return_value=("/tmp/status.csv", ["change_status.resource_name"], 10),
+    ):
+      export = changes.export_change_history_csv(**guidance["arguments"])
+
+  assert guidance["arguments"]["resource_types"] == ["CAMPAIGN"]
+  assert guidance["arguments"]["include_recent_events"] is False
+  assert export["change_status_export"]["row_count"] == 1
+
+
 def test_status_partition_windows_coarsen_without_date_gaps():
   start = datetime(2026, 7, 1)
   end_exclusive = datetime(2026, 7, 6)
@@ -685,11 +2032,11 @@ def test_export_marks_coarsened_status_resolution_incomplete():
 
   windows = mock_collect.call_args.kwargs["initial_windows"]
   assert len(windows) == 2
-  assert windows[-1][0] == datetime.combine(
+  assert windows[0][0] == datetime.combine(
       today - timedelta(days=4),
       datetime.min.time(),
   )
-  assert windows[0][1] == datetime.combine(
+  assert windows[-1][1] == datetime.combine(
       today + timedelta(days=1),
       datetime.min.time(),
   )
@@ -698,6 +2045,52 @@ def test_export_marks_coarsened_status_resolution_incomplete():
   assert result["available_data_complete"] is False
   assert result["complete"] is False
   assert "Increase max_queries_per_resource" in result["next_step"]
+
+
+def test_export_does_not_recommend_impossible_microsecond_cap_retry():
+  status_collection = {
+      "fragment_paths": ["/tmp/status-fragment.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  event_collection = {
+      "fragment_paths": ["/tmp/event-fragment.csv"],
+      "row_count": 10_000,
+      "query_count": 41,
+      "complete": False,
+      "unresolved_windows": [
+          {
+              "start_date_time": "2026-07-30 12:00:00.000001",
+              "end_date_time_exclusive": "2026-07-30 12:00:00.000002",
+              "reason": "api_cap_reached_within_one_microsecond",
+              "returned_count": 10_000,
+          }
+      ],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._collect_complete_change_rows",
+      side_effect=[status_collection, event_collection],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.merge_temp_csv_files",
+        side_effect=[
+            ("/tmp/status.csv", ["change_status.resource_name"], 10),
+            ("/tmp/events.csv", ["change_event.resource_name"], 20),
+        ],
+    ):
+      result = changes.export_change_history_csv(
+          CUSTOMER_ID,
+          start_date=date.today().isoformat(),
+          end_date=date.today().isoformat(),
+      )
+
+  assert "Time subdivision is exhausted" in result["next_step"]
+  assert (
+      "higher max_queries_per_resource cannot resolve" in result["next_step"]
+  )
+  assert "resource_types divided into smaller subsets" in result["next_step"]
 
 
 def test_change_resource_types_are_partitioned_by_v24_enum():
@@ -711,6 +2104,99 @@ def test_change_resource_types_are_partitioned_by_v24_enum():
   assert coverage["change_event"]["unsupported_resource_types"] == [
       "SHARED_SET"
   ]
+
+
+def test_ad_only_export_uses_applicable_event_range_for_availability():
+  today = date.today()
+  collection = {
+      "fragment_paths": ["/tmp/event-fragment.csv"],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._collect_complete_change_rows",
+      return_value=collection,
+  ) as mock_collect:
+    with mock.patch(
+        "ads_mcp.tools.changes.merge_temp_csv_files",
+        side_effect=[
+            ("/tmp/status.csv", ["change_status.resource_name"], 1),
+            ("/tmp/events.csv", ["change_event.resource_name"], 1),
+        ],
+    ):
+      result = changes.export_change_history_csv(
+          CUSTOMER_ID,
+          resource_types=["AD"],
+          start_date=(today - timedelta(days=6)).isoformat(),
+          end_date=today.isoformat(),
+      )
+
+  assert mock_collect.call_count == 1
+  assert "FROM change_event" in mock_collect.call_args.args[0](
+      datetime(2026, 7, 1),
+      datetime(2026, 7, 2),
+  )
+  assert result["change_status_coverage"]["available"] is False
+  assert (
+      result["change_event_coverage"]["full_requested_range_covered"] is True
+  )
+  assert result["requested_range_fully_available"] is True
+
+
+def test_shared_set_only_export_uses_applicable_status_range_for_availability():
+  today = date.today()
+  collection = {
+      "fragment_paths": ["/tmp/status-fragment.csv"],
+      "row_count": 1,
+      "query_count": 7,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._collect_complete_change_rows",
+      return_value=collection,
+  ) as mock_collect:
+    with mock.patch(
+        "ads_mcp.tools.changes.merge_temp_csv_files",
+        return_value=("/tmp/status.csv", ["change_status.resource_name"], 1),
+    ):
+      result = changes.export_change_history_csv(
+          CUSTOMER_ID,
+          resource_types=["SHARED_SET"],
+          start_date=(today - timedelta(days=6)).isoformat(),
+          end_date=today.isoformat(),
+      )
+
+  assert mock_collect.call_count == 1
+  assert "FROM change_status" in mock_collect.call_args.args[0](
+      datetime(2026, 7, 1),
+      datetime(2026, 7, 2),
+  )
+  assert (
+      result["change_status_coverage"]["full_requested_range_covered"] is True
+  )
+  assert result["change_event_coverage"]["available"] is False
+  assert result["requested_range_fully_available"] is True
+
+
+def test_requested_range_requires_at_least_one_applicable_change_source():
+  with mock.patch(
+      "ads_mcp.tools.changes._collect_complete_change_rows",
+  ) as mock_collect:
+    with mock.patch(
+        "ads_mcp.tools.changes.merge_temp_csv_files",
+        return_value=("/tmp/status.csv", ["change_status.resource_name"], 1),
+    ):
+      result = changes.export_change_history_csv(
+          CUSTOMER_ID,
+          resource_types=["AD"],
+          include_recent_events=False,
+      )
+
+  mock_collect.assert_not_called()
+  assert result["requested_range_fully_available"] is False
 
 
 def test_change_resource_types_reject_values_unsupported_by_both_resources():
@@ -795,7 +2281,7 @@ def test_change_csv_fragment_merge_cleans_fragments():
     os.remove(output_path)
 
 
-def test_export_removes_status_file_when_event_export_fails():
+def test_export_removes_status_fragments_when_event_query_fails():
   collection = {
       "fragment_paths": ["/tmp/status-fragment.csv"],
       "row_count": 1,
@@ -817,7 +2303,7 @@ def test_export_removes_status_file_when_event_export_fails():
         with pytest.raises(ToolError, match="event query failed"):
           changes.export_change_history_csv(CUSTOMER_ID)
 
-  mock_remove.assert_called_once_with("/tmp/status.csv")
+  mock_remove.assert_called_once_with("/tmp/status-fragment.csv")
 
 
 def test_export_expired_range_distinguishes_availability_from_completion():

@@ -46,6 +46,10 @@ def test_list_asset_group_assets_builds_query():
   assert "asset_group_asset.primary_status_details" not in query
   assert "asset_group_asset.performance_label" not in query
   assert "segments.date DURING" not in query
+  assert (
+      "ORDER BY metrics.conversions DESC, campaign.id, asset_group.id, "
+      "asset.id, asset_group_asset.field_type"
+  ) in " ".join(query.split())
   assert mock_query.call_args.kwargs["page_size"] == 25
   assert result["returned_count"] == 0
   assert result["total_count"] == 0

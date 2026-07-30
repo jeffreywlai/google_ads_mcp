@@ -33,6 +33,17 @@ def _reference_count_response(reference_count):
   return [mock.Mock(results=[row])]
 
 
+def _google_ads_exception(message):
+  error = mock.Mock()
+  error.__str__ = lambda self: message
+  return GoogleAdsException(
+      error=mock.Mock(),
+      failure=mock.Mock(errors=[error]),
+      call=mock.Mock(),
+      request_id="test",
+  )
+
+
 @pytest.fixture(autouse=True)
 def mock_ads_client():
   """Patches get_ads_client for all tests."""
@@ -140,6 +151,31 @@ class TestDeleteSharedSet:
     result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
     assert result == {"resource_name": "customers/123/sharedSets/111"}
 
+  def test_preflight_diagnostic_failure_does_not_block_delete(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _google_ads_exception("diagnostic unavailable"),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    shared_set_service.mutate_shared_sets.return_value.results = [
+        mock.Mock(resource_name="customers/123/sharedSets/111")
+    ]
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result == {"resource_name": "customers/123/sharedSets/111"}
+    shared_set_service.mutate_shared_sets.assert_called_once()
+
   def test_returns_detach_instructions_for_attached_campaigns(
       self, mock_ads_client
   ):
@@ -171,15 +207,28 @@ class TestDeleteSharedSet:
             }
         ],
         "attachments_complete": True,
+        "known_detach_calls": [
+            {
+                "tool": "detach_shared_set_from_campaign",
+                "arguments": {
+                    "customer_id": CUSTOMER_ID,
+                    "campaign_id": CAMPAIGN_ID,
+                    "shared_set_id": SHARED_SET_ID,
+                    "login_customer_id": None,
+                },
+            }
+        ],
         "next_step": (
-            "Call detach_shared_set_from_campaign first for each attached "
-            "campaign using its customer_id and campaign_id, then retry "
+            "Call each entry in known_detach_calls first, then retry "
             "delete_shared_set."
         ),
     }
     query = ads_service.search_stream.call_args.kwargs["query"]
     assert "FROM campaign_shared_set" in query
-    assert "shared_set.id = 111" in query
+    assert (
+        "campaign_shared_set.shared_set = "
+        "'customers/1234567890/sharedSets/111'" in " ".join(query.split())
+    )
     shared_set_service.mutate_shared_sets.assert_not_called()
 
   def test_recovers_if_shared_set_becomes_attached_during_delete(
@@ -223,7 +272,9 @@ class TestDeleteSharedSet:
         }
     ]
     assert result["attachments_complete"] is True
-    assert "detach_shared_set_from_campaign first" in result["next_step"]
+    assert result["known_detach_calls"][0]["tool"] == (
+        "detach_shared_set_from_campaign"
+    )
     assert ads_service.search_stream.call_count == 4
 
   def test_reports_cross_account_references_without_empty_detach_loop(
@@ -248,8 +299,94 @@ class TestDeleteSharedSet:
     assert result["attachments_complete"] is False
     assert "managed client accounts" in result["warning"]
     assert "list_campaign_shared_sets" in result["next_step"]
-    assert "child customer_id" in result["next_step"]
+    assert "managed_customer_discovery" in result["next_step"]
+    assert result["managed_customer_discovery"] == {
+        "tool": "execute_gaql",
+        "arguments": {
+            "customer_id": CUSTOMER_ID,
+            "login_customer_id": None,
+            "query": (
+                "SELECT customer_client.id, "
+                "customer_client.descriptive_name, customer_client.level "
+                "FROM customer_client WHERE customer_client.level > 0"
+            ),
+        },
+    }
     shared_set_service.mutate_shared_sets.assert_not_called()
+
+  def test_incomplete_diagnostics_detach_known_campaigns_before_discovery(
+      self, mock_ads_client
+  ):
+    row = mock.Mock()
+    row.campaign.id = 222
+    row.campaign.name = "Known Campaign"
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _google_ads_exception("reference lookup unavailable"),
+        [mock.Mock(results=[row])],
+    ]
+    mock_ads_client.get_service.return_value = ads_service
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["attachments_complete"] is False
+    assert result["known_detach_calls"] == [
+        {
+            "tool": "detach_shared_set_from_campaign",
+            "arguments": {
+                "customer_id": CUSTOMER_ID,
+                "campaign_id": CAMPAIGN_ID,
+                "shared_set_id": SHARED_SET_ID,
+                "login_customer_id": None,
+            },
+        }
+    ]
+    assert result["next_step"].startswith(
+        "Call each entry in known_detach_calls first. "
+    )
+    assert "Run managed_customer_discovery next." in result["next_step"]
+
+  def test_cross_account_guidance_preserves_login_context(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(1),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(
+        CUSTOMER_ID,
+        SHARED_SET_ID,
+        login_customer_id="999",
+    )
+
+    discovery_arguments = result["managed_customer_discovery"]["arguments"]
+    assert discovery_arguments["customer_id"] == CUSTOMER_ID
+    assert discovery_arguments["login_customer_id"] == "999"
+    assert "login_customer_id=999" in result["next_step"]
+
+  def test_cross_account_guidance_reuses_default_login_context(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(1),
+        [],
+    ]
+    mock_ads_client.get_service.return_value = ads_service
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    discovery_arguments = result["managed_customer_discovery"]["arguments"]
+    assert discovery_arguments["login_customer_id"] is None
+    assert "configured default is reused" in result["next_step"]
+    assert f"login_customer_id={CUSTOMER_ID}" not in result["next_step"]
 
   def test_reports_incomplete_cross_account_usage_after_delete_race(
       self, mock_ads_client
@@ -286,6 +423,80 @@ class TestDeleteSharedSet:
     assert "2 campaign references" in result["warning"]
     assert "managed client accounts" in result["warning"]
     assert "list_campaign_shared_sets" in result["next_step"]
+
+  def test_preserves_in_use_response_when_reference_diagnostic_fails(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _google_ads_exception("reference lookup unavailable"),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    shared_set_service.mutate_shared_sets.side_effect = _google_ads_exception(
+        "SHARED_SET_IN_USE"
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["attachments_complete"] is False
+    assert result["diagnostic_errors"] == [
+        {
+            "check": "shared_set.reference_count",
+            "error": "reference lookup unavailable",
+        }
+    ]
+    assert "rather than retrying the identical delete" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+    shared_set_service.mutate_shared_sets.assert_called_once()
+
+  def test_preserves_in_use_response_when_attachment_diagnostic_fails(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _reference_count_response(2),
+        _google_ads_exception("attachment lookup unavailable"),
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    shared_set_service.mutate_shared_sets.side_effect = _google_ads_exception(
+        "SHARED_SET_IN_USE"
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["reference_count"] == 2
+    assert result["attached_campaigns"] == []
+    assert result["attachments_complete"] is False
+    assert result["diagnostic_errors"] == [
+        {
+            "check": "campaign_shared_set attachments",
+            "error": "attachment lookup unavailable",
+        }
+    ]
+    assert "rather than retrying the identical delete" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+    shared_set_service.mutate_shared_sets.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

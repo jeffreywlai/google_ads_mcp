@@ -17,8 +17,11 @@
 # pylint: disable=protected-access
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from threading import Event
 from unittest import mock
 import os
+import stat
 import tempfile
 import uuid
 
@@ -27,6 +30,9 @@ from google.ads.googleads.errors import GoogleAdsException
 from google.protobuf.field_mask_pb2 import FieldMask
 import proto
 import pytest
+
+
+real_page_cache_scope = api._page_cache_scope
 
 
 @pytest.fixture(autouse=True)
@@ -38,14 +44,23 @@ def reset_ads_client():
   api._ADS_CLIENTS_CREDENTIALS_PATH = None
   api._ADS_CONFIG_CACHE = {}
   api._PAGED_QUERY_CACHE = api.OrderedDict()
+  api._PAGED_QUERY_LATEST = {}
+  api._PAGED_QUERY_BUILDS = {}
   api._package_ads_assistant.cache_clear()
-  yield
+  with mock.patch.object(
+      api,
+      "_page_cache_scope",
+      return_value="test-credentials",
+  ):
+    yield
   api._ADS_CLIENTS.clear()
   api._ADS_CLIENT_BUILDS.clear()
   api._ADS_CLIENTS_CREDENTIALS_MTIME = None
   api._ADS_CLIENTS_CREDENTIALS_PATH = None
   api._ADS_CONFIG_CACHE = {}
   api._PAGED_QUERY_CACHE = api.OrderedDict()
+  api._PAGED_QUERY_LATEST = {}
+  api._PAGED_QUERY_BUILDS = {}
   api._package_ads_assistant.cache_clear()
 
 
@@ -527,14 +542,20 @@ def test_run_gaql_query_page_returns_rows_and_metadata():
           {"campaign.id": "2"},
           {"campaign.id": "3"},
       ],
-  ):
+  ) as mock_run:
+    first_page = api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        page_size=1,
+    )
     result = api.run_gaql_query_page(
         "SELECT campaign.id FROM campaign",
         "123",
         page_size=2,
-        page_token="1",
+        page_token=first_page["next_page_token"],
     )
 
+  mock_run.assert_called_once()
   assert result == {
       "rows": [{"campaign.id": "2"}, {"campaign.id": "3"}],
       "next_page_token": None,
@@ -549,6 +570,17 @@ def test_run_gaql_query_page_rejects_invalid_page_token():
         "123",
         page_size=2,
         page_token="bad-token",
+    )
+
+
+def test_run_gaql_query_page_rejects_oversized_offset():
+  page_token = "a" * 32 + ":" + "9" * 5000
+  with pytest.raises(api.ToolError, match="Invalid page_token"):
+    api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        page_size=2,
+        page_token=page_token,
     )
 
 
@@ -572,7 +604,7 @@ def test_run_gaql_query_page_reuses_short_lived_cache():
         "SELECT campaign.id FROM campaign",
         "123",
         page_size=2,
-        page_token="2",
+        page_token=first_page["next_page_token"],
     )
 
   assert mock_run.call_count == 1
@@ -605,6 +637,467 @@ def test_run_gaql_query_page_expires_cache_after_ttl():
   assert mock_run.call_count == 2
 
 
+def test_run_gaql_query_page_rejects_expired_snapshot_token():
+  query = "SELECT campaign.id FROM campaign"
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+  ]
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    with mock.patch(
+        "ads_mcp.tools.api.time.monotonic",
+        side_effect=[100.0, 100.0, 191.0],
+    ):
+      first_page = api.run_gaql_query_page(
+          query,
+          "123",
+          page_size=1,
+      )
+      with pytest.raises(api.ToolError, match="snapshot was evicted"):
+        api.run_gaql_query_page(
+            query,
+            "123",
+            page_size=1,
+            page_token=first_page["next_page_token"],
+        )
+
+  mock_run.assert_called_once()
+  query_key = api._page_cache_key(query, "123", None)
+  assert query_key not in api._PAGED_QUERY_LATEST
+
+
+def test_run_gaql_query_page_rejects_evicted_snapshot_token():
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+  ]
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=rows,
+  ) as mock_run:
+    first_page = api.run_gaql_query_page(
+        "SELECT campaign.id FROM campaign", "1", 1
+    )
+    for index in range(api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE):
+      api.run_gaql_query_page(
+          f"SELECT campaign.id FROM campaign WHERE campaign.id = {index}",
+          str(index + 2),
+          1,
+      )
+
+    with pytest.raises(
+        api.ToolError,
+        match="expired or its result snapshot was evicted",
+    ):
+      api.run_gaql_query_page(
+          "SELECT campaign.id FROM campaign",
+          "1",
+          1,
+          page_token=first_page["next_page_token"],
+      )
+
+  assert mock_run.call_count == (
+      api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE + 1
+  )
+
+
+def test_run_gaql_query_page_rejects_token_from_replaced_snapshot():
+  query = "SELECT campaign.id FROM campaign"
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      side_effect=[
+          [{"campaign.id": "1"}, {"campaign.id": "2"}],
+          [{"campaign.id": "2"}, {"campaign.id": "1"}],
+      ],
+  ) as mock_run:
+    first_page = api.run_gaql_query_page(query, "123", page_size=1)
+    api._PAGED_QUERY_CACHE.clear()
+    api.run_gaql_query_page(query, "123", page_size=1)
+
+    with pytest.raises(api.ToolError, match="expired result snapshot"):
+      api.run_gaql_query_page(
+          query,
+          "123",
+          page_size=1,
+          page_token=first_page["next_page_token"],
+      )
+
+  assert mock_run.call_count == 2
+
+
+@pytest.mark.parametrize("offset", [0, 999])
+def test_run_gaql_query_page_rejects_impossible_snapshot_offset(offset):
+  query = "SELECT campaign.id FROM campaign"
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+      {"campaign.id": "3"},
+  ]
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=rows,
+  ):
+    first_page = api.run_gaql_query_page(query, "123", page_size=1)
+    snapshot_id = first_page["next_page_token"].split(":", maxsplit=1)[0]
+    with pytest.raises(api.ToolError, match="Invalid page_token"):
+      api.run_gaql_query_page(
+          query,
+          "123",
+          page_size=1,
+          page_token=f"{snapshot_id}:{offset}",
+      )
+
+
+def test_run_gaql_query_page_shares_concurrent_snapshot_build():
+  query = "SELECT campaign.id FROM campaign"
+  rows = [
+      {"campaign.id": "1"},
+      {"campaign.id": "2"},
+  ]
+  query_started = Event()
+  release_query = Event()
+
+  def _run_query(*_args, **_kwargs):
+    query_started.set()
+    release_query.wait(timeout=5)
+    return rows
+
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      side_effect=_run_query,
+  ) as mock_run:
+    with ThreadPoolExecutor(max_workers=2) as pool:
+      first_future = pool.submit(
+          api.run_gaql_query_page,
+          query,
+          "123",
+          1,
+      )
+      assert query_started.wait(timeout=5)
+      second_future = pool.submit(
+          api.run_gaql_query_page,
+          query,
+          "123",
+          1,
+      )
+      release_query.set()
+      first_page = first_future.result(timeout=5)
+      second_page = second_future.result(timeout=5)
+
+  mock_run.assert_called_once()
+  assert first_page["next_page_token"] == second_page["next_page_token"]
+  for page in (first_page, second_page):
+    continuation = api.run_gaql_query_page(
+        query,
+        "123",
+        1,
+        page_token=page["next_page_token"],
+    )
+    assert continuation["rows"] == [{"campaign.id": "2"}]
+
+
+def test_returned_token_survives_capacity_and_ttl_churn_during_page_copy():
+  page_copy_started = Event()
+  release_page_copy = Event()
+  monotonic_time = [100.0]
+  blocked_first_copy = [False]
+
+  def _query_rows(query, **_kwargs):
+    marker = query.rsplit(maxsplit=1)[-1]
+    return [{"row": f"{marker}-1"}, {"row": f"{marker}-2"}]
+
+  def _delayed_page_copy(value):
+    if value and value[0].get("row") == "A-1" and not blocked_first_copy[0]:
+      blocked_first_copy[0] = True
+      page_copy_started.set()
+      release_page_copy.wait(timeout=5)
+    return deepcopy(value)
+
+  with mock.patch.object(
+      api,
+      "_page_cache_scope",
+      return_value="principal-a",
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api.run_gaql_query",
+        side_effect=_query_rows,
+    ) as mock_run:
+      with mock.patch(
+          "ads_mcp.tools.api.time.monotonic",
+          side_effect=lambda: monotonic_time[0],
+      ):
+        with mock.patch(
+            "ads_mcp.tools.api.deepcopy",
+            side_effect=_delayed_page_copy,
+        ):
+          with ThreadPoolExecutor(max_workers=2) as pool:
+            first_future = pool.submit(
+                api.run_gaql_query_page,
+                "SELECT A",
+                "123",
+                1,
+            )
+            assert page_copy_started.wait(timeout=5)
+            monotonic_time[0] += api._PAGED_QUERY_CACHE_TTL_SECONDS + 1
+            for index in range(api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE):
+              api.run_gaql_query_page(f"SELECT B{index}", "123", 1)
+            interleaved_page = api.run_gaql_query_page(
+                "SELECT A",
+                "123",
+                1,
+            )
+            release_page_copy.set()
+            first_page = first_future.result(timeout=5)
+
+          assert any(
+              cache_key[3] == "SELECT A"
+              for cache_key in api._PAGED_QUERY_CACHE
+          )
+          assert len(api._PAGED_QUERY_CACHE) <= (
+              api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE
+          )
+          continuation = api.run_gaql_query_page(
+              "SELECT A",
+              "123",
+              1,
+              page_token=first_page["next_page_token"],
+          )
+
+  assert continuation["rows"] == [{"row": "A-2"}]
+  assert first_page["next_page_token"] == interleaved_page["next_page_token"]
+  assert mock_run.call_count == (
+      api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE + 1
+  )
+
+
+def test_same_query_generations_keep_both_continuation_tokens_live():
+  query = "SELECT campaign.id FROM campaign"
+  continuation_copy_started = Event()
+  release_continuation_copy = Event()
+  query_build_count = [0]
+
+  def _query_rows(**kwargs):
+    current_query = kwargs["query"]
+    if current_query == query:
+      query_build_count[0] += 1
+      marker = "A" if query_build_count[0] == 1 else "B"
+    else:
+      marker = current_query.rsplit(maxsplit=1)[-1]
+    return [
+        {"row": f"{marker}-1"},
+        {"row": f"{marker}-2"},
+        {"row": f"{marker}-3"},
+    ]
+
+  def _block_old_continuation(value):
+    if value and value[0].get("row") == "A-2":
+      continuation_copy_started.set()
+      release_continuation_copy.wait(timeout=5)
+    return deepcopy(value)
+
+  with mock.patch.object(
+      api,
+      "_page_cache_scope",
+      return_value="same-principal",
+  ):
+    with mock.patch.object(
+        api,
+        "run_gaql_query",
+        side_effect=_query_rows,
+    ):
+      with mock.patch.object(
+          api,
+          "deepcopy",
+          side_effect=_block_old_continuation,
+      ):
+        first_a_page = api.run_gaql_query_page(query, "123", 1)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+          a_continuation_future = pool.submit(
+              api.run_gaql_query_page,
+              query,
+              "123",
+              1,
+              first_a_page["next_page_token"],
+          )
+          assert continuation_copy_started.wait(timeout=5)
+          for index in range(api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE):
+            api.run_gaql_query_page(f"SELECT CHURN-{index}", "123", 3)
+
+          first_b_page = api.run_gaql_query_page(query, "123", 1)
+          release_continuation_copy.set()
+          second_a_page = a_continuation_future.result(timeout=5)
+
+        assert (
+            second_a_page["next_page_token"] != first_b_page["next_page_token"]
+        )
+        a_final_page = api.run_gaql_query_page(
+            query,
+            "123",
+            1,
+            second_a_page["next_page_token"],
+        )
+        second_b_page = api.run_gaql_query_page(
+            query,
+            "123",
+            1,
+            first_b_page["next_page_token"],
+        )
+
+  assert query_build_count[0] == 2
+  assert a_final_page["rows"] == [{"row": "A-3"}]
+  assert second_b_page["rows"] == [{"row": "B-2"}]
+  assert len(api._PAGED_QUERY_CACHE) <= (
+      api._PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE
+  )
+  cached_snapshot_ids = {
+      snapshot_key[5] for snapshot_key in api._PAGED_QUERY_CACHE
+  }
+  assert second_a_page["next_page_token"].split(":", maxsplit=1)[0] in (
+      cached_snapshot_ids
+  )
+  assert first_b_page["next_page_token"].split(":", maxsplit=1)[0] in (
+      cached_snapshot_ids
+  )
+
+
+def test_page_cache_partitions_local_sort_variants():
+  query = "SELECT recommendation.resource_name FROM recommendation"
+  rows = [
+      {"recommendation.resource_name": "customers/123/recommendations/b"},
+      {"recommendation.resource_name": "customers/123/recommendations/a"},
+      {"recommendation.resource_name": "customers/123/recommendations/c"},
+  ]
+  with mock.patch.object(
+      api,
+      "run_gaql_query",
+      side_effect=[rows, rows],
+  ) as mock_run:
+    unsorted_page = api.run_gaql_query_page(query, "123", 1)
+    sorted_page = api.run_gaql_query_page(
+        query,
+        "123",
+        1,
+        row_sort_fields=("recommendation.resource_name",),
+    )
+    unsorted_continuation = api.run_gaql_query_page(
+        query,
+        "123",
+        1,
+        page_token=unsorted_page["next_page_token"],
+    )
+    sorted_continuation = api.run_gaql_query_page(
+        query,
+        "123",
+        1,
+        page_token=sorted_page["next_page_token"],
+        row_sort_fields=("recommendation.resource_name",),
+    )
+
+  assert mock_run.call_count == 2
+  assert unsorted_page["rows"] == [
+      {"recommendation.resource_name": "customers/123/recommendations/b"}
+  ]
+  assert unsorted_continuation["rows"] == [
+      {"recommendation.resource_name": "customers/123/recommendations/a"}
+  ]
+  assert sorted_page["rows"] == [
+      {"recommendation.resource_name": "customers/123/recommendations/a"}
+  ]
+  assert sorted_continuation["rows"] == [
+      {"recommendation.resource_name": "customers/123/recommendations/b"}
+  ]
+
+
+def test_page_cache_remains_process_bounded_across_principals():
+  query_count = api._PAGED_QUERY_CACHE_MAX_ENTRIES + 1
+  with mock.patch.object(
+      api,
+      "_page_cache_scope",
+      side_effect=[f"principal-{index}" for index in range(query_count)],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api.run_gaql_query",
+        return_value=[{"campaign.id": "1"}],
+    ):
+      for index in range(query_count):
+        api.run_gaql_query_page(
+            f"SELECT campaign.id FROM campaign WHERE campaign.id = {index}",
+            "123",
+            1,
+        )
+
+  assert len(api._PAGED_QUERY_CACHE) == api._PAGED_QUERY_CACHE_MAX_ENTRIES
+  assert all(
+      api._snapshot_cache_key(query_key, snapshot_id) in api._PAGED_QUERY_CACHE
+      for query_key, snapshot_id in api._PAGED_QUERY_LATEST.items()
+  )
+
+
+def test_run_gaql_query_page_partitions_snapshots_by_principal():
+  query = "SELECT campaign.id FROM campaign"
+  principal_a = mock.Mock(token="principal-a-secret-token")
+  principal_b = mock.Mock(token="principal-b-secret-token")
+  with mock.patch.object(
+      api,
+      "_page_cache_scope",
+      side_effect=real_page_cache_scope,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api.get_access_token",
+        side_effect=[principal_a, principal_b],
+    ):
+      with mock.patch(
+          "ads_mcp.tools.api.run_gaql_query",
+          side_effect=[
+              [{"campaign.id": "a1"}, {"campaign.id": "a2"}],
+              [{"campaign.id": "b1"}, {"campaign.id": "b2"}],
+          ],
+      ) as mock_run:
+        principal_a_page = api.run_gaql_query_page(query, "123", page_size=1)
+        principal_b_page = api.run_gaql_query_page(query, "123", page_size=1)
+
+  assert principal_a_page["rows"] == [{"campaign.id": "a1"}]
+  assert principal_b_page["rows"] == [{"campaign.id": "b1"}]
+  assert (
+      principal_a_page["next_page_token"]
+      != principal_b_page["next_page_token"]
+  )
+  assert mock_run.call_count == 2
+  cache_scopes = [cache_key[0] for cache_key in api._PAGED_QUERY_CACHE]
+  assert len(set(cache_scopes)) == 2
+  assert all("secret-token" not in scope for scope in cache_scopes)
+
+
+def test_run_gaql_query_page_only_copies_the_returned_page():
+  query = "SELECT campaign.id FROM campaign"
+  rows = [{"campaign.id": str(index)} for index in range(1000)]
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=rows,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api.deepcopy",
+        wraps=deepcopy,
+    ) as mock_deepcopy:
+      first_page = api.run_gaql_query_page(query, "123", page_size=25)
+      api.run_gaql_query_page(
+          query,
+          "123",
+          page_size=25,
+          page_token=first_page["next_page_token"],
+      )
+
+  copied_list_lengths = [
+      len(call.args[0])
+      for call in mock_deepcopy.call_args_list
+      if isinstance(call.args[0], list)
+  ]
+  assert copied_list_lengths == [25, 25]
+
+
 def test_build_paginated_list_response_returns_completeness_metadata():
   assert api.build_paginated_list_response(
       "campaigns",
@@ -624,6 +1117,145 @@ def test_build_paginated_list_response_returns_completeness_metadata():
       "next_page_token": "2",
       "page_size": 2,
   }
+
+
+def test_write_rows_to_temp_csv_removes_partial_file_on_failure(tmp_path):
+  output_path = tmp_path / "partial.csv"
+  file_descriptor = os.open(
+      output_path,
+      os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+      0o600,
+  )
+  with mock.patch(
+      "ads_mcp.tools.api.tempfile.mkstemp",
+      return_value=(file_descriptor, str(output_path)),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api._csv_cell_value",
+        side_effect=ValueError("serialization failed"),
+    ):
+      with pytest.raises(ValueError, match="serialization failed"):
+        api.write_rows_to_temp_csv([{"campaign.id": "1"}])
+
+  assert not output_path.exists()
+
+
+def test_export_gaql_csv_removes_failed_new_explicit_output(
+    tmp_path, monkeypatch
+):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  output_path = tmp_path / "failed.csv"
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api._csv_cell_value",
+        side_effect=ValueError("serialization failed"),
+    ):
+      with pytest.raises(ValueError, match="serialization failed"):
+        api.export_gaql_csv(
+            query="SELECT campaign.id FROM campaign",
+            customer_id="123",
+            output_path=str(output_path),
+        )
+
+  assert not output_path.exists()
+  assert not list(tmp_path.glob(".google_ads_mcp_*.tmp"))
+
+
+def test_export_gaql_csv_preserves_existing_output_when_overwrite_fails(
+    tmp_path, monkeypatch
+):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  output_path = tmp_path / "existing.csv"
+  output_path.write_text("original\n", encoding="utf-8")
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api._csv_cell_value",
+        side_effect=ValueError("serialization failed"),
+    ):
+      with pytest.raises(ValueError, match="serialization failed"):
+        api.export_gaql_csv(
+            query="SELECT campaign.id FROM campaign",
+            customer_id="123",
+            output_path=str(output_path),
+            overwrite=True,
+        )
+
+  assert output_path.read_text(encoding="utf-8") == "original\n"
+  assert not list(tmp_path.glob(".google_ads_mcp_*.tmp"))
+
+
+def test_export_gaql_csv_preserves_existing_output_permissions(
+    tmp_path, monkeypatch
+):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  output_path = tmp_path / "private.csv"
+  output_path.write_text("original\n", encoding="utf-8")
+  output_path.chmod(0o600)
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=str(output_path),
+        overwrite=True,
+    )
+
+  assert stat.S_IMODE(output_path.stat().st_mode) == 0o600
+
+
+def test_export_gaql_csv_keeps_new_explicit_output_private(
+    tmp_path, monkeypatch
+):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  output_path = tmp_path / "new-private.csv"
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    api.export_gaql_csv(
+        query="SELECT campaign.id FROM campaign",
+        customer_id="123",
+        output_path=str(output_path),
+    )
+
+  assert stat.S_IMODE(output_path.stat().st_mode) == 0o600
+
+
+def test_export_gaql_csv_succeeds_if_post_link_cleanup_fails(
+    tmp_path, monkeypatch
+):
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  output_path = tmp_path / "committed.csv"
+  with mock.patch(
+      "ads_mcp.tools.api.run_gaql_query",
+      return_value=[{"campaign.id": "1"}],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.api.os.remove",
+        side_effect=OSError("post-link cleanup failed"),
+    ) as mock_remove:
+      result = api.export_gaql_csv(
+          query="SELECT campaign.id FROM campaign",
+          customer_id="123",
+          output_path=str(output_path),
+      )
+
+  assert result["file_path"] == str(output_path)
+  assert output_path.read_text(encoding="utf-8").splitlines() == [
+      "campaign.id",
+      "1",
+  ]
+  assert mock_remove.call_count >= 2
+  for temp_path in tmp_path.glob(".google_ads_mcp_*.tmp"):
+    temp_path.unlink()
 
 
 def test_export_gaql_csv_writes_file_and_metadata(tmp_path, monkeypatch):

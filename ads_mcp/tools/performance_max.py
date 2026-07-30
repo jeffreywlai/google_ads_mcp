@@ -118,7 +118,8 @@ def list_asset_group_assets(
         {", ".join(select_fields)}
       FROM asset_group_asset
       {build_where_clause(where_conditions)}
-      ORDER BY metrics.conversions DESC
+      ORDER BY metrics.conversions DESC, campaign.id, asset_group.id,
+        asset.id, asset_group_asset.field_type
   """
   page = run_gaql_query_page(
       query=query,

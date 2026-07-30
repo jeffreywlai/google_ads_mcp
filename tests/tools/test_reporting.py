@@ -14,11 +14,14 @@
 
 """Tests for reporting.py."""
 
+from pathlib import Path
 from unittest import mock
 
 from ads_mcp.tools import reporting
+from ads_mcp.tools._gaql import preprocess_gaql_query
 from fastmcp.exceptions import ToolError
 import pytest
+import yaml
 
 
 CUSTOMER_ID = "123"
@@ -1370,6 +1373,10 @@ def test_list_audience_performance_campaign_scope_uses_campaign_view():
   assert "campaign_criterion.user_list.user_list" in query
   assert "campaign_criterion.custom_audience.custom_audience" in query
   assert "campaign.id IN (111)" in query
+  assert (
+      "ORDER BY metrics.impressions DESC, campaign.id, "
+      "campaign_criterion.criterion_id"
+  ) in " ".join(query.split())
   assert mock_run.call_args.kwargs["page_size"] == 25
   assert result["returned_count"] == 0
 
@@ -1394,6 +1401,10 @@ def test_list_audience_performance_ad_group_scope_uses_ad_group_view():
   assert "ad_group_criterion.audience.audience" in query
   assert "campaign.id IN (111)" in query
   assert "ad_group.id IN (222)" in query
+  assert (
+      "ORDER BY metrics.impressions DESC, campaign.id, ad_group.id, "
+      "ad_group_criterion.criterion_id"
+  ) in " ".join(query.split())
   assert mock_run.call_args.kwargs["page_size"] == 25
   assert result["returned_count"] == 0
 
@@ -1435,6 +1446,7 @@ def test_get_demographic_performance_fans_out_selected_views():
   assert result["returned_counts"] == {"AGE": 1, "GENDER": 1}
   assert result["truncated_by_type"] == {"AGE": False, "GENDER": False}
   assert result["truncated"] is False
+  assert "bulk_export_calls_by_type" not in result
 
 
 def test_get_demographic_performance_uses_token_safe_default_limit():
@@ -1471,7 +1483,58 @@ def test_get_demographic_performance_flags_and_slices_truncated_types():
   assert result["has_more_by_type"] == {"AGE": True}
   assert result["truncated"] is True
   assert result["bulk_export_tool"] == "export_gaql_csv"
-  assert "export_gaql_csv" in result["next_step"]
+  assert "bulk_export_calls_by_type" in result["next_step"]
+  export_call = result["bulk_export_calls_by_type"]["AGE"]
+  assert export_call["tool"] == "export_gaql_csv"
+  assert export_call["arguments"]["customer_id"] == CUSTOMER_ID
+  assert export_call["arguments"]["login_customer_id"] is None
+  export_query = " ".join(export_call["arguments"]["query"].split())
+  assert "FROM age_range_view" in export_query
+  assert "ad_group_criterion.age_range.type" in export_query
+  assert "LIMIT" not in export_query
+  assert (
+      "ORDER BY metrics.cost_micros DESC, campaign.id, ad_group.id, "
+      "ad_group_criterion.criterion_id"
+  ) in export_query
+  assert "age_range_view.resource_name" in export_query
+
+
+def test_demographic_order_fields_are_sortable_for_queries_and_exports():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      return_value=[{"row": "1"}, {"row": "2"}],
+  ) as mock_run:
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age", "gender", "income"],
+        limit_per_type=1,
+    )
+
+  fields_path = Path(reporting.__file__).parents[1] / "context" / "fields.yaml"
+  with fields_path.open(encoding="utf-8") as fields_file:
+    field_metadata = yaml.safe_load(fields_file)
+
+  capped_queries = [call.args[0] for call in mock_run.call_args_list]
+  export_queries = [
+      result["bulk_export_calls_by_type"][demographic_type]["arguments"][
+          "query"
+      ]
+      for demographic_type in ("AGE", "GENDER", "INCOME")
+  ]
+  for query in [*capped_queries, *export_queries]:
+    normalized_query = " ".join(query.split())
+    order_clause = normalized_query.split(" ORDER BY ", maxsplit=1)[1]
+    order_clause = order_clause.split(" LIMIT ", maxsplit=1)[0]
+    order_fields = [
+        ordering.removesuffix(" DESC").removesuffix(" ASC")
+        for ordering in order_clause.split(", ")
+    ]
+    assert all(field_metadata[field]["sortable"] for field in order_fields)
+    assert "ad_group_criterion.criterion_id" in order_fields
+    assert not any(
+        field.endswith("_view.resource_name") for field in order_fields
+    )
+    preprocess_gaql_query(query)
 
 
 def test_get_landing_page_performance_uses_expanded_view_and_device():

@@ -21,15 +21,18 @@ import csv
 from copy import deepcopy
 import difflib
 import functools
+import hashlib
 import importlib.metadata
 import json
 import math
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
 from typing import Any
+import uuid
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
@@ -63,10 +66,33 @@ _ADS_CLIENTS_CREDENTIALS_MTIME: float | None = None
 _ADS_CLIENTS_CREDENTIALS_PATH: str | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _PAGED_QUERY_CACHE_TTL_SECONDS = 90.0
-_PAGED_QUERY_CACHE_MAX_ENTRIES = 2
+_PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE = 8
+_PAGED_QUERY_CACHE_MAX_ENTRIES = 16
+_PagedQueryCacheKey = tuple[
+    str,
+    str,
+    str | None,
+    str,
+    tuple[str, ...],
+]
+_PagedSnapshotCacheKey = tuple[
+    str,
+    str,
+    str | None,
+    str,
+    tuple[str, ...],
+    str,
+]
 _PAGED_QUERY_CACHE: OrderedDict[
-    tuple[str, str | None, str], tuple[float, list[dict[str, Any]]]
+    _PagedSnapshotCacheKey,
+    tuple[float, list[dict[str, Any]]],
 ] = OrderedDict()
+_PAGED_QUERY_LATEST: dict[_PagedQueryCacheKey, str] = {}
+_PAGED_QUERY_BUILDS: dict[
+    _PagedQueryCacheKey,
+    futures.Future,
+] = {}
+_PAGED_QUERY_CACHE_LOCK = threading.Lock()
 _GAQL_FIELD_NAMES_CACHE: tuple[str, ...] | None = None
 _DEFAULT_EXECUTE_GAQL_WARNING_ROW_THRESHOLD = 100
 gaql_quote_string = _gaql_quote_string
@@ -533,61 +559,248 @@ def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
   return output
 
 
-def _decode_page_token(page_token: str | None) -> int:
-  """Decodes a simple offset-style page token."""
+def _decode_page_token(page_token: str | None) -> tuple[str | None, int]:
+  """Decodes a snapshot-bound page token."""
   if not page_token:
-    return 0
+    return None, 0
+  if not isinstance(page_token, str):
+    raise ToolError("Invalid page_token.")
+  match = re.fullmatch(r"([0-9a-f]{32}):([0-9]+)", page_token)
+  if not match:
+    raise ToolError("Invalid page_token.")
+  offset_text = match.group(2)
+  if len(offset_text) > 18:
+    raise ToolError("Invalid page_token.")
   try:
-    offset = int(page_token)
+    offset = int(offset_text)
   except ValueError as exc:
     raise ToolError("Invalid page_token.") from exc
-  if offset < 0:
-    raise ToolError("Invalid page_token.")
-  return offset
+  return match.group(1), offset
 
 
 def _page_cache_key(
     query: str,
     customer_id: str,
     login_customer_id: str | None,
-) -> tuple[str, str | None, str]:
+    row_sort_fields: tuple[str, ...] | None = None,
+) -> _PagedQueryCacheKey:
   """Builds a stable cache key for paged GAQL queries."""
-  return (customer_id, login_customer_id, query)
+  return (
+      _page_cache_scope(),
+      customer_id,
+      login_customer_id,
+      query,
+      tuple(row_sort_fields or ()),
+  )
 
 
-def _get_cached_page_rows(
-    query: str,
-    customer_id: str,
-    login_customer_id: str | None,
+def _page_cache_scope() -> str:
+  """Returns the credential scope used by paged-query snapshots."""
+  return get_ads_credential_cache_scope()
+
+
+def get_ads_credential_cache_scope() -> str:
+  """Returns a non-secret identity for the active Google Ads credentials."""
+  access_token = get_access_token()
+  if access_token and access_token.token:
+    token_digest = hashlib.sha256(
+        str(access_token.token).encode("utf-8")
+    ).hexdigest()
+    return f"oauth:{token_digest}"
+
+  default_path = f"{ROOT_DIR}/google-ads.yaml"
+  credentials_path = os.path.realpath(
+      os.environ.get("GOOGLE_ADS_CREDENTIALS", default_path)
+  )
+  try:
+    credentials_stat = os.stat(credentials_path)
+  except OSError as exc:
+    raise FileNotFoundError(
+        "Google Ads credentials YAML file is not found. "
+        "Check [GOOGLE_ADS_CREDENTIALS] config."
+    ) from exc
+  return (
+      f"yaml:{credentials_path}:{credentials_stat.st_dev}:"
+      f"{credentials_stat.st_ino}:{credentials_stat.st_ctime_ns}:"
+      f"{credentials_stat.st_mtime_ns}:{credentials_stat.st_size}"
+  )
+
+
+def _snapshot_cache_key(
+    query_key: _PagedQueryCacheKey,
+    snapshot_id: str,
+) -> _PagedSnapshotCacheKey:
+  """Builds the cache key for one exact query-result snapshot."""
+  return (*query_key, snapshot_id)
+
+
+def _snapshot_query_key(
+    snapshot_key: _PagedSnapshotCacheKey,
+) -> _PagedQueryCacheKey:
+  """Returns a snapshot cache key's query-identity portion."""
+  return (
+      snapshot_key[0],
+      snapshot_key[1],
+      snapshot_key[2],
+      snapshot_key[3],
+      snapshot_key[4],
+  )
+
+
+def _remove_page_snapshot_unlocked(
+    snapshot_key: _PagedSnapshotCacheKey,
+) -> None:
+  """Removes a snapshot and any latest-query pointer to it."""
+  _PAGED_QUERY_CACHE.pop(snapshot_key, None)
+  query_key = _snapshot_query_key(snapshot_key)
+  if _PAGED_QUERY_LATEST.get(query_key) == snapshot_key[5]:
+    _PAGED_QUERY_LATEST.pop(query_key, None)
+
+
+def _get_page_snapshot_unlocked(
+    query_key: _PagedQueryCacheKey,
+    snapshot_id: str,
 ) -> list[dict[str, Any]] | None:
-  """Returns cached paged query rows when the entry is still fresh."""
-  cache_key = _page_cache_key(query, customer_id, login_customer_id)
-  cache_entry = _PAGED_QUERY_CACHE.get(cache_key)
+  """Returns one exact cached snapshot while the cache lock is held."""
+  snapshot_key = _snapshot_cache_key(query_key, snapshot_id)
+  cache_entry = _PAGED_QUERY_CACHE.get(snapshot_key)
   if not cache_entry:
     return None
 
   cached_at, cached_rows = cache_entry
   if (time.monotonic() - cached_at) > _PAGED_QUERY_CACHE_TTL_SECONDS:
-    _PAGED_QUERY_CACHE.pop(cache_key, None)
+    _remove_page_snapshot_unlocked(snapshot_key)
     return None
 
-  _PAGED_QUERY_CACHE.move_to_end(cache_key)
-  return deepcopy(cached_rows)
+  _PAGED_QUERY_CACHE.move_to_end(snapshot_key)
+  return cached_rows
 
 
-def _set_cached_page_rows(
+def _get_latest_page_snapshot_unlocked(
+    query_key: _PagedQueryCacheKey,
+) -> tuple[str, list[dict[str, Any]]] | None:
+  """Returns the latest reusable snapshot for a first-page request."""
+  snapshot_id = _PAGED_QUERY_LATEST.get(query_key)
+  if snapshot_id is None:
+    return None
+  rows = _get_page_snapshot_unlocked(query_key, snapshot_id)
+  if rows is None:
+    _PAGED_QUERY_LATEST.pop(query_key, None)
+    return None
+  return snapshot_id, rows
+
+
+def _prune_page_cache_unlocked(now: float) -> None:
+  """Removes expired snapshots and dangling latest-query pointers."""
+  expired_snapshot_keys = [
+      snapshot_key
+      for snapshot_key, cache_entry in _PAGED_QUERY_CACHE.items()
+      if (now - cache_entry[0]) > _PAGED_QUERY_CACHE_TTL_SECONDS
+  ]
+  for snapshot_key in expired_snapshot_keys:
+    _remove_page_snapshot_unlocked(snapshot_key)
+
+  dangling_query_keys = [
+      query_key
+      for query_key, snapshot_id in _PAGED_QUERY_LATEST.items()
+      if _snapshot_cache_key(query_key, snapshot_id) not in _PAGED_QUERY_CACHE
+  ]
+  for query_key in dangling_query_keys:
+    _PAGED_QUERY_LATEST.pop(query_key, None)
+
+
+def _enforce_page_cache_bounds_unlocked(credential_scope: str) -> None:
+  """Applies per-principal and process-wide snapshot bounds."""
+  scoped_snapshot_keys = [
+      snapshot_key
+      for snapshot_key in _PAGED_QUERY_CACHE
+      if snapshot_key[0] == credential_scope
+  ]
+  while len(scoped_snapshot_keys) > _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE:
+    _remove_page_snapshot_unlocked(scoped_snapshot_keys.pop(0))
+
+  while len(_PAGED_QUERY_CACHE) > _PAGED_QUERY_CACHE_MAX_ENTRIES:
+    oldest_snapshot_key = next(iter(_PAGED_QUERY_CACHE))
+    _remove_page_snapshot_unlocked(oldest_snapshot_key)
+
+
+def _publish_page_snapshot_unlocked(
+    query_key: _PagedQueryCacheKey,
+    snapshot_id: str,
+    rows: list[dict[str, Any]],
+    *,
+    make_latest: bool = False,
+    make_latest_if_missing: bool = False,
+) -> None:
+  """Publishes one exact snapshot and applies expiry and LRU bounds."""
+  cached_at = time.monotonic()
+  _prune_page_cache_unlocked(cached_at)
+  snapshot_key = _snapshot_cache_key(query_key, snapshot_id)
+  _PAGED_QUERY_CACHE[snapshot_key] = (cached_at, rows)
+  _PAGED_QUERY_CACHE.move_to_end(snapshot_key)
+  _enforce_page_cache_bounds_unlocked(query_key[0])
+  if make_latest or (
+      make_latest_if_missing and query_key not in _PAGED_QUERY_LATEST
+  ):
+    _PAGED_QUERY_LATEST[query_key] = snapshot_id
+
+
+def _get_or_build_page_snapshot(
+    query_key: _PagedQueryCacheKey,
     query: str,
     customer_id: str,
     login_customer_id: str | None,
-    rows: list[dict[str, Any]],
-) -> None:
-  """Stores paged query rows in a bounded TTL cache."""
-  cache_key = _page_cache_key(query, customer_id, login_customer_id)
-  _PAGED_QUERY_CACHE[cache_key] = (time.monotonic(), deepcopy(rows))
-  _PAGED_QUERY_CACHE.move_to_end(cache_key)
+    row_sort_fields: tuple[str, ...] | None,
+) -> tuple[
+    str,
+    list[dict[str, Any]],
+    futures.Future | None,
+]:
+  """Returns one stable snapshot, sharing concurrent identical query work."""
+  with _PAGED_QUERY_CACHE_LOCK:
+    cached_snapshot = _get_latest_page_snapshot_unlocked(query_key)
+    if cached_snapshot is not None:
+      return (*cached_snapshot, None)
+    build = _PAGED_QUERY_BUILDS.get(query_key)
+    owns_build = build is None
+    if owns_build:
+      build = futures.Future()
+      _PAGED_QUERY_BUILDS[query_key] = build
 
-  while len(_PAGED_QUERY_CACHE) > _PAGED_QUERY_CACHE_MAX_ENTRIES:
-    _PAGED_QUERY_CACHE.popitem(last=False)
+  if not owns_build:
+    snapshot_id, rows = build.result()
+    return snapshot_id, rows, None
+
+  try:
+    rows = run_gaql_query(
+        query=query,
+        customer_id=customer_id,
+        login_customer_id=login_customer_id,
+    )
+    if row_sort_fields:
+      rows = sorted(
+          rows,
+          key=lambda row: tuple(
+              str(row.get(field_name, "")) for field_name in row_sort_fields
+          ),
+      )
+    snapshot_id = uuid.uuid4().hex
+  except BaseException as exc:
+    with _PAGED_QUERY_CACHE_LOCK:
+      if _PAGED_QUERY_BUILDS.get(query_key) is build:
+        _PAGED_QUERY_BUILDS.pop(query_key, None)
+    build.set_exception(exc)
+    raise
+
+  with _PAGED_QUERY_CACHE_LOCK:
+    _publish_page_snapshot_unlocked(
+        query_key,
+        snapshot_id,
+        rows,
+        make_latest=True,
+    )
+  build.set_result((snapshot_id, rows))
+  return snapshot_id, rows, build
 
 
 def _csv_columns(rows: list[dict[str, Any]]) -> list[str]:
@@ -686,30 +899,73 @@ def _write_csv_rows(
     columns: list[str] | None = None,
 ) -> tuple[str, list[str], int]:
   """Writes GAQL rows to CSV and returns the path, columns, and size."""
-  if resolved_output_path:
-    resolved_path = resolved_output_path
-    parent_dir = os.path.dirname(resolved_path)
-    if parent_dir:
-      os.makedirs(parent_dir, exist_ok=True)
-    csv_file = _open_export_file(resolved_path, overwrite)
-  else:
-    file_descriptor, resolved_path = tempfile.mkstemp(
-        prefix="google_ads_mcp_",
-        suffix=".csv",
-    )
-    csv_file = os.fdopen(file_descriptor, "w", newline="", encoding="utf-8")
+  with contextlib.ExitStack() as temp_cleanup:
+    existing_mode = None
+    if resolved_output_path:
+      final_path = resolved_output_path
+      parent_dir = os.path.dirname(final_path)
+      if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+      if overwrite:
+        try:
+          existing_mode = stat.S_IMODE(os.stat(final_path).st_mode)
+        except FileNotFoundError:
+          pass
+      file_descriptor, working_path = tempfile.mkstemp(
+          prefix=".google_ads_mcp_",
+          suffix=".tmp",
+          dir=parent_dir or ".",
+      )
+      temp_cleanup.callback(_remove_export_file, working_path)
+    else:
+      final_path = None
+      file_descriptor, working_path = tempfile.mkstemp(
+          prefix="google_ads_mcp_",
+          suffix=".csv",
+      )
+      temp_cleanup.callback(_remove_export_file, working_path)
+    try:
+      csv_file = os.fdopen(
+          file_descriptor,
+          "w",
+          newline="",
+          encoding="utf-8",
+      )
+    except OSError:
+      os.close(file_descriptor)
+      raise
 
-  columns = list(columns) if columns is not None else _csv_columns(rows)
-  with csv_file:
-    writer = csv.writer(csv_file)
-    if columns:
-      writer.writerow(columns)
-      for row in rows:
-        writer.writerow(
-            [_csv_cell_value(row.get(column)) for column in columns]
-        )
+    columns = list(columns) if columns is not None else _csv_columns(rows)
+    with csv_file:
+      writer = csv.writer(csv_file)
+      if columns:
+        writer.writerow(columns)
+        for row in rows:
+          writer.writerow(
+              [_csv_cell_value(row.get(column)) for column in columns]
+          )
 
-  return resolved_path, columns, os.path.getsize(resolved_path)
+    bytes_written = os.path.getsize(working_path)
+    if final_path:
+      try:
+        if existing_mode is not None:
+          os.chmod(working_path, existing_mode)
+        if overwrite:
+          os.replace(working_path, final_path)
+        else:
+          os.link(working_path, final_path)
+          _remove_export_file(working_path)
+      except FileExistsError as exc:
+        raise ToolError(
+            "output_path already exists; pass overwrite=True to replace it."
+        ) from exc
+      except OSError as exc:
+        raise ToolError(f"Unable to write output_path: {exc}") from exc
+      output_path = final_path
+    else:
+      output_path = working_path
+      temp_cleanup.pop_all()
+    return output_path, columns, bytes_written
 
 
 def write_rows_to_temp_csv(
@@ -786,32 +1042,88 @@ def run_gaql_query_page(
     page_size: int,
     page_token: str | None = None,
     login_customer_id: str | None = None,
+    row_sort_fields: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
   """Executes a GAQL query and slices the results into stable pages.
 
   Google Ads Search uses a fixed page size for some resources, so this helper
   provides a consistent cursor contract for MCP tools by applying client-side
-  paging over the full result set.
+  paging over the full result set. Continuation tokens can expire after the
+  idle TTL or normal bounded-LRU eviction; callers receive a restart hint
+  rather than rows from a different result snapshot.
   """
   _validate_optional_positive_int(page_size, "page_size")
 
-  offset = _decode_page_token(page_token)
-  rows = _get_cached_page_rows(query, customer_id, login_customer_id)
-  if rows is None:
-    rows = run_gaql_query(
-        query=query,
-        customer_id=customer_id,
-        login_customer_id=login_customer_id,
+  requested_snapshot_id, offset = _decode_page_token(page_token)
+  query_key = _page_cache_key(
+      query,
+      customer_id,
+      login_customer_id,
+      row_sort_fields,
+  )
+  owned_build = None
+  if requested_snapshot_id:
+    with _PAGED_QUERY_CACHE_LOCK:
+      rows = _get_page_snapshot_unlocked(
+          query_key,
+          requested_snapshot_id,
+      )
+      query_has_other_snapshots = query_key in _PAGED_QUERY_LATEST or any(
+          _snapshot_query_key(snapshot_key) == query_key
+          for snapshot_key in _PAGED_QUERY_CACHE
+      )
+    if rows is None and query_has_other_snapshots:
+      raise ToolError(
+          "page_token belongs to an expired result snapshot. Restart "
+          "pagination by calling the same tool without page_token."
+      )
+    if rows is None:
+      raise ToolError(
+          "page_token expired or its result snapshot was evicted. Restart "
+          "pagination by calling the same tool without page_token."
+      )
+    snapshot_id = requested_snapshot_id
+    if offset <= 0 or offset >= len(rows):
+      raise ToolError("Invalid page_token.")
+  else:
+    snapshot_id, rows, owned_build = _get_or_build_page_snapshot(
+        query_key,
+        query,
+        customer_id,
+        login_customer_id,
+        row_sort_fields,
     )
-    _set_cached_page_rows(query, customer_id, login_customer_id, rows)
   next_offset = offset + page_size
-  return {
-      "rows": rows[offset:next_offset],
-      "next_page_token": (
-          str(next_offset) if next_offset < len(rows) else None
-      ),
-      "total_results_count": len(rows),
-  }
+  try:
+    page_rows = deepcopy(rows[offset:next_offset])
+  except BaseException:
+    if owned_build is not None:
+      with _PAGED_QUERY_CACHE_LOCK:
+        if _PAGED_QUERY_BUILDS.get(query_key) is owned_build:
+          _PAGED_QUERY_BUILDS.pop(query_key, None)
+    raise
+
+  next_page_token = None
+  if next_offset < len(rows):
+    next_page_token = f"{snapshot_id}:{next_offset}"
+  with _PAGED_QUERY_CACHE_LOCK:
+    if next_page_token is not None:
+      _publish_page_snapshot_unlocked(
+          query_key,
+          snapshot_id,
+          rows,
+          make_latest_if_missing=True,
+      )
+    if (
+        owned_build is not None
+        and _PAGED_QUERY_BUILDS.get(query_key) is owned_build
+    ):
+      _PAGED_QUERY_BUILDS.pop(query_key, None)
+    return {
+        "rows": page_rows,
+        "next_page_token": next_page_token,
+        "total_results_count": len(rows),
+    }
 
 
 def build_paginated_list_response(

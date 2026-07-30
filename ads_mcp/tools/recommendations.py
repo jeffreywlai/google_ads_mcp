@@ -188,6 +188,10 @@ def list_recommendations(
       page_size=limit,
       page_token=page_token,
       login_customer_id=login_customer_id,
+      row_sort_fields=(
+          "recommendation.type",
+          "recommendation.resource_name",
+      ),
   )
   return build_paginated_list_response(
       "recommendations",

@@ -22,6 +22,7 @@ from google.ads.googleads.errors import GoogleAdsException
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tools._gaql import gaql_quote_string
 from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import preprocess_gaql_query
 from ads_mcp.tools._gaql import quote_int_value
@@ -64,29 +65,34 @@ def _normalize_criterion_ids(criterion_ids: list[str] | str) -> list[str]:
 
 def _list_attached_campaigns(
     ads_client: Any,
-    customer_id: str,
+    query_customer_id: str,
+    shared_set_customer_id: str,
     shared_set_id: str,
 ) -> list[dict[str, str]]:
-  """Returns enabled campaigns currently attached to a shared set."""
+  """Returns enabled campaigns in one customer attached to a shared set."""
   ads_service = ads_client.get_service("GoogleAdsService")
+  shared_set_resource_name = (
+      f"customers/{shared_set_customer_id}/sharedSets/{shared_set_id}"
+  )
   query = f"""
       SELECT
         campaign.id,
         campaign.name
       FROM campaign_shared_set
-      WHERE shared_set.id = {shared_set_id}
+      WHERE campaign_shared_set.shared_set =
+        {gaql_quote_string(shared_set_resource_name)}
         AND campaign_shared_set.status = 'ENABLED'
       ORDER BY campaign.name
   """
 
   with handle_google_ads_errors():
-    response = _search_stream(ads_service, query, customer_id)
+    response = _search_stream(ads_service, query, query_customer_id)
     attached_campaigns = []
     for batch in response:
       for row in batch.results:
         attached_campaigns.append(
             {
-                "customer_id": customer_id,
+                "customer_id": query_customer_id,
                 "campaign_id": str(row.campaign.id),
                 "name": row.campaign.name,
             }
@@ -118,18 +124,63 @@ def _get_shared_set_reference_count(
   return None
 
 
+def _inspect_shared_set_usage(
+    ads_client: Any,
+    customer_id: str,
+    shared_set_id: str,
+) -> tuple[int | None, list[dict[str, str]], list[dict[str, str]]]:
+  """Best-effort inspection of shared-set attachment state."""
+  diagnostic_errors = []
+  try:
+    reference_count = _get_shared_set_reference_count(
+        ads_client,
+        customer_id,
+        shared_set_id,
+    )
+  except ToolError as exc:
+    reference_count = None
+    diagnostic_errors.append(
+        {
+            "check": "shared_set.reference_count",
+            "error": str(exc),
+        }
+    )
+
+  try:
+    attached_campaigns = _list_attached_campaigns(
+        ads_client,
+        customer_id,
+        customer_id,
+        shared_set_id,
+    )
+  except ToolError as exc:
+    attached_campaigns = []
+    diagnostic_errors.append(
+        {
+            "check": "campaign_shared_set attachments",
+            "error": str(exc),
+        }
+    )
+
+  return reference_count, attached_campaigns, diagnostic_errors
+
+
 def _shared_set_in_use_response(
     customer_id: str,
     shared_set_id: str,
     attached_campaigns: list[dict[str, str]],
     reference_count: int | None,
     api_reported_in_use: bool = False,
+    diagnostic_errors: list[dict[str, str]] | None = None,
+    login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Builds an actionable response for an attached shared set."""
+  diagnostic_errors = diagnostic_errors or []
   attachments_complete = (
       reference_count is not None
       and reference_count == len(attached_campaigns)
       and not (api_reported_in_use and not attached_campaigns)
+      and not diagnostic_errors
   )
   response = {
       "deleted": False,
@@ -138,10 +189,25 @@ def _shared_set_in_use_response(
       "attached_campaigns": attached_campaigns,
       "attachments_complete": attachments_complete,
   }
+  known_detach_calls = [
+      {
+          "tool": "detach_shared_set_from_campaign",
+          "arguments": {
+              "customer_id": campaign["customer_id"],
+              "campaign_id": campaign["campaign_id"],
+              "shared_set_id": shared_set_id,
+              "login_customer_id": login_customer_id,
+          },
+      }
+      for campaign in attached_campaigns
+  ]
+  if known_detach_calls:
+    response["known_detach_calls"] = known_detach_calls
+  if diagnostic_errors:
+    response["diagnostic_errors"] = diagnostic_errors
   if attachments_complete:
     response["next_step"] = (
-        "Call detach_shared_set_from_campaign first for each attached "
-        "campaign using its customer_id and campaign_id, then retry "
+        "Call each entry in known_detach_calls first, then retry "
         "delete_shared_set."
     )
     return response
@@ -155,17 +221,48 @@ def _shared_set_in_use_response(
   elif api_reported_in_use:
     response["warning"] = (
         "Google returned SHARED_SET_IN_USE, but the attached campaigns could "
-        "not be completely enumerated. They may be in managed client accounts."
+        "not be completely enumerated. They may be in managed client "
+        "accounts."
     )
   else:
     response["warning"] = (
         "The attached campaigns could not be completely enumerated. Missing "
         "attachments may be in managed client accounts."
     )
+  if diagnostic_errors:
+    response["warning"] += (
+        " One or more diagnostic queries failed; use the next step rather "
+        "than retrying the identical delete."
+    )
+  response["managed_customer_discovery"] = {
+      "tool": "execute_gaql",
+      "arguments": {
+          "customer_id": customer_id,
+          "login_customer_id": login_customer_id,
+          "query": (
+              "SELECT customer_client.id, "
+              "customer_client.descriptive_name, customer_client.level "
+              "FROM customer_client WHERE customer_client.level > 0"
+          ),
+      },
+  }
+  known_detach_step = (
+      "Call each entry in known_detach_calls first. "
+      if known_detach_calls
+      else ""
+  )
+  login_step = (
+      f"use login_customer_id={login_customer_id}"
+      if login_customer_id is not None
+      else "omit login_customer_id so the configured default is reused"
+  )
   response["next_step"] = (
-      "Inspect accessible child accounts with list_campaign_shared_sets "
-      f"filtered to shared_set_id={shared_set_id}, then call "
-      "detach_shared_set_from_campaign using each child customer_id and "
+      f"{known_detach_step}Run managed_customer_discovery next. For each "
+      "returned client ID, "
+      "call list_campaign_shared_sets with that client as customer_id, "
+      f"shared_set_id={shared_set_id}, and "
+      f"{login_step}. Then call "
+      "detach_shared_set_from_campaign with each client customer_id and "
       "campaign_id before retrying delete_shared_set."
   )
   return response
@@ -252,15 +349,12 @@ def delete_shared_set(
   """
   shared_set_id = quote_int_value(shared_set_id, "shared_set_id")
   ads_client = get_ads_client(login_customer_id)
-  reference_count = _get_shared_set_reference_count(
-      ads_client,
-      customer_id,
-      shared_set_id,
-  )
-  attached_campaigns = _list_attached_campaigns(
-      ads_client,
-      customer_id,
-      shared_set_id,
+  reference_count, attached_campaigns, diagnostic_errors = (
+      _inspect_shared_set_usage(
+          ads_client,
+          customer_id,
+          shared_set_id,
+      )
   )
   if attached_campaigns or (reference_count or 0) > 0:
     return _shared_set_in_use_response(
@@ -268,6 +362,8 @@ def delete_shared_set(
         shared_set_id,
         attached_campaigns,
         reference_count,
+        diagnostic_errors=diagnostic_errors,
+        login_customer_id=login_customer_id,
     )
 
   shared_set_service = ads_client.get_service("SharedSetService")
@@ -286,15 +382,12 @@ def delete_shared_set(
   except ToolError as exc:
     if "SHARED_SET_IN_USE" not in str(exc):
       raise
-    reference_count = _get_shared_set_reference_count(
-        ads_client,
-        customer_id,
-        shared_set_id,
-    )
-    attached_campaigns = _list_attached_campaigns(
-        ads_client,
-        customer_id,
-        shared_set_id,
+    reference_count, attached_campaigns, postflight_errors = (
+        _inspect_shared_set_usage(
+            ads_client,
+            customer_id,
+            shared_set_id,
+        )
     )
     return _shared_set_in_use_response(
         customer_id,
@@ -302,6 +395,8 @@ def delete_shared_set(
         attached_campaigns,
         reference_count,
         api_reported_in_use=True,
+        diagnostic_errors=postflight_errors,
+        login_customer_id=login_customer_id,
     )
 
   return {"resource_name": response.results[0].resource_name}

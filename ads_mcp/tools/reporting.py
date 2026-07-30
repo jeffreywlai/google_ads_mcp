@@ -246,6 +246,22 @@ def _limited_select_query(
   """
 
 
+def _uncapped_select_query(
+    select_fields: list[str],
+    from_resource: str,
+    where_conditions: list[str],
+    order_by: str,
+) -> str:
+  """Builds an export-ready SELECT query without a row limit."""
+  return f"""
+      SELECT
+        {", ".join(select_fields)}
+      FROM {from_resource}
+      {build_where_clause(where_conditions)}
+      ORDER BY {order_by}
+  """
+
+
 def _competitive_change_history(
     customer_id: str,
     date_range: str | dict[str, str],
@@ -1498,6 +1514,11 @@ def list_audience_performance(
         "metrics.conversions_value",
     ]
     from_resource = "ad_group_audience_view"
+    identity_order_fields = [
+        "campaign.id",
+        "ad_group.id",
+        "ad_group_criterion.criterion_id",
+    ]
     _append_int_list_filter(
         where_conditions,
         "ad_group.id",
@@ -1523,13 +1544,17 @@ def list_audience_performance(
         "metrics.conversions_value",
     ]
     from_resource = "campaign_audience_view"
+    identity_order_fields = [
+        "campaign.id",
+        "campaign_criterion.criterion_id",
+    ]
 
   query = f"""
       SELECT
         {", ".join(select_fields)}
       FROM {from_resource}
       {build_where_clause(where_conditions)}
-      ORDER BY metrics.impressions DESC
+      ORDER BY metrics.impressions DESC, {", ".join(identity_order_fields)}
   """
   page = run_gaql_query_page(
       query=query,
@@ -1589,6 +1614,7 @@ def get_demographic_performance(
   performance_by_type = {}
   returned_counts = {}
   truncated_by_type = {}
+  bulk_export_calls_by_type = {}
   for demographic_type in selected_types:
     from_resource, segment_field, resource_name_field = (
         _DEMOGRAPHIC_VIEW_FIELDS[demographic_type]
@@ -1599,23 +1625,43 @@ def get_demographic_performance(
         campaign_ids,
         ad_group_ids,
     )
+    select_fields = [
+        "campaign.id",
+        "campaign.name",
+        "ad_group.id",
+        "ad_group.name",
+        "ad_group_criterion.criterion_id",
+        resource_name_field,
+        segment_field,
+        *_CORE_PERFORMANCE_METRICS,
+    ]
+    order_by = (
+        "metrics.cost_micros DESC, campaign.id, ad_group.id, "
+        "ad_group_criterion.criterion_id"
+    )
     query = _limited_select_query(
-        [
-            "campaign.id",
-            "campaign.name",
-            "ad_group.id",
-            "ad_group.name",
-            resource_name_field,
-            segment_field,
-            *_CORE_PERFORMANCE_METRICS,
-        ],
+        select_fields,
         from_resource,
         where_conditions,
-        "metrics.cost_micros DESC",
+        order_by,
         limit_per_type + 1,
     )
     rows = run_gaql_query(query, customer_id, login_customer_id)
     truncated_by_type[demographic_type] = len(rows) > limit_per_type
+    if truncated_by_type[demographic_type]:
+      bulk_export_calls_by_type[demographic_type] = {
+          "tool": "export_gaql_csv",
+          "arguments": {
+              "query": _uncapped_select_query(
+                  select_fields,
+                  from_resource,
+                  where_conditions,
+                  order_by,
+              ),
+              "customer_id": customer_id,
+              "login_customer_id": login_customer_id,
+          },
+      }
     returned_rows = rows[:limit_per_type]
     performance_by_type[demographic_type] = returned_rows
     returned_counts[demographic_type] = len(returned_rows)
@@ -1634,10 +1680,10 @@ def get_demographic_performance(
       "bulk_export_tool": "export_gaql_csv",
   }
   if result["truncated"]:
+    result["bulk_export_calls_by_type"] = bulk_export_calls_by_type
     result["next_step"] = (
-        "For complete rows, call export_gaql_csv with the same SELECT, FROM, "
-        "and filters for each demographic type marked true in "
-        "truncated_by_type."
+        "For complete rows, call each entry in bulk_export_calls_by_type with "
+        "the arguments exactly as shown."
     )
   return result
 
