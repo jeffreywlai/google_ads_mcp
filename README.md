@@ -99,8 +99,8 @@
 |------|-------------|
 | `list_change_statuses` | Changed resources and last change timestamps |
 | `list_change_events` | Granular change events with field-level detail |
-| `export_change_history_csv` | Export maximum available status/event history with automatic 10K-cap subdivision |
-| `get_change_history_extended` | Token-safe status/event previews with coverage and continuation metadata |
+| `export_change_history_csv` | Export full retained history: 90-day status plus a 30-day granular event overlay |
+| `get_change_history_extended` | Preview explicit dates, or 90-day status plus the 30-day event overlay when dates are omitted |
 
 ### 🏎️ Performance Max
 

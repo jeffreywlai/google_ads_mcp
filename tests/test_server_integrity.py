@@ -708,6 +708,7 @@ class TestFastMcpConfiguration:
         "Read/reporting and docs tools are directly visible"
         in mcp_server.instructions
     )
+    assert "do not treat change_event retention" in mcp_server.instructions
 
   def test_public_tool_list_exposes_all_non_mutation_tools(self):
     public_tools = asyncio.run(mcp_server.list_tools())
@@ -1030,6 +1031,21 @@ class TestFastMcpConfiguration:
         assert populated.data[0].workflow == "changes"
         assert empty.structured_content == {"result": []}
         assert empty.data == []
+
+    asyncio.run(_run())
+
+  def test_client_search_tools_routes_full_history_to_csv_export(self):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool(
+            "search_tools",
+            {"query": "full change history"},
+        )
+
+        assert result.structured_content["result"][0]["name"] == (
+            "export_change_history_csv"
+        )
+        assert result.data[0].name == "export_change_history_csv"
 
     asyncio.run(_run())
 

@@ -15,6 +15,7 @@
 """The coordinator for the Google Ads API MCP."""
 
 from collections.abc import Sequence
+import re
 from typing import Annotated
 
 from fastmcp import FastMCP
@@ -51,6 +52,26 @@ _SEARCH_TOOL_OUTPUT_SCHEMA = {
     "required": ["result"],
     "x-fastmcp-wrap-result": True,
 }
+_FULL_HISTORY_TERMS = {"all", "complete", "entire", "full", "maximum"}
+_CHANGE_HISTORY_TERMS = {"change", "changes", "history", "trail"}
+_FULL_CHANGE_HISTORY_TOOL = "export_change_history_csv"
+
+
+def _prioritize_full_change_history_export(
+    tools: Sequence[Tool],
+    results: Sequence[Tool],
+) -> list[Tool]:
+  """Places the full-history export first without changing other rankings."""
+  export_tool = next(
+      (tool for tool in tools if tool.name == _FULL_CHANGE_HISTORY_TOOL),
+      None,
+  )
+  if export_tool is None:
+    return list(results)
+  other_results = [
+      tool for tool in results if tool.name != _FULL_CHANGE_HISTORY_TOOL
+  ]
+  return [export_tool, *other_results]
 
 
 async def _mutation_tools_unlocked() -> bool:
@@ -87,6 +108,14 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
       """Search for tools using natural language."""
       visible_tools = await transform._get_visible_tools(ctx)
       results = await transform._search(visible_tools, query)
+      query_terms = set(re.findall(r"[a-z0-9]+", query.lower()))
+      if query_terms & _FULL_HISTORY_TERMS and (
+          query_terms & _CHANGE_HISTORY_TERMS
+      ):
+        results = _prioritize_full_change_history_export(
+            visible_tools,
+            results,
+        )[: max(1, len(results))]
       return await transform._render_results(results)
 
     return Tool.from_function(
@@ -127,6 +156,13 @@ mcp_server = FastMCP(
         " custom read queries not covered by dedicated tools. Use"
         " export_gaql_csv instead of execute_gaql when a bulk extract"
         " would be too large for normal JSON tool output. Keep"
+        " the user's requested date range for change-history questions."
+        " When they ask for full, all, or maximum change history without"
+        " dates, use export_change_history_csv so the result covers the"
+        " 90-day change_status window plus the 30-day granular"
+        " change_event overlay; do not treat change_event retention as"
+        " the limit for all change history. Use"
+        " get_change_history_extended for a bounded preview. Keep"
         " call_tool for discovery compatibility, but prefer direct tool"
         " calls once tool names are known. When a list tool returns"
         " returned_count, total_count,"

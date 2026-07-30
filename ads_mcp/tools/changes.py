@@ -680,12 +680,16 @@ def export_change_history_csv(
     max_queries_per_resource: int = _DEFAULT_EXPORT_QUERY_BUDGET,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Exports the maximum available change history to temporary CSV files.
+  """Exports full change history across all available retention windows.
 
-  The export covers up to 90 inclusive days of change_status and 30 inclusive
-  days of granular change_event data. Queries that reach Google's 10,000-row
-  cap are repeatedly split into smaller time windows. The response remains
-  compact by returning file paths and coverage metadata instead of rows.
+  For a full, all, or maximum-history request, omit start_date and end_date.
+  The export then covers 90 inclusive days of change_status rather than
+  limiting the whole result to change_event's 30-day retention. Granular
+  change_event data overlays the most recent 30 inclusive days. Explicit date
+  bounds are respected wherever Google retains the data. Queries that reach
+  Google's 10,000-row cap are repeatedly split into smaller time windows. The
+  response remains compact by returning file paths and coverage metadata
+  instead of rows.
 
   Args:
       customer_id: Google Ads customer ID.
@@ -830,12 +834,16 @@ def get_change_history_extended(
     limit: int = 100,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Gets a bounded preview of the maximum available change history.
+  """Previews requested change history with token-safe bounded rows.
 
   Google Ads exposes change_status for 90 inclusive days and granular
-  change_event rows for 30 inclusive days. This helper returns a token-safe
-  preview with continuation metadata. Use export_change_history_csv for full
-  available rows, automatic cap subdivision, and old/new event snapshots.
+  change_event rows for 30 inclusive days. When dates are omitted, this helper
+  previews the full 90-day status window plus the recent 30-day event overlay;
+  it does not limit all history to 30 days. Explicit dates preserve the user's
+  requested context, subject to Google's retention windows. Use
+  export_change_history_csv for a full, all, or maximum-history request that
+  needs every available row, automatic cap subdivision, and old/new event
+  snapshots.
 
   Args:
       customer_id: Google Ads customer ID.

@@ -304,6 +304,45 @@ def test_get_change_history_extended_stitches_statuses_and_recent_events():
   assert "clamped" in result["coverage_note"]
 
 
+def test_get_change_history_extended_defaults_to_all_retained_windows():
+  today = date.today()
+  status_response = {
+      "change_statuses": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+  }
+  event_response = {
+      "change_events": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "total_page_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+      "page_size": 100,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value=status_response,
+  ) as mock_statuses:
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+        return_value=event_response,
+    ) as mock_events:
+      changes.get_change_history_extended(CUSTOMER_ID)
+
+  assert (
+      mock_statuses.call_args.kwargs["start_date"]
+      == (today - timedelta(days=89)).isoformat()
+  )
+  assert mock_statuses.call_args.kwargs["end_date"] == today.isoformat()
+  assert (
+      mock_events.call_args.kwargs["start_date"]
+      == (today - timedelta(days=29)).isoformat()
+  )
+  assert mock_events.call_args.kwargs["end_date"] == today.isoformat()
+
+
 def test_get_change_history_extended_clamps_31_date_inclusive_window():
   today = date.today()
   requested_start = (today - timedelta(days=30)).isoformat()
