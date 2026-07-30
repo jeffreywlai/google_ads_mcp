@@ -711,6 +711,13 @@ def _write_csv_rows(
   return resolved_path, columns, os.path.getsize(resolved_path)
 
 
+def write_rows_to_temp_csv(
+    rows: list[dict[str, Any]],
+) -> tuple[str, list[str], int]:
+  """Writes already-fetched rows to a uniquely named temporary CSV file."""
+  return _write_csv_rows(rows)
+
+
 def run_gaql_query(
     query: str,
     customer_id: str,

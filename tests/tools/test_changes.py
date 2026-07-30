@@ -15,6 +15,7 @@
 """Tests for changes.py."""
 
 from datetime import date
+from datetime import datetime
 from datetime import timedelta
 from unittest import mock
 
@@ -27,6 +28,8 @@ CUSTOMER_ID = "1234567890"
 
 
 def test_list_change_statuses_builds_query():
+  start_date = (date.today() - timedelta(days=8)).isoformat()
+  end_date = (date.today() - timedelta(days=1)).isoformat()
   with mock.patch(
       "ads_mcp.tools.changes.run_gaql_query_page",
       return_value={
@@ -38,15 +41,15 @@ def test_list_change_statuses_builds_query():
     result = changes.list_change_statuses(
         CUSTOMER_ID,
         resource_types=["campaign", "ad_group"],
-        start_date="2026-03-01",
-        end_date="2026-03-08",
+        start_date=start_date,
+        end_date=end_date,
     )
 
   query = mock_query.call_args.kwargs["query"]
   assert "FROM change_status" in query
   assert "change_status.resource_type IN (CAMPAIGN, AD_GROUP)" in query
-  assert "'2026-03-01 00:00:00'" in query
-  assert "'2026-03-08 23:59:59'" in query
+  assert f"'{start_date} 00:00:00'" in query
+  assert f"'{end_date} 23:59:59'" in query
   assert "LIMIT 10000" in query
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
@@ -103,8 +106,8 @@ def test_change_tools_ignore_empty_string_enum_filters():
     changes.list_change_statuses(
         CUSTOMER_ID,
         resource_types="[]",
-        start_date="2026-03-01",
-        end_date="2026-03-08",
+        start_date=start_date,
+        end_date=end_date,
     )
     changes.list_change_events(
         CUSTOMER_ID,
@@ -150,6 +153,17 @@ def test_list_change_events_rejects_dates_older_than_30_days():
         CUSTOMER_ID,
         start_date=too_old_start,
         end_date=end_date,
+    )
+
+
+def test_list_change_statuses_rejects_dates_older_than_90_days():
+  too_old_start = (date.today() - timedelta(days=90)).isoformat()
+
+  with pytest.raises(ToolError, match="last 90 days"):
+    changes.list_change_statuses(
+        CUSTOMER_ID,
+        start_date=too_old_start,
+        end_date=date.today().isoformat(),
     )
 
 
@@ -331,6 +345,194 @@ def test_get_change_history_extended_clamps_31_date_inclusive_window():
   )
   assert requested_start in result["coverage_note"]
   assert effective_start in result["coverage_note"]
+
+
+def test_get_change_history_extended_clamps_status_and_exposes_continuations():
+  today = date.today()
+  requested_start = (today - timedelta(days=120)).isoformat()
+  effective_start = (today - timedelta(days=89)).isoformat()
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value={
+          "change_statuses": [{"change_status.resource_name": "x"}],
+          "returned_count": 1,
+          "total_count": 500,
+          "truncated": True,
+          "next_page_token": "100",
+      },
+  ) as mock_statuses:
+    result = changes.get_change_history_extended(
+        CUSTOMER_ID,
+        start_date=requested_start,
+        end_date=today.isoformat(),
+        include_recent_events=False,
+    )
+
+  assert mock_statuses.call_args.kwargs["start_date"] == effective_start
+  assert result["change_status_window"] == {
+      "start_date": effective_start,
+      "end_date": today.isoformat(),
+  }
+  assert result["change_status_coverage"]["start_date_clamped"] is True
+  assert result["change_status_next_page_token"] == "100"
+  assert result["recent_change_event_next_page_token"] is None
+  assert result["bulk_export_tool"] == "export_change_history_csv"
+  assert "90 inclusive days" in result["coverage_note"]
+
+
+def test_collect_complete_change_rows_splits_capped_windows():
+  start_datetime = datetime(2026, 7, 1, 0, 0, 0)
+  end_datetime = datetime(2026, 7, 1, 0, 0, 3)
+  query_builder = mock.Mock(
+      side_effect=lambda start, end: (
+          f"{start.isoformat()}..{end.isoformat()}"
+      )
+  )
+  with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        side_effect=[
+            [{"id": "probe-1"}, {"id": "probe-2"}],
+            [{"id": "later"}],
+            [{"id": "earlier"}],
+        ],
+    ):
+      result = changes._collect_complete_change_rows(  # pylint: disable=protected-access
+          query_builder,
+          CUSTOMER_ID,
+          start_datetime,
+          end_datetime,
+          None,
+          max_queries=10,
+      )
+
+  assert result["rows"] == [{"id": "later"}, {"id": "earlier"}]
+  assert result["query_count"] == 3
+  assert result["complete"] is True
+  assert not result["unresolved_windows"]
+
+
+def test_collect_complete_change_rows_reports_unsplittable_second():
+  timestamp = datetime(2026, 7, 1, 0, 0, 0)
+  with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        return_value=[{"id": "1"}, {"id": "2"}],
+    ):
+      result = changes._collect_complete_change_rows(  # pylint: disable=protected-access
+          lambda start, end: f"{start}..{end}",
+          CUSTOMER_ID,
+          timestamp,
+          timestamp,
+          None,
+          max_queries=10,
+      )
+
+  assert result["complete"] is False
+  assert result["row_count"] == 2
+  assert result["unresolved_windows"][0]["reason"] == (
+      "api_cap_reached_within_one_second"
+  )
+
+
+def test_collect_complete_change_rows_preserves_rows_at_query_budget():
+  start_datetime = datetime(2026, 7, 1, 0, 0, 0)
+  end_datetime = datetime(2026, 7, 1, 0, 0, 3)
+  capped_rows = [{"id": "1"}, {"id": "2"}]
+  with mock.patch.object(changes, "_CHANGE_HISTORY_RESULT_CAP", 2):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query",
+        return_value=capped_rows,
+    ) as mock_query:
+      result = changes._collect_complete_change_rows(  # pylint: disable=protected-access
+          lambda start, end: f"{start}..{end}",
+          CUSTOMER_ID,
+          start_datetime,
+          end_datetime,
+          None,
+          max_queries=1,
+      )
+
+  mock_query.assert_called_once()
+  assert result["rows"] == capped_rows
+  assert result["query_count"] == 1
+  assert result["complete"] is False
+  assert result["unresolved_windows"][0]["reason"] == (
+      "query_budget_exhausted_before_split"
+  )
+
+
+def test_export_change_history_csv_returns_files_and_complete_coverage():
+  status_collection = {
+      "rows": [{"change_status.resource_name": "status-1"}],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  event_collection = {
+      "rows": [{"change_event.resource_name": "event-1"}],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._collect_complete_change_rows",
+      side_effect=[status_collection, event_collection],
+  ) as mock_collect:
+    with mock.patch(
+        "ads_mcp.tools.changes.write_rows_to_temp_csv",
+        side_effect=[
+            ("/tmp/status.csv", ["change_status.resource_name"], 10),
+            ("/tmp/events.csv", ["change_event.resource_name"], 20),
+        ],
+    ):
+      result = changes.export_change_history_csv(
+          CUSTOMER_ID,
+          resource_types=["campaign"],
+      )
+
+  status_query_builder = mock_collect.call_args_list[0].args[0]
+  event_query_builder = mock_collect.call_args_list[1].args[0]
+  query_start = datetime(2026, 7, 1, 0, 0, 0)
+  query_end = datetime(2026, 7, 1, 23, 59, 59)
+  status_query = status_query_builder(query_start, query_end)
+  event_query = event_query_builder(query_start, query_end)
+
+  assert "change_status.campaign_shared_set" in status_query
+  assert "change_status.resource_type IN (CAMPAIGN)" in status_query
+  assert "change_event.old_resource" in event_query
+  assert "change_event.new_resource" in event_query
+  today = date.today()
+  assert mock_collect.call_args_list[0].args[2:] == (
+      datetime.combine(today - timedelta(days=89), datetime.min.time()),
+      datetime.combine(today, datetime.max.time()).replace(microsecond=0),
+      None,
+      200,
+  )
+  assert mock_collect.call_args_list[1].args[2:] == (
+      datetime.combine(today - timedelta(days=29), datetime.min.time()),
+      datetime.combine(today, datetime.max.time()).replace(microsecond=0),
+      None,
+      200,
+  )
+  assert result["change_status_export"]["file_path"] == "/tmp/status.csv"
+  assert result["change_event_export"]["file_path"] == "/tmp/events.csv"
+  assert result["complete"] is True
+  assert (
+      result["requested_date_range"]["start_date"]
+      == (date.today() - timedelta(days=89)).isoformat()
+  )
+
+
+@pytest.mark.parametrize("max_queries", [0, True, "10"])
+def test_export_change_history_csv_rejects_invalid_query_budget(max_queries):
+  with pytest.raises(ToolError, match="max_queries_per_resource"):
+    changes.export_change_history_csv(
+        CUSTOMER_ID,
+        max_queries_per_resource=max_queries,
+    )
 
 
 def test_get_change_history_extended_skips_events_when_range_is_too_old():

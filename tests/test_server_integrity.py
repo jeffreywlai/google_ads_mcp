@@ -151,6 +151,7 @@ TOOL_MODULES = {
     changes: [
         "list_change_statuses",
         "list_change_events",
+        "export_change_history_csv",
         "get_change_history_extended",
     ],
     conversions: [
@@ -208,9 +209,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_106(self):
+  def test_total_tool_count_is_107(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 106, f"Expected 106 tools, found {total}"
+    assert total == 107, f"Expected 107 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -589,7 +590,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 106
+    assert len(registered_tools) == 107
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -603,6 +604,16 @@ class TestFastMcpConfiguration:
     )
     assert (
         registered_tools["export_gaql_csv"].annotations.destructiveHint is True
+    )
+    assert (
+        registered_tools["export_change_history_csv"].annotations.readOnlyHint
+        is False
+    )
+    assert (
+        registered_tools[
+            "export_change_history_csv"
+        ].annotations.destructiveHint
+        is True
     )
     assert MUTATE_TAG not in registered_tools["export_gaql_csv"].tags
     export_search_items = compact_search_result_serializer(

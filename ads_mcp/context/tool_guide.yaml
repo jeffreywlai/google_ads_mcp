@@ -195,7 +195,8 @@ categories:
     tools:
       list_change_statuses: Changed resources and last change timestamps.
       list_change_events: Granular change events for the last 30 days without full old/new resource blobs.
-      get_change_history_extended: Full-range change_status plus structured coverage metadata and recent granular change_event rows where Google exposes them.
+      export_change_history_csv: Bulk-export the maximum available 90-day status and 30-day event history with automatic cap subdivision.
+      get_change_history_extended: Token-safe status and event previews with continuation and bulk-export guidance.
 
   performance_max:
     summary: Performance Max diagnostics.
