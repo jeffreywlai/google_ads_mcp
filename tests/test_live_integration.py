@@ -111,7 +111,7 @@ async def _list_accessible_customer_ids_async() -> list[str]:
     candidate_customer_ids.append(configured_customer_id)
 
   accessible_accounts = await _call_tool("list_accessible_accounts", {})
-  candidate_customer_ids.extend(accessible_accounts.data)
+  candidate_customer_ids.extend(accessible_accounts.data["accounts"])
 
   deduplicated_customer_ids = []
   seen_customer_ids = set()

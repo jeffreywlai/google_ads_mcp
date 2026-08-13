@@ -21,6 +21,7 @@ from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import get_ads_client
 
 
@@ -129,7 +130,14 @@ def manage_campaign_labels(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {"resource_names": [r.resource_name for r in response.results]}
+  return build_bounded_mutation_response(
+      {
+          "resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("resource_names",),
+  )
 
 
 @label_tool
@@ -177,4 +185,11 @@ def manage_ad_group_labels(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {"resource_names": [r.resource_name for r in response.results]}
+  return build_bounded_mutation_response(
+      {
+          "resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("resource_names",),
+  )

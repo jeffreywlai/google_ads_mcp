@@ -276,11 +276,30 @@ class TestNegativeKeywordQueries:
 
   @pytest.fixture(autouse=True)
   def mock_ads_client(self):
+    def _paged_query(**kwargs):
+      self.paged_query = preprocess_gaql(kwargs["query"])
+      return {
+          "rows": [],
+          "total_results_count": 0,
+          "next_page_token": None,
+      }
+
+    self.paged_query = None
     with mock.patch("ads_mcp.tools.negatives.get_ads_client") as mock_get:
       client = mock.Mock()
       mock_get.return_value = client
       self.mock_client = client
-      yield
+      with mock.patch(
+          "ads_mcp.tools.negatives.run_gaql_query_page",
+          side_effect=_paged_query,
+      ):
+        yield
+
+  def _latest_query(self, service):
+    if self.paged_query is not None:
+      return self.paged_query
+    call_args = service.search_stream.call_args
+    return call_args.kwargs.get("query", call_args[1].get("query", ""))
 
   def test_list_shared_sets_query_fields(self):
     service = self.mock_client.get_service.return_value
@@ -288,8 +307,7 @@ class TestNegativeKeywordQueries:
 
     negatives.list_shared_sets("123")
 
-    call_args = service.search_stream.call_args
-    query = call_args.kwargs.get("query", call_args[1].get("query", ""))
+    query = self._latest_query(service)
     assert "shared_set.id" in query
     assert "shared_set.name" in query
     assert "shared_set.member_count" in query
@@ -303,8 +321,7 @@ class TestNegativeKeywordQueries:
 
     negatives.list_shared_set_keywords("123", "456")
 
-    call_args = service.search_stream.call_args
-    query = call_args.kwargs.get("query", call_args[1].get("query", ""))
+    query = self._latest_query(service)
     assert "shared_criterion.criterion_id" in query
     assert "shared_criterion.keyword.text" in query
     assert "shared_criterion.keyword.match_type" in query
@@ -317,8 +334,7 @@ class TestNegativeKeywordQueries:
 
     negatives.list_campaign_negative_keywords("123", "789")
 
-    call_args = service.search_stream.call_args
-    query = call_args.kwargs.get("query", call_args[1].get("query", ""))
+    query = self._latest_query(service)
     assert "campaign_criterion.criterion_id" in query
     assert "campaign_criterion.keyword.text" in query
     assert "campaign_criterion.keyword.match_type" in query
@@ -333,8 +349,7 @@ class TestNegativeKeywordQueries:
 
     negatives.list_campaign_shared_sets("123")
 
-    call_args = service.search_stream.call_args
-    query = call_args.kwargs.get("query", call_args[1].get("query", ""))
+    query = self._latest_query(service)
     assert "campaign.id" in query
     assert "campaign.name" in query
     assert "shared_set.id" in query
@@ -348,8 +363,7 @@ class TestNegativeKeywordQueries:
 
     negatives.list_campaign_shared_sets("123", campaign_id="999")
 
-    call_args = service.search_stream.call_args
-    query = call_args.kwargs.get("query", call_args[1].get("query", ""))
+    query = self._latest_query(service)
     assert "campaign.id = 999" in query
 
   def test_list_campaign_shared_sets_filters_by_shared_set(self):
@@ -358,8 +372,7 @@ class TestNegativeKeywordQueries:
 
     negatives.list_campaign_shared_sets("123", shared_set_id="888")
 
-    call_args = service.search_stream.call_args
-    query = call_args.kwargs.get("query", call_args[1].get("query", ""))
+    query = self._latest_query(service)
     assert "shared_set.id = 888" in query
 
 

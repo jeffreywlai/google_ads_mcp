@@ -14,6 +14,7 @@
 
 """Tests for the negative keyword list management tools."""
 
+import json
 from unittest import mock
 
 from ads_mcp.tools import negatives
@@ -25,6 +26,23 @@ import pytest
 CUSTOMER_ID = "1234567890"
 SHARED_SET_ID = "111"
 CAMPAIGN_ID = "222"
+
+
+def _reference_count_response(reference_count):
+  row = mock.Mock()
+  row.shared_set.reference_count = reference_count
+  return [mock.Mock(results=[row])]
+
+
+def _google_ads_exception(message):
+  error = mock.Mock()
+  error.__str__ = lambda self: message
+  return GoogleAdsException(
+      error=mock.Mock(),
+      failure=mock.Mock(errors=[error]),
+      call=mock.Mock(),
+      request_id="test",
+  )
 
 
 @pytest.fixture(autouse=True)
@@ -113,15 +131,428 @@ class TestCreateSharedSet:
 class TestDeleteSharedSet:
 
   def test_deletes_shared_set(self, mock_ads_client):
-    mock_service = mock_ads_client.get_service.return_value
-    mock_service.shared_set_path.return_value = "customers/123/sharedSets/111"
-    mock_response = mock_service.mutate_shared_sets.return_value
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    mock_response = shared_set_service.mutate_shared_sets.return_value
     mock_response.results = [
         mock.Mock(resource_name="customers/123/sharedSets/111")
     ]
 
     result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
     assert result == {"resource_name": "customers/123/sharedSets/111"}
+
+  def test_preflight_diagnostic_failure_does_not_block_delete(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _google_ads_exception("diagnostic unavailable"),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    shared_set_service.mutate_shared_sets.return_value.results = [
+        mock.Mock(resource_name="customers/123/sharedSets/111")
+    ]
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result == {"resource_name": "customers/123/sharedSets/111"}
+    shared_set_service.mutate_shared_sets.assert_called_once()
+
+  def test_returns_detach_instructions_for_attached_campaigns(
+      self, mock_ads_client
+  ):
+    row = mock.Mock()
+    row.campaign.id = 222
+    row.campaign.name = "Brand Search"
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(1),
+        [mock.Mock(results=[row])],
+    ]
+    shared_set_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["shared_set_id"] == SHARED_SET_ID
+    assert result["reference_count"] == 1
+    assert result["attached_campaigns"] == [
+        {
+            "customer_id": CUSTOMER_ID,
+            "campaign_id": CAMPAIGN_ID,
+            "name": "Brand Search",
+        }
+    ]
+    assert result["attached_campaign_total_count"] == 1
+    assert result["attached_campaign_returned_count"] == 1
+    assert result["attachment_preview_truncated"] is False
+    assert result["attachments_complete"] is True
+    assert result["known_detach_calls"] == [
+        {
+            "tool": "detach_shared_set_from_campaign",
+            "arguments": {
+                "customer_id": CUSTOMER_ID,
+                "campaign_id": CAMPAIGN_ID,
+                "shared_set_id": SHARED_SET_ID,
+                "login_customer_id": None,
+            },
+        }
+    ]
+    assert result["next_step"] == (
+        "Call each entry in known_detach_calls first, then retry "
+        "delete_shared_set."
+    )
+    query = ads_service.search_stream.call_args.kwargs["query"]
+    assert "FROM campaign_shared_set" in query
+    assert (
+        "campaign_shared_set.shared_set = "
+        "'customers/1234567890/sharedSets/111'" in " ".join(query.split())
+    )
+    shared_set_service.mutate_shared_sets.assert_not_called()
+
+  def test_large_attachment_diagnostic_is_bounded_with_full_route(self):
+    attached_campaigns = [
+        {
+            "customer_id": CUSTOMER_ID,
+            "campaign_id": str(index),
+            "name": f"Campaign {index} " + "x" * 5_000,
+        }
+        for index in range(60)
+    ]
+
+    result = negatives._shared_set_in_use_response(  # pylint: disable=protected-access
+        CUSTOMER_ID,
+        SHARED_SET_ID,
+        attached_campaigns,
+        reference_count=60,
+    )
+
+    assert result["attached_campaign_total_count"] == 60
+    assert result["attachment_preview_truncated"] is True
+    assert result["attached_campaign_returned_count"] < 60
+    assert len(result["known_detach_calls"]) == (
+        result["attached_campaign_returned_count"]
+    )
+    assert result["full_attachment_call"]["arguments"]["shared_set_id"] == (
+        SHARED_SET_ID
+    )
+    assert "exact export" in result["next_step"]
+    assert len(json.dumps(result).encode("utf-8")) < 48 * 1024
+
+  def test_incomplete_cross_account_usage_keeps_full_local_route(self):
+    attached_campaigns = [
+        {
+            "customer_id": CUSTOMER_ID,
+            "campaign_id": str(index),
+            "name": f"Campaign {index}",
+        }
+        for index in range(40)
+    ]
+
+    result = negatives._shared_set_in_use_response(  # pylint: disable=protected-access
+        CUSTOMER_ID,
+        SHARED_SET_ID,
+        attached_campaigns,
+        reference_count=50,
+    )
+
+    assert result["attachments_complete"] is False
+    assert result["attachment_preview_truncated"] is True
+    assert result["full_attachment_call"]["tool"] == (
+        "list_campaign_shared_sets"
+    )
+    assert "full_attachment_call" in result["next_step"]
+    assert "managed_customer_discovery" in result["next_step"]
+
+  def test_recovers_if_shared_set_becomes_attached_during_delete(
+      self, mock_ads_client
+  ):
+    row = mock.Mock()
+    row.campaign.id = 222
+    row.campaign.name = "Brand Search"
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _reference_count_response(1),
+        [mock.Mock(results=[row])],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    error = mock.Mock()
+    error.__str__ = lambda self: "SHARED_SET_IN_USE"
+    shared_set_service.mutate_shared_sets.side_effect = GoogleAdsException(
+        error=mock.Mock(),
+        failure=mock.Mock(errors=[error]),
+        call=mock.Mock(),
+        request_id="test",
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["attached_campaigns"] == [
+        {
+            "customer_id": CUSTOMER_ID,
+            "campaign_id": CAMPAIGN_ID,
+            "name": "Brand Search",
+        }
+    ]
+    assert result["attachments_complete"] is True
+    assert result["known_detach_calls"][0]["tool"] == (
+        "detach_shared_set_from_campaign"
+    )
+    assert ads_service.search_stream.call_count == 4
+
+  def test_reports_cross_account_references_without_empty_detach_loop(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(2),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["reference_count"] == 2
+    assert result["attached_campaigns"] == []
+    assert result["attachments_complete"] is False
+    assert "managed client accounts" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+    assert "managed_customer_discovery" in result["next_step"]
+    assert result["managed_customer_discovery"] == {
+        "tool": "execute_gaql",
+        "arguments": {
+            "customer_id": CUSTOMER_ID,
+            "login_customer_id": None,
+            "query": (
+                "SELECT customer_client.id, "
+                "customer_client.descriptive_name, customer_client.level "
+                "FROM customer_client WHERE customer_client.level > 0"
+            ),
+        },
+    }
+    shared_set_service.mutate_shared_sets.assert_not_called()
+
+  def test_incomplete_diagnostics_detach_known_campaigns_before_discovery(
+      self, mock_ads_client
+  ):
+    row = mock.Mock()
+    row.campaign.id = 222
+    row.campaign.name = "Known Campaign"
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _google_ads_exception("reference lookup unavailable"),
+        [mock.Mock(results=[row])],
+    ]
+    mock_ads_client.get_service.return_value = ads_service
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["attachments_complete"] is False
+    assert result["known_detach_calls"] == [
+        {
+            "tool": "detach_shared_set_from_campaign",
+            "arguments": {
+                "customer_id": CUSTOMER_ID,
+                "campaign_id": CAMPAIGN_ID,
+                "shared_set_id": SHARED_SET_ID,
+                "login_customer_id": None,
+            },
+        }
+    ]
+    assert result["next_step"].startswith(
+        "Call each entry in known_detach_calls first. "
+    )
+    assert "Run managed_customer_discovery next." in result["next_step"]
+
+  def test_cross_account_guidance_preserves_login_context(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(1),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(
+        CUSTOMER_ID,
+        SHARED_SET_ID,
+        login_customer_id="999",
+    )
+
+    discovery_arguments = result["managed_customer_discovery"]["arguments"]
+    assert discovery_arguments["customer_id"] == CUSTOMER_ID
+    assert discovery_arguments["login_customer_id"] == "999"
+    assert "login_customer_id=999" in result["next_step"]
+
+  def test_cross_account_guidance_reuses_default_login_context(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(1),
+        [],
+    ]
+    mock_ads_client.get_service.return_value = ads_service
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    discovery_arguments = result["managed_customer_discovery"]["arguments"]
+    assert discovery_arguments["login_customer_id"] is None
+    assert "configured default is reused" in result["next_step"]
+    assert f"login_customer_id={CUSTOMER_ID}" not in result["next_step"]
+
+  def test_reports_incomplete_cross_account_usage_after_delete_race(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _reference_count_response(2),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    error = mock.Mock()
+    error.__str__ = lambda self: "SHARED_SET_IN_USE"
+    shared_set_service.mutate_shared_sets.side_effect = GoogleAdsException(
+        error=mock.Mock(),
+        failure=mock.Mock(errors=[error]),
+        call=mock.Mock(),
+        request_id="test",
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["reference_count"] == 2
+    assert result["attached_campaigns"] == []
+    assert result["attachments_complete"] is False
+    assert "2 campaign references" in result["warning"]
+    assert "managed client accounts" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+
+  def test_preserves_in_use_response_when_reference_diagnostic_fails(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _google_ads_exception("reference lookup unavailable"),
+        [],
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    shared_set_service.mutate_shared_sets.side_effect = _google_ads_exception(
+        "SHARED_SET_IN_USE"
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["attachments_complete"] is False
+    assert result["diagnostic_errors"] == [
+        {
+            "check": "shared_set.reference_count",
+            "error": "reference lookup unavailable",
+        }
+    ]
+    assert "rather than retrying the identical delete" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+    shared_set_service.mutate_shared_sets.assert_called_once()
+
+  def test_preserves_in_use_response_when_attachment_diagnostic_fails(
+      self, mock_ads_client
+  ):
+    ads_service = mock.Mock()
+    ads_service.search_stream.side_effect = [
+        _reference_count_response(0),
+        [],
+        _reference_count_response(2),
+        _google_ads_exception("attachment lookup unavailable"),
+    ]
+    shared_set_service = mock.Mock()
+    shared_set_service.shared_set_path.return_value = (
+        "customers/123/sharedSets/111"
+    )
+    shared_set_service.mutate_shared_sets.side_effect = _google_ads_exception(
+        "SHARED_SET_IN_USE"
+    )
+    mock_ads_client.get_service.side_effect = lambda name: {
+        "GoogleAdsService": ads_service,
+        "SharedSetService": shared_set_service,
+    }[name]
+
+    result = negatives.delete_shared_set(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["deleted"] is False
+    assert result["reference_count"] == 2
+    assert result["attached_campaigns"] == []
+    assert result["attachments_complete"] is False
+    assert result["diagnostic_errors"] == [
+        {
+            "check": "campaign_shared_set attachments",
+            "error": "attachment lookup unavailable",
+        }
+    ]
+    assert "rather than retrying the identical delete" in result["warning"]
+    assert "list_campaign_shared_sets" in result["next_step"]
+    shared_set_service.mutate_shared_sets.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -131,27 +562,90 @@ class TestDeleteSharedSet:
 
 class TestListSharedSetKeywords:
 
-  def test_returns_keywords(self, mock_ads_client):
-    mock_row = mock.Mock()
-    mock_row.shared_criterion.criterion_id = 333
-    mock_row.shared_criterion.keyword.text = "free stuff"
-    mock_row.shared_criterion.keyword.match_type.name = "BROAD"
-
-    mock_ads_service = mock_ads_client.get_service.return_value
-    mock_ads_service.search_stream.return_value = [
-        mock.Mock(results=[mock_row])
-    ]
-
-    result = negatives.list_shared_set_keywords(CUSTOMER_ID, SHARED_SET_ID)
-    assert result == {
-        "keywords": [
+  def test_returns_keywords(self):
+    page = {
+        "rows": [
             {
-                "criterion_id": "333",
-                "text": "free stuff",
-                "match_type": "BROAD",
+                "shared_criterion.criterion_id": 333,
+                "shared_criterion.keyword.text": "free stuff",
+                "shared_criterion.keyword.match_type": "BROAD",
             }
-        ]
+        ],
+        "total_results_count": 1,
+        "next_page_token": None,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
     }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ):
+      result = negatives.list_shared_set_keywords(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["keywords"] == [
+        {
+            "criterion_id": "333",
+            "text": "free stuff",
+            "match_type": "BROAD",
+        }
+    ]
+    assert result["total_count"] == 1
+    assert result["complete_inline"] is True
+
+  def test_paginates_and_exposes_exact_snapshot_export(self):
+    page = {
+        "rows": [
+            {
+                "shared_criterion.criterion_id": 333,
+                "shared_criterion.keyword.text": "free stuff",
+                "shared_criterion.keyword.match_type": "BROAD",
+            }
+        ],
+        "total_results_count": 250,
+        "next_page_token": "a" * 32 + ":1:1",
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+    }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ) as mock_run:
+      result = negatives.list_shared_set_keywords(
+          CUSTOMER_ID,
+          SHARED_SET_ID,
+          limit=1,
+          page_token="prior-token",
+      )
+
+    assert result["returned_count"] == 1
+    assert result["total_count"] == 250
+    assert result["truncated"] is True
+    assert result["bulk_export_call"] == {
+        "tool": "export_gaql_csv",
+        "arguments": {"snapshot_token": "gaql-snapshot-v1:" + "a" * 32},
+    }
+    assert mock_run.call_args.kwargs["page_token"] == "prior-token"
+
+  def test_preserves_oversized_row_placeholder(self):
+    placeholder = {
+        "_google_ads_mcp_inline_omission": {
+            "reason": "row_exceeds_inline_byte_limit"
+        }
+    }
+    page = {
+        "rows": [placeholder],
+        "total_results_count": 1,
+        "next_page_token": None,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+    }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ):
+      result = negatives.list_shared_set_keywords(CUSTOMER_ID, SHARED_SET_ID)
+
+    assert result["keywords"] == [placeholder]
+    assert result["returned_count"] == 0
+    assert result["inline_omitted_row_count"] == 1
+    assert result["complete_inline"] is False
 
 
 class TestAddSharedSetKeywords:
@@ -256,37 +750,49 @@ class TestRemoveSharedSetKeywords:
 
 class TestListCampaignSharedSets:
 
-  def test_returns_links(self, mock_ads_client):
-    mock_row = mock.Mock()
-    mock_row.campaign.id = 222
-    mock_row.campaign.name = "Campaign A"
-    mock_row.shared_set.id = 111
-    mock_row.shared_set.name = "My Negatives"
-
-    mock_ads_service = mock_ads_client.get_service.return_value
-    mock_ads_service.search_stream.return_value = [
-        mock.Mock(results=[mock_row])
-    ]
-
-    result = negatives.list_campaign_shared_sets(CUSTOMER_ID)
-    assert result == {
-        "campaign_shared_sets": [
+  def test_returns_links(self):
+    page = {
+        "rows": [
             {
-                "campaign_id": "222",
-                "campaign_name": "Campaign A",
-                "shared_set_id": "111",
-                "shared_set_name": "My Negatives",
+                "campaign.id": 222,
+                "campaign.name": "Campaign A",
+                "shared_set.id": 111,
+                "shared_set.name": "My Negatives",
             }
-        ]
+        ],
+        "total_results_count": 1,
+        "next_page_token": None,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
     }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ):
+      result = negatives.list_campaign_shared_sets(CUSTOMER_ID)
 
-  def test_filters_by_campaign_id(self, mock_ads_client):
-    mock_ads_service = mock_ads_client.get_service.return_value
-    mock_ads_service.search_stream.return_value = []
+    assert result["campaign_shared_sets"] == [
+        {
+            "campaign_id": "222",
+            "campaign_name": "Campaign A",
+            "shared_set_id": "111",
+            "shared_set_name": "My Negatives",
+        }
+    ]
+    assert result["total_count"] == 1
 
-    negatives.list_campaign_shared_sets(CUSTOMER_ID, campaign_id=CAMPAIGN_ID)
-    call_args = mock_ads_service.search_stream.call_args
-    assert f"campaign.id = {CAMPAIGN_ID}" in call_args.kwargs["query"]
+  def test_filters_by_campaign_id(self):
+    page = {
+        "rows": [],
+        "total_results_count": 0,
+        "next_page_token": None,
+    }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ) as mock_run:
+      negatives.list_campaign_shared_sets(CUSTOMER_ID, campaign_id=CAMPAIGN_ID)
+
+    assert f"campaign.id = {CAMPAIGN_ID}" in mock_run.call_args.kwargs["query"]
 
 
 class TestAttachSharedSetToCampaign:
@@ -312,14 +818,14 @@ class TestAttachSharedSetToCampaign:
     mock_ads_client.get_service.side_effect = get_service
     mock_response = mock_service.mutate_campaign_shared_sets.return_value
     mock_response.results = [
-        mock.Mock(resource_name=("customers/123/campaignSharedSets/222~111"))
+        mock.Mock(resource_name="customers/123/campaignSharedSets/222~111")
     ]
 
     result = negatives.attach_shared_set_to_campaign(
         CUSTOMER_ID, CAMPAIGN_ID, SHARED_SET_ID
     )
     assert result == {
-        "resource_name": ("customers/123/campaignSharedSets/222~111")
+        "resource_name": "customers/123/campaignSharedSets/222~111"
     }
 
 
@@ -329,14 +835,14 @@ class TestDetachSharedSetFromCampaign:
     mock_service = mock_ads_client.get_service.return_value
     mock_response = mock_service.mutate_campaign_shared_sets.return_value
     mock_response.results = [
-        mock.Mock(resource_name=("customers/123/campaignSharedSets/222~111"))
+        mock.Mock(resource_name="customers/123/campaignSharedSets/222~111")
     ]
 
     result = negatives.detach_shared_set_from_campaign(
         CUSTOMER_ID, CAMPAIGN_ID, SHARED_SET_ID
     )
     assert result == {
-        "resource_name": ("customers/123/campaignSharedSets/222~111")
+        "resource_name": "customers/123/campaignSharedSets/222~111"
     }
 
 
@@ -347,38 +853,49 @@ class TestDetachSharedSetFromCampaign:
 
 class TestListCampaignNegativeKeywords:
 
-  def test_returns_keywords(self, mock_ads_client):
-    mock_row = mock.Mock()
-    mock_row.campaign_criterion.criterion_id = 444
-    mock_row.campaign_criterion.keyword.text = "free"
-    mock_row.campaign_criterion.keyword.match_type.name = "EXACT"
-
-    mock_ads_service = mock_ads_client.get_service.return_value
-    mock_ads_service.search_stream.return_value = [
-        mock.Mock(results=[mock_row])
-    ]
-
-    result = negatives.list_campaign_negative_keywords(
-        CUSTOMER_ID, CAMPAIGN_ID
-    )
-    assert result == {
-        "keywords": [
+  def test_returns_keywords(self):
+    page = {
+        "rows": [
             {
-                "criterion_id": "444",
-                "text": "free",
-                "match_type": "EXACT",
+                "campaign_criterion.criterion_id": 444,
+                "campaign_criterion.keyword.text": "free",
+                "campaign_criterion.keyword.match_type": "EXACT",
             }
-        ]
+        ],
+        "total_results_count": 1,
+        "next_page_token": None,
     }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ):
+      result = negatives.list_campaign_negative_keywords(
+          CUSTOMER_ID, CAMPAIGN_ID
+      )
 
-  def test_normalizes_enum_filters_before_search(self, mock_ads_client):
-    mock_ads_service = mock_ads_client.get_service.return_value
-    mock_ads_service.search_stream.return_value = []
+    assert result["keywords"] == [
+        {
+            "criterion_id": "444",
+            "text": "free",
+            "match_type": "EXACT",
+        }
+    ]
+    assert result["total_count"] == 1
 
-    negatives.list_campaign_negative_keywords(CUSTOMER_ID, CAMPAIGN_ID)
+  def test_normalizes_enum_filters_before_search(self):
+    page = {
+        "rows": [],
+        "total_results_count": 0,
+        "next_page_token": None,
+    }
+    with mock.patch(
+        "ads_mcp.tools.negatives.run_gaql_query_page",
+        return_value=page,
+    ) as mock_run:
+      negatives.list_campaign_negative_keywords(CUSTOMER_ID, CAMPAIGN_ID)
 
-    sent_query = mock_ads_service.search_stream.call_args.kwargs["query"]
-    assert "campaign_criterion.type = KEYWORD" in sent_query
+    sent_query = mock_run.call_args.kwargs["query"]
+    assert "campaign_criterion.type = 'KEYWORD'" in sent_query
 
 
 class TestAddCampaignNegativeKeywords:
@@ -402,7 +919,7 @@ class TestAddCampaignNegativeKeywords:
     )
     mock_response = mock_service.mutate_campaign_criteria.return_value
     mock_response.results = [
-        mock.Mock(resource_name=("customers/123/campaignCriteria/222~444"))
+        mock.Mock(resource_name="customers/123/campaignCriteria/222~444")
     ]
 
     keywords = [{"text": "free", "match_type": "EXACT"}]
@@ -420,7 +937,7 @@ class TestRemoveCampaignNegativeKeywords:
     mock_service = mock_ads_client.get_service.return_value
     mock_response = mock_service.mutate_campaign_criteria.return_value
     mock_response.results = [
-        mock.Mock(resource_name=("customers/123/campaignCriteria/222~444"))
+        mock.Mock(resource_name="customers/123/campaignCriteria/222~444")
     ]
 
     result = negatives.remove_campaign_negative_keywords(

@@ -29,9 +29,12 @@ from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools._gaql import validate_non_negative_number
+from ads_mcp.tools.api import applied_inline_page_size
+from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
-from ads_mcp.tools.api import run_gaql_query
+from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import run_gaql_query_page
+from ads_mcp.tools.api import run_gaql_query_snapshot
 
 
 search_term_tool = ads_read_tool(mcp, tags={"search_terms"})
@@ -133,17 +136,15 @@ def _search_term_comparison_entry(
   }
 
 
-def _search_term_period_rows(
-    customer_id: str,
+def _search_term_period_query(
     date_range: str | dict[str, str],
     campaign_ids: list[str] | str | None,
     ad_group_id: str | None,
     min_clicks: int,
     min_cost_micros: int,
-    limit: int,
     sort_metric: str,
-    login_customer_id: str | None,
-) -> list[dict[str, Any]]:
+) -> str:
+  """Builds an uncapped period query for complete comparison semantics."""
   where_conditions = [segments_date_condition(date_range)]
   campaign_ids = merge_single_and_list_arg(None, campaign_ids, "campaign_ids")
   if campaign_ids:
@@ -157,7 +158,7 @@ def _search_term_period_rows(
   if min_cost_micros:
     where_conditions.append(f"metrics.cost_micros >= {min_cost_micros}")
 
-  query = f"""
+  return f"""
       SELECT
         campaign.id,
         campaign.name,
@@ -174,9 +175,15 @@ def _search_term_period_rows(
       FROM search_term_view
       {build_where_clause(where_conditions)}
       ORDER BY {sort_metric} DESC
-      LIMIT {limit}
   """
-  return run_gaql_query(query, customer_id, login_customer_id)
+
+
+def _snapshot_export_call(snapshot_token: str) -> dict[str, Any]:
+  """Builds an exact CSV call for a derived-report source snapshot."""
+  return {
+      "tool": "export_gaql_csv",
+      "arguments": {"snapshot_token": snapshot_token},
+  }
 
 
 def _campaign_insight_select_fields(
@@ -306,13 +313,17 @@ def list_campaign_search_term_insights(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["campaign_context"] = _campaign_context_from_rows(
       customer_id,
       page["rows"],
       login_customer_id,
   )
-  return result
+  return finalize_bounded_response(
+      result,
+      ("campaign_search_term_insights", "campaign_context"),
+  )
 
 
 @search_term_tool
@@ -397,6 +408,7 @@ def list_customer_search_term_insights(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -426,8 +438,10 @@ def compare_search_terms(
       ad_group_id: Optional ad group ID filter.
       min_clicks: Optional minimum clicks in each period query.
       min_cost_micros: Optional minimum cost in each period query.
-      period_limit: Maximum raw rows to fetch per period.
-      top_n: Maximum rows per comparison bucket.
+      period_limit: Deprecated compatibility input. Comparisons always use
+          every matching row in both periods.
+      top_n: Requested preview rows per comparison bucket. Inline output is
+          bounded without limiting access to the complete period sources.
       sort_by: IMPRESSIONS, CLICKS, COST, CONVERSIONS, or CONVERSIONS_VALUE.
       login_customer_id: Optional manager account ID.
 
@@ -454,28 +468,34 @@ def compare_search_terms(
       campaign_ids,
       "campaign_ids",
   )
-  period_a_rows = _search_term_period_rows(
-      customer_id,
+  period_a_query = _search_term_period_query(
       period_a,
       merged_campaign_ids,
       ad_group_id,
       min_clicks,
       min_cost_micros,
-      period_limit,
       sort_metric,
-      login_customer_id,
   )
-  period_b_rows = _search_term_period_rows(
-      customer_id,
+  period_b_query = _search_term_period_query(
       period_b,
       merged_campaign_ids,
       ad_group_id,
       min_clicks,
       min_cost_micros,
-      period_limit,
       sort_metric,
+  )
+  period_a_snapshot = run_gaql_query_snapshot(
+      period_a_query,
+      customer_id,
       login_customer_id,
   )
+  period_b_snapshot = run_gaql_query_snapshot(
+      period_b_query,
+      customer_id,
+      login_customer_id,
+  )
+  period_a_rows = period_a_snapshot["rows"]
+  period_b_rows = period_b_snapshot["rows"]
   period_a_by_key = {_search_term_key(row): row for row in period_a_rows}
   period_b_by_key = {_search_term_key(row): row for row in period_b_rows}
   a_keys = set(period_a_by_key)
@@ -517,9 +537,47 @@ def compare_search_terms(
   )
   improved_terms.sort(key=_entry_sort_value, reverse=True)
   declined_terms.sort(key=_entry_sort_value, reverse=True)
-  campaign_context_rows = [*period_a_rows, *period_b_rows]
+  bucket_count = 4
+  applied_top_n = min(
+      top_n,
+      max(
+          1,
+          applied_inline_page_size(top_n * bucket_count) // bucket_count,
+      ),
+  )
+  shared_preview = bound_inline_sections(
+      {
+          "new_terms": new_terms[:applied_top_n],
+          "lost_terms": lost_terms[:applied_top_n],
+          "improved_terms": improved_terms[:applied_top_n],
+          "declined_terms": declined_terms[:applied_top_n],
+      }
+  )
+  bounded_sections = shared_preview.pop("sections")
+  new_preview = bounded_sections["new_terms"]
+  lost_preview = bounded_sections["lost_terms"]
+  improved_preview = bounded_sections["improved_terms"]
+  declined_preview = bounded_sections["declined_terms"]
+  preview_entries = [
+      *new_preview,
+      *lost_preview,
+      *improved_preview,
+      *declined_preview,
+  ]
+  campaign_context_rows = [
+      period_row
+      for entry in preview_entries
+      for period_row in (entry["period_a"], entry["period_b"])
+      if period_row
+  ]
+  truncated_by_bucket = {
+      "new_terms": len(new_terms) > len(new_preview),
+      "lost_terms": len(lost_terms) > len(lost_preview),
+      "improved_terms": len(improved_terms) > len(improved_preview),
+      "declined_terms": len(declined_terms) > len(declined_preview),
+  }
 
-  return {
+  result = {
       "period_a": date_range_label(period_a),
       "period_b": date_range_label(period_b),
       "sort_by": normalized_sort_by,
@@ -529,18 +587,47 @@ def compare_search_terms(
       "common_count": len(a_keys & b_keys),
       "new_count": len(new_terms),
       "lost_count": len(lost_terms),
+      "improved_count": len(improved_terms),
+      "declined_count": len(declined_terms),
+      "analysis_complete": True,
       "period_limit": period_limit,
-      "top_n": top_n,
-      "new_terms": new_terms[:top_n],
-      "lost_terms": lost_terms[:top_n],
-      "improved_terms": improved_terms[:top_n],
-      "declined_terms": declined_terms[:top_n],
+      "period_limit_applied": False,
+      "top_n": applied_top_n,
+      "requested_top_n": top_n,
+      "top_n_clamped": top_n != applied_top_n,
+      "truncated": any(truncated_by_bucket.values()),
+      "truncated_by_bucket": truncated_by_bucket,
+      "returned_counts_by_bucket": shared_preview["returned_counts"],
+      "shared_inline_delivery": shared_preview,
+      "new_terms": new_preview,
+      "lost_terms": lost_preview,
+      "improved_terms": improved_preview,
+      "declined_terms": declined_preview,
+      "bulk_export_calls_by_period": {
+          "period_a": _snapshot_export_call(
+              period_a_snapshot["snapshot_token"],
+          ),
+          "period_b": _snapshot_export_call(
+              period_b_snapshot["snapshot_token"],
+          ),
+      },
+      "bulk_export_scope": "complete_source_rows",
       "campaign_context": _campaign_context_from_rows(
           customer_id,
           campaign_context_rows,
           login_customer_id,
       ),
   }
+  return finalize_bounded_response(
+      result,
+      (
+          "new_terms",
+          "lost_terms",
+          "improved_terms",
+          "declined_terms",
+          "campaign_context",
+      ),
+  )
 
 
 @search_term_tool
@@ -568,7 +655,9 @@ def analyze_search_terms(
           candidate when conversions are zero.
       min_exact_match_conversions: Minimum conversions before flagging an
           exact-match candidate when the term is not already exact.
-      limit: Maximum number of rows to return.
+      limit: Requested candidate preview size per category. The analysis
+          always uses every matching source row, while inline output is
+          bounded for token efficiency.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -615,10 +704,14 @@ def analyze_search_terms(
       FROM search_term_view
       {build_where_clause(where_conditions)}
       ORDER BY metrics.clicks DESC
-      LIMIT {limit}
   """
 
-  search_terms = run_gaql_query(query, customer_id, login_customer_id)
+  source_snapshot = run_gaql_query_snapshot(
+      query,
+      customer_id,
+      login_customer_id,
+  )
+  search_terms = source_snapshot["rows"]
   negative_keyword_candidates = []
   exact_match_candidates = []
 
@@ -642,13 +735,58 @@ def analyze_search_terms(
     ):
       exact_match_candidates.append(row)
 
-  return {
+  category_count = 2
+  applied_limit = min(
+      limit,
+      max(
+          1,
+          applied_inline_page_size(limit * category_count) // category_count,
+      ),
+  )
+  negative_candidate_count = len(negative_keyword_candidates)
+  exact_candidate_count = len(exact_match_candidates)
+  shared_preview = bound_inline_sections(
+      {
+          "negative_keyword_candidates": negative_keyword_candidates[
+              :applied_limit
+          ],
+          "exact_match_candidates": exact_match_candidates[:applied_limit],
+      }
+  )
+  bounded_sections = shared_preview.pop("sections")
+  negative_keyword_candidates = bounded_sections["negative_keyword_candidates"]
+  exact_match_candidates = bounded_sections["exact_match_candidates"]
+  preview_rows = [
+      *negative_keyword_candidates,
+      *exact_match_candidates,
+  ]
+  truncated_by_category = {
+      "negative_keyword_candidates": negative_candidate_count
+      > len(negative_keyword_candidates),
+      "exact_match_candidates": exact_candidate_count
+      > len(exact_match_candidates),
+  }
+  result = {
       "analyzed_row_count": len(search_terms),
+      "analysis_complete": True,
+      "negative_keyword_candidate_count": negative_candidate_count,
+      "exact_match_candidate_count": exact_candidate_count,
       "negative_keyword_candidates": negative_keyword_candidates,
       "exact_match_candidates": exact_match_candidates,
+      "limit": applied_limit,
+      "requested_limit": limit,
+      "limit_clamped": limit != applied_limit,
+      "truncated": any(truncated_by_category.values()),
+      "truncated_by_category": truncated_by_category,
+      "returned_counts_by_category": shared_preview["returned_counts"],
+      "shared_inline_delivery": shared_preview,
+      "bulk_export_call": _snapshot_export_call(
+          source_snapshot["snapshot_token"],
+      ),
+      "bulk_export_scope": "complete_source_rows",
       "campaign_context": _campaign_context_from_rows(
           customer_id,
-          search_terms,
+          preview_rows,
           login_customer_id,
       ),
       "heuristics": {
@@ -658,3 +796,11 @@ def analyze_search_terms(
           "min_exact_match_conversions": min_exact_match_conversions,
       },
   }
+  return finalize_bounded_response(
+      result,
+      (
+          "negative_keyword_candidates",
+          "exact_match_candidates",
+          "campaign_context",
+      ),
+  )

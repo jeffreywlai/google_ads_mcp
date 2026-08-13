@@ -14,8 +14,11 @@
 
 """Tests for recommendations.py."""
 
+# pylint: disable=protected-access
+
 from unittest import mock
 
+from ads_mcp.tools import api
 from ads_mcp.tools import recommendations
 from fastmcp.exceptions import ToolError
 import pytest
@@ -45,10 +48,57 @@ def test_list_recommendations_builds_filtered_query():
   assert "campaign.id IN (111, 222)" in query
   assert "recommendation.dismissed = FALSE" in query
   assert "recommendation.impact" in query
-  assert mock_query.call_args.kwargs["page_size"] == 500
+  assert mock_query.call_args.kwargs["page_size"] == 50
+  assert mock_query.call_args.kwargs["row_sort_fields"] == (
+      "recommendation.type",
+      "recommendation.resource_name",
+  )
   assert result["returned_count"] == 0
   assert result["total_count"] == 0
   assert result["truncated"] is False
+
+
+def test_list_recommendations_fresh_snapshots_have_deterministic_total_order():
+  first_rows = [
+      {
+          "recommendation.resource_name": "customers/123/recommendations/b",
+          "recommendation.type": "KEYWORD",
+      },
+      {
+          "recommendation.resource_name": "customers/123/recommendations/a",
+          "recommendation.type": "KEYWORD",
+      },
+  ]
+  second_rows = list(reversed(first_rows))
+  try:
+    api._PAGED_QUERY_CACHE.clear()
+    api._PAGED_QUERY_BUILDS.clear()
+    with mock.patch.object(
+        api,
+        "_page_cache_scope",
+        return_value="test-credentials",
+    ):
+      with mock.patch.object(
+          api,
+          "_iter_gaql_query_attempt",
+          side_effect=[first_rows, second_rows],
+      ):
+        first_result = recommendations.list_recommendations(CUSTOMER_ID)
+        api._PAGED_QUERY_CACHE.clear()
+        second_result = recommendations.list_recommendations(CUSTOMER_ID)
+  finally:
+    api._PAGED_QUERY_CACHE.clear()
+    api._PAGED_QUERY_BUILDS.clear()
+
+  expected_resource_names = [
+      "customers/123/recommendations/a",
+      "customers/123/recommendations/b",
+  ]
+  for result in (first_result, second_result):
+    assert [
+        row["recommendation.resource_name"]
+        for row in result["recommendations"]
+    ] == expected_resource_names
 
 
 def test_list_recommendations_ignores_empty_string_list_filters():

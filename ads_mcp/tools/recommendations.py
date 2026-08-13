@@ -32,6 +32,7 @@ from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_string_values
 from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
@@ -127,7 +128,7 @@ def list_recommendations(
     recommendation_types: list[str] | str | None = None,
     campaign_ids: list[str] | str | None = None,
     include_dismissed: bool = False,
-    limit: int = 500,
+    limit: int = 50,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -139,7 +140,8 @@ def list_recommendations(
           CAMPAIGN_BUDGET or KEYWORD.
       campaign_ids: Optional campaign IDs to filter to.
       include_dismissed: Whether dismissed recommendations should be included.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. The token-safe default is 50;
+          use page_token for additional rows.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
@@ -187,6 +189,10 @@ def list_recommendations(
       page_size=limit,
       page_token=page_token,
       login_customer_id=login_customer_id,
+      row_sort_fields=(
+          "recommendation.type",
+          "recommendation.resource_name",
+      ),
   )
   return build_paginated_list_response(
       "recommendations",
@@ -194,6 +200,7 @@ def list_recommendations(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -369,7 +376,7 @@ def apply_recommendations(
   partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
-  return result
+  return build_bounded_mutation_response(result, ("resource_names",))
 
 
 @recommendation_tool
@@ -419,7 +426,7 @@ def dismiss_recommendations(
   partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
-  return result
+  return build_bounded_mutation_response(result, ("resource_names",))
 
 
 @recommendation_read_tool
@@ -479,6 +486,7 @@ def list_recommendation_subscriptions(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 

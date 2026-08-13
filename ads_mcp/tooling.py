@@ -16,6 +16,8 @@
 
 from collections.abc import Callable
 from collections.abc import Sequence
+import functools
+import inspect
 import re
 from typing import Any
 
@@ -97,7 +99,7 @@ def ads_read_tool(
     **kwargs: Any,
 ) -> Callable[..., Any]:
   """Registers a read-only Google Ads API tool."""
-  return mcp.tool(
+  register_tool = mcp.tool(
       tags=_merge_tags([READ_TAG], tags),
       annotations=_build_annotations(
           read_only=True,
@@ -107,6 +109,36 @@ def ads_read_tool(
       ),
       **kwargs,
   )
+
+  def _register_with_snapshot_group(func: Callable[..., Any]) -> Any:
+    """Keeps every exact snapshot from one public read atomically usable."""
+    if inspect.iscoroutinefunction(func):
+
+      @functools.wraps(func)
+      async def _async_grouped_read(*args: Any, **call_kwargs: Any) -> Any:
+        # Imported lazily because api.py itself defines ads_read_tool tools.
+        from ads_mcp.tools.api import (  # pylint: disable=import-outside-toplevel
+            gaql_snapshot_group,
+        )
+
+        with gaql_snapshot_group():
+          return await func(*args, **call_kwargs)
+
+      return register_tool(_async_grouped_read)
+
+    @functools.wraps(func)
+    def _grouped_read(*args: Any, **call_kwargs: Any) -> Any:
+      # Imported lazily because api.py itself defines ads_read_tool tools.
+      from ads_mcp.tools.api import (  # pylint: disable=import-outside-toplevel
+          gaql_snapshot_group,
+      )
+
+      with gaql_snapshot_group():
+        return func(*args, **call_kwargs)
+
+    return register_tool(_grouped_read)
+
+  return _register_with_snapshot_group
 
 
 def ads_mutation_tool(

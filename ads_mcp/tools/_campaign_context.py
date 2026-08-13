@@ -23,29 +23,32 @@ from typing import Any
 from ads_mcp.tools._gaql import date_range_label
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import segments_date_condition
+from ads_mcp.tools.api import get_ads_credential_cache_scope
 from ads_mcp.tools.api import run_gaql_query
 
 
 _CAMPAIGN_CONTEXT_CACHE_TTL_SECONDS = 15.0
 _CAMPAIGN_CONTEXT_CACHE_MAX_ENTRIES = 128
 _CAMPAIGN_CONTEXT_CACHE: OrderedDict[
-    tuple[str, str | None, str, tuple[str, ...]],
+    tuple[str, str, str | None, str, tuple[str, ...]],
     tuple[float, dict[str, dict[str, Any]]],
 ] = OrderedDict()
 
 
 def _campaign_context_cache_key(
+    credential_scope: str,
     customer_id: str,
     campaign_ids: list[str],
     login_customer_id: str | None,
     spend_date_range: str | dict[str, str],
-) -> tuple[str, str | None, str, tuple[str, ...]]:
+) -> tuple[str, str, str | None, str, tuple[str, ...]]:
   """Builds a cache key for campaign context reads."""
   if isinstance(spend_date_range, dict):
     spend_date_range_key = json.dumps(spend_date_range, sort_keys=True)
   else:
     spend_date_range_key = spend_date_range
   return (
+      credential_scope,
       customer_id,
       login_customer_id,
       spend_date_range_key,
@@ -54,7 +57,7 @@ def _campaign_context_cache_key(
 
 
 def _cache_get(
-    key: tuple[str, str | None, str, tuple[str, ...]],
+    key: tuple[str, str, str | None, str, tuple[str, ...]],
 ) -> dict[str, dict[str, Any]] | None:
   """Returns a cached campaign context when still fresh."""
   cache_entry = _CAMPAIGN_CONTEXT_CACHE.get(key)
@@ -71,7 +74,7 @@ def _cache_get(
 
 
 def _cache_set(
-    key: tuple[str, str | None, str, tuple[str, ...]],
+    key: tuple[str, str, str | None, str, tuple[str, ...]],
     context: dict[str, dict[str, Any]],
 ) -> None:
   """Stores campaign context in the bounded in-process cache."""
@@ -95,6 +98,7 @@ def get_campaign_context(
   spend_date_condition = segments_date_condition(spend_date_range)
 
   cache_key = _campaign_context_cache_key(
+      get_ads_credential_cache_scope(),
       customer_id,
       unique_campaign_ids,
       login_customer_id,

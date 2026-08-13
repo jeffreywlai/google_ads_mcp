@@ -125,6 +125,7 @@ def search_user_interests(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 

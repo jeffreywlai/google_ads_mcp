@@ -15,7 +15,6 @@
 """Curated reporting tools for high-frequency Google Ads read workflows."""
 
 from collections import Counter
-import math
 import re
 from typing import Any
 
@@ -34,9 +33,13 @@ from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import applied_inline_page_size
+from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
+from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
+from ads_mcp.tools.api import run_gaql_query_snapshot
 
 
 def _normalize_choice(
@@ -214,36 +217,54 @@ def _shopping_product_ad_group_filter(
   )
 
 
-def _limited_rows_response(
-    item_key: str,
-    rows: list[dict[str, Any]],
-    limit: int,
-) -> dict[str, Any]:
-  """Builds a compact response for server-capped workflow reports."""
-  return {
-      item_key: rows,
-      "returned_count": len(rows),
-      "limit": limit,
-      "truncated_by_limit": len(rows) >= limit,
-  }
-
-
-def _limited_select_query(
+def _uncapped_select_query(
     select_fields: list[str],
     from_resource: str,
     where_conditions: list[str],
     order_by: str,
-    limit: int,
 ) -> str:
-  """Builds the common capped SELECT query shape for workflow reports."""
+  """Builds an export-ready SELECT query without a row limit."""
   return f"""
       SELECT
         {", ".join(select_fields)}
       FROM {from_resource}
       {build_where_clause(where_conditions)}
       ORDER BY {order_by}
-      LIMIT {limit}
   """
+
+
+def _page_delivery(
+    item_key: str,
+    query: str,
+    customer_id: str,
+    page_size: int,
+    page_token: str | None,
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Returns a bounded page with exact continuation and snapshot export."""
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=page_size,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  return build_paginated_list_response(
+      item_key,
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=page_size,
+      next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
+  )
+
+
+def _snapshot_export_call(snapshot_token: str) -> dict[str, Any]:
+  """Builds an exact CSV call for a derived-report source snapshot."""
+  return {
+      "tool": "export_gaql_csv",
+      "arguments": {"snapshot_token": snapshot_token},
+  }
 
 
 def _competitive_change_history(
@@ -616,6 +637,7 @@ def list_device_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -707,6 +729,7 @@ def list_geographic_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["location_view"] = normalized_view
   return result
@@ -777,6 +800,7 @@ def list_impression_share(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -854,6 +878,7 @@ def get_campaign_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["segment_by"] = segment_names
   return result
@@ -871,6 +896,8 @@ def get_competitive_pressure_report(
     auction_insight_limit: int = 100,
     change_limit: int = 50,
     login_customer_id: str | None = None,
+    trend_page_token: str | None = None,
+    auction_insight_page_token: str | None = None,
 ) -> dict[str, Any]:
   """Bundles impression-share pressure, auction insights, and changes.
 
@@ -883,10 +910,14 @@ def get_competitive_pressure_report(
           insight rows for the same campaign/date filters.
       include_change_history: Whether to include compact change history
           coverage for the same window.
-      trend_limit: Maximum pressure trend rows.
-      auction_insight_limit: Maximum auction insight rows.
+      trend_limit: Requested pressure-trend page size. Inline output is
+          bounded without limiting access to the complete result.
+      auction_insight_limit: Requested auction-insight page size. Inline
+          output is bounded without limiting complete-result access.
       change_limit: Maximum rows in each change-history section.
       login_customer_id: Optional manager account ID.
+      trend_page_token: Token for the next pressure-trend page.
+      auction_insight_page_token: Token for the next auction-insight page.
 
   Returns:
       A dict with pressure trend rows, optional auction insights, and
@@ -922,20 +953,37 @@ def get_competitive_pressure_report(
   if segment_fields:
     segment_order = ", ".join(segment_fields)
     trend_order_by = f"{segment_order}, {trend_order_by}"
-  trend_query = _limited_select_query(
+  trend_query = _uncapped_select_query(
       trend_fields,
       "campaign",
       where_conditions,
       trend_order_by,
-      trend_limit,
   )
-  pressure_trend = run_gaql_query(
+  section_count = 1 + int(include_auction_insights)
+  total_requested_rows = trend_limit + (
+      auction_insight_limit if include_auction_insights else 0
+  )
+  total_inline_rows = applied_inline_page_size(total_requested_rows)
+  per_section_ceiling = max(
+      1,
+      total_inline_rows // section_count,
+  )
+  if total_requested_rows == total_inline_rows:
+    trend_page_size = trend_limit
+    auction_page_size = auction_insight_limit
+  else:
+    trend_page_size = min(trend_limit, per_section_ceiling)
+    auction_page_size = min(auction_insight_limit, per_section_ceiling)
+  trend_delivery = _page_delivery(
+      "pressure_trend",
       trend_query,
       customer_id,
+      trend_page_size,
+      trend_page_token,
       login_customer_id,
   )
 
-  auction_insights = []
+  auction_delivery = None
   if include_auction_insights:
     auction_fields = [
         "campaign.id",
@@ -943,16 +991,18 @@ def get_competitive_pressure_report(
         "segments.auction_insight_domain",
         *_AUCTION_INSIGHT_METRICS,
     ]
-    auction_query = _limited_select_query(
+    auction_query = _uncapped_select_query(
         auction_fields,
         "campaign",
         where_conditions,
         "metrics.auction_insight_search_impression_share DESC",
-        auction_insight_limit,
     )
-    auction_insights = run_gaql_query(
+    auction_delivery = _page_delivery(
+        "auction_insights",
         auction_query,
         customer_id,
+        auction_page_size,
+        auction_insight_page_token,
         login_customer_id,
     )
 
@@ -965,18 +1015,125 @@ def get_competitive_pressure_report(
         login_customer_id,
     )
 
-  return {
+  pressure_trend = trend_delivery.pop("pressure_trend")
+  auction_insights = (
+      auction_delivery.pop("auction_insights") if auction_delivery else []
+  )
+  inline_sections = {
+      "pressure_trend": pressure_trend,
+      "auction_insights": auction_insights,
+  }
+  if change_history:
+    inline_sections["change_statuses"] = change_history.get(
+        "change_statuses", []
+    )
+    inline_sections["change_events"] = change_history.get(
+        "recent_change_events", []
+    )
+  shared_delivery = bound_inline_sections(inline_sections)
+  bounded_sections = shared_delivery.pop("sections")
+  pressure_trend = bounded_sections["pressure_trend"]
+  auction_insights = bounded_sections["auction_insights"]
+
+  def _apply_shared_budget_to_delivery(
+      delivery: dict[str, Any],
+      section_name: str,
+  ) -> None:
+    delivery["source_page_returned_count"] = delivery["returned_count"]
+    delivery["returned_count"] = shared_delivery["returned_counts"][
+        section_name
+    ]
+    delivery["represented_row_count"] = len(bounded_sections[section_name])
+    omitted_count = shared_delivery["omitted_counts"][section_name]
+    if not omitted_count:
+      return
+    delivery["shared_inline_omitted_count"] = omitted_count
+    delivery["truncated"] = True
+    delivery["complete_inline"] = False
+    delivery["has_more"] = False
+    delivery["next_page_token"] = None
+    delivery["continuation_unavailable"] = (
+        "The shared response budget omitted rows from this source page, so "
+        "its later-page token would skip data. Use bulk_export_call instead."
+    )
+
+  _apply_shared_budget_to_delivery(trend_delivery, "pressure_trend")
+  if auction_delivery is not None:
+    _apply_shared_budget_to_delivery(
+        auction_delivery,
+        "auction_insights",
+    )
+
+  if change_history:
+    history_sections = (
+        ("change_status", "change_statuses", "change_statuses"),
+        ("change_event", "recent_change_events", "change_events"),
+    )
+    history_exports = change_history.get("bulk_export_calls_by_source", {})
+    for source_name, result_key, section_name in history_sections:
+      if section_name not in bounded_sections:
+        continue
+      if (
+          result_key not in change_history
+          and not bounded_sections[section_name]
+      ):
+        continue
+      change_history[result_key] = bounded_sections[section_name]
+      returned_key = (
+          "change_status_returned_count"
+          if source_name == "change_status"
+          else "recent_change_event_returned_count"
+      )
+      if returned_key in change_history:
+        change_history[returned_key] = shared_delivery["returned_counts"][
+            section_name
+        ]
+      omitted_count = shared_delivery["omitted_counts"][section_name]
+      if not omitted_count:
+        continue
+      token_key = (
+          "change_status_next_page_token"
+          if source_name == "change_status"
+          else "recent_change_event_next_page_token"
+      )
+      change_history[token_key] = None
+      change_history[f"{source_name}_shared_inline_omitted_count"] = (
+          omitted_count
+      )
+      export_call = history_exports.get(source_name)
+      if export_call:
+        change_history.setdefault("continuation_guidance", {})[source_name] = {
+            **export_call,
+            "instruction": (
+                "The outer report budget omitted rows from this source page, "
+                "so a later-page token would skip data. Call the exact export "
+                "above instead."
+            ),
+        }
+
+  result = {
       "date_range": date_range_label(date_range),
       "granularity": normalized_granularity,
       "campaign_ids": normalize_list_arg(campaign_ids, "campaign_ids"),
       "pressure_trend": pressure_trend,
-      "pressure_trend_returned_count": len(pressure_trend),
-      "pressure_trend_limit": trend_limit,
+      "pressure_trend_returned_count": trend_delivery["returned_count"],
+      "pressure_trend_total_count": trend_delivery["total_count"],
+      "pressure_trend_limit": trend_delivery["page_size"],
+      "requested_pressure_trend_limit": trend_limit,
+      "pressure_trend_delivery": trend_delivery,
       "auction_insights": auction_insights,
-      "auction_insight_returned_count": len(auction_insights),
-      "auction_insight_limit": auction_insight_limit,
+      "auction_insight_returned_count": (
+          auction_delivery["returned_count"] if auction_delivery else 0
+      ),
       "change_history": change_history,
+      "shared_inline_delivery": shared_delivery,
   }
+  if auction_delivery is not None:
+    result["auction_insight_total_count"] = auction_delivery["total_count"]
+    result["auction_insight_limit"] = auction_delivery["page_size"]
+    result["requested_auction_insight_limit"] = auction_insight_limit
+    result["auction_insight_delivery"] = auction_delivery
+  return result
 
 
 @reporting_tool
@@ -1074,7 +1231,7 @@ def get_campaign_conversion_goals(
       login_customer_id,
   ).get(campaign_id, {})
 
-  return {
+  result = {
       "campaign": {
           "id": config["campaign.id"],
           "name": config.get("campaign.name"),
@@ -1097,6 +1254,10 @@ def get_campaign_conversion_goals(
           for row in standard_goal_rows
       ],
   }
+  return finalize_bounded_response(
+      result,
+      ("standard_conversion_goals",),
+  )
 
 
 @reporting_tool
@@ -1116,8 +1277,9 @@ def list_keyword_quality_scores(
       campaign_ids: Optional campaign IDs to filter to.
       ad_group_ids: Optional ad group IDs to filter to.
       min_quality_score: Optional minimum quality score from 1 to 10.
-      limit: Page size when paginating quality-score results. Set to None
-          to return all rows without pagination.
+      limit: Requested page size. Inline output is capped at the shared
+          token-safe ceiling; set to None to request maximum access through
+          the bounded preview, pagination, and exact CSV export.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
@@ -1134,26 +1296,6 @@ def list_keyword_quality_scores(
       min_quality_score=min_quality_score,
   )
 
-  if limit is None:
-    rows = run_gaql_query(query, customer_id, login_customer_id)
-    campaign_context = get_campaign_context(
-        customer_id,
-        _campaign_ids_from_rows(rows),
-        login_customer_id,
-    )
-    return {
-        "keyword_quality_scores": rows,
-        "returned_count": len(rows),
-        "total_count": len(rows),
-        "returned_row_count": len(rows),
-        "total_row_count": len(rows),
-        "total_page_count": 1,
-        "truncated": False,
-        "next_page_token": None,
-        "page_size": None,
-        "campaign_context": campaign_context,
-    }
-
   page = run_gaql_query_page(
       query=query,
       customer_id=customer_id,
@@ -1161,28 +1303,27 @@ def list_keyword_quality_scores(
       page_token=page_token,
       login_customer_id=login_customer_id,
   )
-  total_row_count = page["total_results_count"]
-  total_page_count = (
-      math.ceil(total_row_count / limit) if total_row_count else 0
-  )
   campaign_context = get_campaign_context(
       customer_id,
       _campaign_ids_from_rows(page["rows"]),
       login_customer_id,
   )
 
-  return {
-      "keyword_quality_scores": page["rows"],
-      "returned_count": len(page["rows"]),
-      "total_count": total_row_count,
-      "returned_row_count": len(page["rows"]),
-      "total_row_count": total_row_count,
-      "total_page_count": total_page_count,
-      "truncated": page["next_page_token"] is not None,
-      "next_page_token": page["next_page_token"],
-      "page_size": limit,
-      "campaign_context": campaign_context,
-  }
+  result = build_paginated_list_response(
+      "keyword_quality_scores",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
+  )
+  result["returned_row_count"] = result["returned_count"]
+  result["total_row_count"] = result["total_count"]
+  result["campaign_context"] = campaign_context
+  return finalize_bounded_response(
+      result,
+      ("keyword_quality_scores", "campaign_context"),
+  )
 
 
 @reporting_tool
@@ -1210,7 +1351,7 @@ def summarize_keyword_quality_scores(
   _validate_quality_score(min_quality_score)
   validate_limit(top_campaigns_limit)
 
-  rows = run_gaql_query(
+  source_snapshot = run_gaql_query_snapshot(
       _keyword_quality_score_query(
           campaign_ids=campaign_ids,
           ad_group_ids=ad_group_ids,
@@ -1219,6 +1360,7 @@ def summarize_keyword_quality_scores(
       customer_id,
       login_customer_id,
   )
+  rows = source_snapshot["rows"]
   quality_score_counts: Counter[Any] = Counter()
   match_type_counts: Counter[Any] = Counter()
   status_counts: Counter[Any] = Counter()
@@ -1242,11 +1384,6 @@ def summarize_keyword_quality_scores(
       scored_keywords += 1
       total_quality_score += quality_score
 
-  campaign_context = get_campaign_context(
-      customer_id,
-      list(campaign_counts),
-      login_customer_id,
-  )
   top_campaigns = []
   for campaign_id, keyword_count in campaign_counts.most_common(
       top_campaigns_limit
@@ -1258,8 +1395,13 @@ def summarize_keyword_quality_scores(
             "keyword_count": keyword_count,
         }
     )
+  campaign_context = get_campaign_context(
+      customer_id,
+      [row["campaign.id"] for row in top_campaigns],
+      login_customer_id,
+  )
 
-  return {
+  result = {
       "total_keyword_count": len(rows),
       "scored_keyword_count": scored_keywords,
       "unscored_keyword_count": len(rows) - scored_keywords,
@@ -1285,7 +1427,21 @@ def summarize_keyword_quality_scores(
       ),
       "campaign_distribution": top_campaigns,
       "campaign_context": campaign_context,
+      "bulk_export_call": _snapshot_export_call(
+          source_snapshot["snapshot_token"],
+      ),
+      "bulk_export_scope": "complete_source_rows",
   }
+  return finalize_bounded_response(
+      result,
+      (
+          "quality_score_distribution",
+          "match_type_distribution",
+          "keyword_status_distribution",
+          "campaign_distribution",
+          "campaign_context",
+      ),
+  )
 
 
 @reporting_tool
@@ -1363,6 +1519,7 @@ def list_rsa_ad_strength(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -1431,6 +1588,7 @@ def list_conversion_actions(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -1441,7 +1599,7 @@ def list_audience_performance(
     campaign_ids: list[str] | str | None = None,
     ad_group_ids: list[str] | str | None = None,
     date_range: str | dict[str, str] = "LAST_30_DAYS",
-    limit: int = 100,
+    limit: int = 25,
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1453,7 +1611,8 @@ def list_audience_performance(
       campaign_ids: Optional campaign IDs to filter to.
       ad_group_ids: Optional ad group IDs to filter to when scope is AD_GROUP.
       date_range: GAQL date range such as LAST_30_DAYS.
-      limit: Maximum number of rows to return.
+      limit: Maximum number of rows to return. The token-safe default is 25;
+          use page_token for additional rows.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
 
@@ -1497,6 +1656,11 @@ def list_audience_performance(
         "metrics.conversions_value",
     ]
     from_resource = "ad_group_audience_view"
+    identity_order_fields = [
+        "campaign.id",
+        "ad_group.id",
+        "ad_group_criterion.criterion_id",
+    ]
     _append_int_list_filter(
         where_conditions,
         "ad_group.id",
@@ -1522,13 +1686,17 @@ def list_audience_performance(
         "metrics.conversions_value",
     ]
     from_resource = "campaign_audience_view"
+    identity_order_fields = [
+        "campaign.id",
+        "campaign_criterion.criterion_id",
+    ]
 
   query = f"""
       SELECT
         {", ".join(select_fields)}
       FROM {from_resource}
       {build_where_clause(where_conditions)}
-      ORDER BY metrics.impressions DESC
+      ORDER BY metrics.impressions DESC, {", ".join(identity_order_fields)}
   """
   page = run_gaql_query_page(
       query=query,
@@ -1543,6 +1711,7 @@ def list_audience_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["scope"] = normalized_scope
   return result
@@ -1555,8 +1724,9 @@ def get_demographic_performance(
     ad_group_ids: list[str] | str | None = None,
     demographic_types: list[str] | str | None = None,
     date_range: str | dict[str, str] = "LAST_30_DAYS",
-    limit_per_type: int = 100,
+    limit_per_type: int = 10,
     login_customer_id: str | None = None,
+    page_tokens_by_type: dict[str, str] | None = None,
 ) -> dict[str, Any]:
   """Fans out age, gender, and income performance into one response.
 
@@ -1566,11 +1736,15 @@ def get_demographic_performance(
       ad_group_ids: Optional ad group IDs to filter to.
       demographic_types: Optional subset of AGE, GENDER, and INCOME.
       date_range: GAQL date range or {start_date, end_date}.
-      limit_per_type: Maximum rows returned for each demographic resource.
+      limit_per_type: Requested page size for each demographic resource.
+          Inline output is bounded without limiting complete-result access.
       login_customer_id: Optional manager account ID.
+      page_tokens_by_type: Optional next-page tokens keyed by AGE, GENDER, or
+          INCOME. Use the returned mapping to continue each result snapshot.
 
   Returns:
-      A dict keyed by demographic type with compact performance rows.
+      A dict keyed by demographic type with bounded pages, exact continuation
+      tokens, and exact snapshot CSV exports.
   """
   validate_limit(limit_per_type)
   if demographic_types:
@@ -1581,9 +1755,38 @@ def get_demographic_performance(
     )
   else:
     selected_types = sorted(_DEMOGRAPHIC_VIEW_FIELDS)
+  if page_tokens_by_type is None:
+    normalized_page_tokens = {}
+  elif not isinstance(page_tokens_by_type, dict):
+    raise ToolError("page_tokens_by_type must be an object.")
+  else:
+    normalized_page_tokens = {
+        _normalize_choice(
+            demographic_type,
+            "page_tokens_by_type key",
+            set(_DEMOGRAPHIC_VIEW_FIELDS),
+        ): page_token
+        for demographic_type, page_token in page_tokens_by_type.items()
+    }
+  per_type_page_size = min(
+      limit_per_type,
+      max(
+          1,
+          applied_inline_page_size(
+              limit_per_type * max(1, len(selected_types))
+          )
+          // max(1, len(selected_types)),
+      ),
+  )
 
   performance_by_type = {}
   returned_counts = {}
+  total_counts = {}
+  truncated_by_type = {}
+  has_more_by_type = {}
+  next_page_tokens_by_type = {}
+  deliveries_by_type = {}
+  bulk_export_calls_by_type = {}
   for demographic_type in selected_types:
     from_resource, segment_field, resource_name_field = (
         _DEMOGRAPHIC_VIEW_FIELDS[demographic_type]
@@ -1594,34 +1797,110 @@ def get_demographic_performance(
         campaign_ids,
         ad_group_ids,
     )
-    query = _limited_select_query(
-        [
-            "campaign.id",
-            "campaign.name",
-            "ad_group.id",
-            "ad_group.name",
-            resource_name_field,
-            segment_field,
-            *_CORE_PERFORMANCE_METRICS,
-        ],
+    select_fields = [
+        "campaign.id",
+        "campaign.name",
+        "ad_group.id",
+        "ad_group.name",
+        "ad_group_criterion.criterion_id",
+        resource_name_field,
+        segment_field,
+        *_CORE_PERFORMANCE_METRICS,
+    ]
+    order_by = (
+        "metrics.cost_micros DESC, campaign.id, ad_group.id, "
+        "ad_group_criterion.criterion_id"
+    )
+    query = _uncapped_select_query(
+        select_fields,
         from_resource,
         where_conditions,
-        "metrics.cost_micros DESC",
-        limit_per_type,
+        order_by,
     )
-    rows = run_gaql_query(query, customer_id, login_customer_id)
+    delivery = _page_delivery(
+        "rows",
+        query,
+        customer_id,
+        per_type_page_size,
+        normalized_page_tokens.get(demographic_type),
+        login_customer_id,
+    )
+    rows = delivery.pop("rows")
     performance_by_type[demographic_type] = rows
-    returned_counts[demographic_type] = len(rows)
+    total_counts[demographic_type] = delivery["total_count"]
+    truncated_by_type[demographic_type] = delivery["truncated"]
+    has_more_by_type[demographic_type] = delivery["has_more"]
+    next_page_tokens_by_type[demographic_type] = delivery["next_page_token"]
+    bulk_export_call = delivery.pop("bulk_export_call", None)
+    if bulk_export_call is not None:
+      bulk_export_calls_by_type[demographic_type] = bulk_export_call
+    deliveries_by_type[demographic_type] = delivery
 
-  return {
+  shared_delivery = bound_inline_sections(performance_by_type)
+  performance_by_type = shared_delivery.pop("sections")
+  returned_counts = shared_delivery.pop("returned_counts")
+  shared_omitted_counts = shared_delivery["omitted_counts"]
+  for demographic_type, omitted_count in shared_omitted_counts.items():
+    delivery = deliveries_by_type[demographic_type]
+    delivery["source_page_returned_count"] = delivery["returned_count"]
+    delivery["returned_count"] = returned_counts[demographic_type]
+    delivery["represented_row_count"] = len(
+        performance_by_type[demographic_type]
+    )
+    if omitted_count:
+      truncated_by_type[demographic_type] = True
+      delivery["shared_inline_omitted_count"] = omitted_count
+      delivery["truncated"] = True
+      delivery["complete_inline"] = False
+      delivery["has_more"] = False
+      delivery["next_page_token"] = None
+      delivery["continuation_unavailable"] = (
+          "The shared response budget omitted rows from this source page, so "
+          "its later-page token would skip data. Use the exact "
+          "bulk_export_calls_by_type entry instead."
+      )
+      has_more_by_type[demographic_type] = False
+      next_page_tokens_by_type[demographic_type] = None
+
+  applied_limit_per_type = (
+      next(iter(deliveries_by_type.values()))["page_size"]
+      if deliveries_by_type
+      else applied_inline_page_size(limit_per_type)
+  )
+
+  result = {
       "date_range": date_range_label(date_range),
       "campaign_ids": normalize_list_arg(campaign_ids, "campaign_ids"),
       "ad_group_ids": normalize_list_arg(ad_group_ids, "ad_group_ids"),
       "demographic_types": selected_types,
-      "limit_per_type": limit_per_type,
+      "limit_per_type": applied_limit_per_type,
+      "requested_limit_per_type": limit_per_type,
+      "limit_per_type_clamped": limit_per_type != applied_limit_per_type,
       "demographic_performance": performance_by_type,
       "returned_counts": returned_counts,
+      "total_counts": total_counts,
+      "truncated_by_type": truncated_by_type,
+      "has_more_by_type": has_more_by_type,
+      "next_page_tokens_by_type": next_page_tokens_by_type,
+      "deliveries_by_type": deliveries_by_type,
+      "truncated": any(truncated_by_type.values()),
+      "bulk_export_tool": "export_gaql_csv",
+      "shared_inline_delivery": shared_delivery,
   }
+  if bulk_export_calls_by_type:
+    result["bulk_export_calls_by_type"] = bulk_export_calls_by_type
+  if result["truncated"]:
+    result["next_step"] = (
+        "For complete rows, call each entry in bulk_export_calls_by_type with "
+        "the arguments exactly as shown."
+    )
+  elif bulk_export_calls_by_type:
+    result["next_step"] = (
+        "The complete result fits inline. If the user requested a file or "
+        "export, call each entry in bulk_export_calls_by_type with the "
+        "arguments exactly as shown."
+    )
+  return result
 
 
 @reporting_tool
@@ -1633,8 +1912,9 @@ def get_landing_page_performance(
     segment_by_device: bool = False,
     limit: int = 100,
     login_customer_id: str | None = None,
+    page_token: str | None = None,
 ) -> dict[str, Any]:
-  """Returns top landing pages with compact cost/conversion metrics.
+  """Returns landing-page performance with compact cost/conversion metrics.
 
   Args:
       customer_id: Google Ads customer ID.
@@ -1642,11 +1922,13 @@ def get_landing_page_performance(
       date_range: GAQL date range or {start_date, end_date}.
       landing_page_view: LANDING_PAGE or EXPANDED.
       segment_by_device: Whether to include segments.device in the output.
-      limit: Maximum landing-page rows to return.
+      limit: Requested page size. Inline output is bounded without limiting
+          access to the complete result.
       login_customer_id: Optional manager account ID.
+      page_token: Token for the next page of results.
 
   Returns:
-      A dict containing capped landing-page performance rows.
+      A paginated dict with an exact snapshot export for complete results.
   """
   validate_limit(limit)
   normalized_view = _normalize_choice(
@@ -1668,15 +1950,20 @@ def get_landing_page_performance(
       *segment_fields,
       *_CORE_PERFORMANCE_METRICS,
   ]
-  query = _limited_select_query(
+  query = _uncapped_select_query(
       select_fields,
       from_resource,
       where_conditions,
       "metrics.cost_micros DESC",
-      limit,
   )
-  rows = run_gaql_query(query, customer_id, login_customer_id)
-  result = _limited_rows_response("landing_page_performance", rows, limit)
+  result = _page_delivery(
+      "landing_page_performance",
+      query,
+      customer_id,
+      limit,
+      page_token,
+      login_customer_id,
+  )
   result.update(
       {
           "date_range": date_range_label(date_range),
@@ -1699,6 +1986,7 @@ def get_ad_inventory(
     include_metrics: bool = True,
     limit: int = 100,
     login_customer_id: str | None = None,
+    page_token: str | None = None,
 ) -> dict[str, Any]:
   """Returns ad creative inventory with optional recent performance.
 
@@ -1711,11 +1999,13 @@ def get_ad_inventory(
       date_range: GAQL date range or {start_date, end_date} for metrics.
       include_text_assets: Whether to include RSA/ETA text fields.
       include_metrics: Whether to include recent performance metrics.
-      limit: Maximum ad rows to return.
+      limit: Requested page size. Inline output is bounded without limiting
+          access to the complete result.
       login_customer_id: Optional manager account ID.
+      page_token: Token for the next page of results.
 
   Returns:
-      A dict containing capped ad inventory rows.
+      A paginated dict with an exact snapshot export for complete results.
   """
   validate_limit(limit)
   date_condition = segments_date_condition(date_range)
@@ -1764,15 +2054,20 @@ def get_ad_inventory(
       if include_metrics
       else "campaign.id ASC, ad_group.id ASC, ad_group_ad.ad.id ASC"
   )
-  query = _limited_select_query(
+  query = _uncapped_select_query(
       select_fields,
       "ad_group_ad",
       where_conditions,
       order_by,
-      limit,
   )
-  rows = run_gaql_query(query, customer_id, login_customer_id)
-  result = _limited_rows_response("ad_inventory", rows, limit)
+  result = _page_delivery(
+      "ad_inventory",
+      query,
+      customer_id,
+      limit,
+      page_token,
+      login_customer_id,
+  )
   result.update(
       {
           "date_range": normalized_date_range,
@@ -1883,6 +2178,7 @@ def list_video_enhancements(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   if normalized_sources:
     result["sources"] = normalized_sources
@@ -1897,6 +2193,7 @@ def summarize_cart_data_sales(
     date_range: str | dict[str, str] = "LAST_30_DAYS",
     top_limit: int = 25,
     login_customer_id: str | None = None,
+    page_token: str | None = None,
 ) -> dict[str, Any]:
   """Summarizes v24 cart-data sales and profit metrics.
 
@@ -1910,11 +2207,13 @@ def summarize_cart_data_sales(
           ADVERTISED_CATEGORY, SOLD_ITEM, SOLD_BRAND, or SOLD_CATEGORY.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
-      top_limit: Maximum grouped rows to return.
+      top_limit: Requested grouped-row page size. Inline output is bounded
+          without limiting access to the complete result.
       login_customer_id: Optional manager account ID.
+      page_token: Token for the next grouped-row page.
 
   Returns:
-      A compact dict containing grouped all-conversion cart profitability.
+      A paginated dict containing grouped all-conversion cart profitability.
   """
   validate_limit(top_limit)
   normalized_group_by, group_fields = _cart_group_fields(group_by)
@@ -1934,9 +2233,16 @@ def summarize_cart_data_sales(
       FROM cart_data_sales_view
       {build_where_clause(where_conditions)}
       ORDER BY metrics.all_gross_profit_micros DESC
-      LIMIT {top_limit}
   """
-  rows = run_gaql_query(query, customer_id, login_customer_id)
+  result = _page_delivery(
+      "cart_data_sales",
+      query,
+      customer_id,
+      top_limit,
+      page_token,
+      login_customer_id,
+  )
+  rows = result["cart_data_sales"]
   context_campaign_ids = (
       normalized_campaign_ids
       if normalized_campaign_ids
@@ -1944,18 +2250,23 @@ def summarize_cart_data_sales(
       if normalized_group_by == "CAMPAIGN"
       else []
   )
-  return {
-      "group_by": normalized_group_by,
-      "date_range": date_range_label(date_range),
-      "cart_data_sales": rows,
-      "returned_count": len(rows),
-      "top_limit": top_limit,
-      "campaign_context": get_campaign_context(
-          customer_id,
-          context_campaign_ids,
-          login_customer_id,
-      ),
-  }
+  result.update(
+      {
+          "group_by": normalized_group_by,
+          "date_range": date_range_label(date_range),
+          "top_limit": result["page_size"],
+          "requested_top_limit": top_limit,
+          "campaign_context": get_campaign_context(
+              customer_id,
+              context_campaign_ids,
+              login_customer_id,
+          ),
+      }
+  )
+  return finalize_bounded_response(
+      result,
+      ("cart_data_sales", "campaign_context"),
+  )
 
 
 @reporting_tool
@@ -1965,6 +2276,7 @@ def compare_biddable_vs_all_cart_value(
     date_range: str | dict[str, str] = "LAST_30_DAYS",
     limit: int = 25,
     login_customer_id: str | None = None,
+    page_token: str | None = None,
 ) -> dict[str, Any]:
   """Compares biddable cart metrics with all cart metrics by campaign.
 
@@ -1972,8 +2284,10 @@ def compare_biddable_vs_all_cart_value(
       customer_id: Google Ads customer ID.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
-      limit: Maximum campaign rows to return.
+      limit: Requested campaign-row page size. Inline output is bounded
+          without limiting access to the complete result.
       login_customer_id: Optional manager account ID.
+      page_token: Token for the next campaign-row page.
 
   Returns:
       A dict with campaign rows and deltas showing value outside biddable
@@ -1998,9 +2312,15 @@ def compare_biddable_vs_all_cart_value(
       FROM cart_data_sales_view
       {build_where_clause(where_conditions)}
       ORDER BY metrics.all_gross_profit_micros DESC
-      LIMIT {limit}
   """
-  rows = run_gaql_query(query, customer_id, login_customer_id)
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  rows = page["rows"]
   comparisons = []
   for row in rows:
     enriched_row = dict(row)
@@ -2021,17 +2341,75 @@ def compare_biddable_vs_all_cart_value(
     )
     comparisons.append(enriched_row)
 
-  return {
-      "date_range": normalized_date_range,
-      "cart_value_comparisons": comparisons,
-      "returned_count": len(comparisons),
-      "limit": limit,
-      "campaign_context": get_campaign_context(
-          customer_id,
-          _campaign_ids_from_rows(comparisons),
-          login_customer_id,
-      ),
-  }
+  campaign_context = get_campaign_context(
+      customer_id,
+      _campaign_ids_from_rows(comparisons),
+      login_customer_id,
+  )
+  campaign_context_rows = [
+      {"campaign.id": campaign_id, **context}
+      for campaign_id, context in campaign_context.items()
+  ]
+  shared_preview = bound_inline_sections(
+      {
+          "cart_value_comparisons": comparisons,
+          "campaign_context": campaign_context_rows,
+      }
+  )
+  preview_sections = shared_preview.pop("sections")
+  primary_rows_omitted = shared_preview["omitted_counts"][
+      "cart_value_comparisons"
+  ]
+  next_page_token = None if primary_rows_omitted else page["next_page_token"]
+  result = build_paginated_list_response(
+      "cart_value_comparisons",
+      preview_sections["cart_value_comparisons"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=next_page_token,
+      snapshot_token=page.get("snapshot_token"),
+  )
+  result.update(
+      {
+          "date_range": normalized_date_range,
+          "limit": result["page_size"],
+          "requested_limit": limit,
+          "campaign_context": {
+              row["campaign.id"]: {
+                  key: value
+                  for key, value in row.items()
+                  if key != "campaign.id"
+              }
+              for row in preview_sections["campaign_context"]
+          },
+          "campaign_context_total_count": len(campaign_context_rows),
+          "campaign_context_returned_count": shared_preview["returned_counts"][
+              "campaign_context"
+          ],
+          "campaign_context_preview_truncated": bool(
+              shared_preview["omitted_counts"]["campaign_context"]
+          ),
+          "shared_inline_delivery": shared_preview,
+      }
+  )
+  if primary_rows_omitted:
+    result.update(
+        {
+            "truncated": True,
+            "has_more": False,
+            "complete_inline": False,
+            "pagination_suppressed": True,
+            "pagination_suppressed_reason": (
+                "Derived fields needed a smaller inline preview than the "
+                "source page. Use bulk_export_call for the complete exact "
+                "source snapshot, or restart with a smaller limit."
+            ),
+        }
+    )
+  return finalize_bounded_response(
+      result,
+      ("cart_value_comparisons", "campaign_context"),
+  )
 
 
 @reporting_tool
@@ -2105,6 +2483,7 @@ def list_cart_profit_outliers(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["group_by"] = normalized_group_by
   result["sort_by"] = normalized_sort_by
@@ -2179,6 +2558,7 @@ def list_shopping_attribution_breakdown(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2248,6 +2628,7 @@ def list_campaign_view_through_optimization(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2319,6 +2700,7 @@ def list_video_audibility_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2390,6 +2772,7 @@ def list_vertical_ads_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["segment_by"] = normalized_segment_by
   return result
@@ -2469,6 +2852,7 @@ def list_campaign_search_terms(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2548,6 +2932,7 @@ def list_ai_max_search_term_ad_combinations(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2645,6 +3030,7 @@ def list_final_url_expansion_assets(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2719,6 +3105,7 @@ def list_targeting_expansion_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -2808,6 +3195,7 @@ def list_content_suitability_placements(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["placement_view"] = normalized_view
   return result
@@ -2892,6 +3280,7 @@ def list_location_interest_performance(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["interest_view"] = normalized_view
   return result
@@ -2917,8 +3306,11 @@ def summarize_shopping_product_status(
       statuses: Optional Shopping product statuses such as ELIGIBLE,
           LIMITED, NOT_ELIGIBLE, or PENDING.
       date_range: GAQL date range used for product performance context.
-      row_limit: Maximum Shopping product rows to analyze.
-      top_issue_products_limit: Maximum issue-bearing products to return.
+      row_limit: Deprecated compatibility input. The analysis always covers
+          the complete matching source; use top_issue_products_limit to
+          control the inline preview.
+      top_issue_products_limit: Requested issue-product preview size. Inline
+          output is bounded without limiting complete-result access.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -2972,9 +3364,13 @@ def summarize_shopping_product_status(
       FROM shopping_product
       {build_where_clause(where_conditions)}
       ORDER BY metrics.cost_micros DESC
-      LIMIT {row_limit}
   """
-  rows = run_gaql_query(query, customer_id, login_customer_id)
+  source_snapshot = run_gaql_query_snapshot(
+      query,
+      customer_id,
+      login_customer_id,
+  )
+  rows = source_snapshot["rows"]
   status_counts: Counter[Any] = Counter()
   issue_type_counts: Counter[Any] = Counter()
   issue_severity_counts: Counter[Any] = Counter()
@@ -2988,14 +3384,24 @@ def summarize_shopping_product_status(
     for issue in issues:
       issue_type_counts[_issue_label(issue, "type")] += 1
       issue_severity_counts[_issue_label(issue, "severity")] += 1
-    if len(issue_products) < top_issue_products_limit:
-      issue_products.append(row)
+    issue_products.append(row)
 
-  return {
+  applied_issue_limit = applied_inline_page_size(top_issue_products_limit)
+  shared_preview = bound_inline_sections(
+      {"top_issue_products": issue_products[:applied_issue_limit]}
+  )
+  top_issue_products = shared_preview.pop("sections")["top_issue_products"]
+  issue_products_truncated = len(issue_products) > len(top_issue_products)
+  result = {
       "date_range": normalized_date_range,
       "analyzed_row_count": len(rows),
+      "analysis_complete": True,
       "row_limit": row_limit,
-      "truncated": len(rows) >= row_limit,
+      "row_limit_applied": False,
+      "truncated": issue_products_truncated,
+      "truncated_scope": (
+          "top_issue_products" if issue_products_truncated else None
+      ),
       "status_distribution": _distribution(
           status_counts,
           "status",
@@ -3011,15 +3417,40 @@ def summarize_shopping_product_status(
           "issue_severity",
           "issue_count",
       ),
-      "top_issue_products": issue_products,
-      "top_issue_products_limit": top_issue_products_limit,
+      "top_issue_products": top_issue_products,
+      "issue_product_count": len(issue_products),
+      "shared_inline_delivery": shared_preview,
+      "top_issue_products_limit": applied_issue_limit,
+      "requested_top_issue_products_limit": top_issue_products_limit,
+      "top_issue_products_limit_clamped": (
+          top_issue_products_limit != applied_issue_limit
+      ),
+      "bulk_export_call": _snapshot_export_call(
+          source_snapshot["snapshot_token"],
+      ),
+      "bulk_export_scope": "complete_source_rows",
       "campaign_ids": normalized_campaign_ids,
       "campaign_context": get_campaign_context(
           customer_id,
-          _campaign_ids_from_rows(rows),
+          (
+              normalized_campaign_ids
+              if normalized_campaign_ids
+              else _campaign_ids_from_rows(top_issue_products)
+          ),
           login_customer_id,
       ),
   }
+  return finalize_bounded_response(
+      result,
+      (
+          "status_distribution",
+          "issue_type_distribution",
+          "issue_severity_distribution",
+          "top_issue_products",
+          "campaign_ids",
+          "campaign_context",
+      ),
+  )
 
 
 @reporting_tool
@@ -3106,6 +3537,7 @@ def list_shopping_product_status(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -3167,6 +3599,7 @@ def list_travel_feed_asset_sets(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -3230,4 +3663,5 @@ def list_retail_filter_shared_criteria(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )

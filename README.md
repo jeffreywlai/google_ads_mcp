@@ -5,7 +5,7 @@
 [![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 106 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 110 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,14 +14,19 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **106 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **110 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
 - 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
 - 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, conversion goals, search terms, Shopping/cart data, landing pages, audience expansion, video, and placement diagnostics
-- 📄 **Cursor Pagination** — All list tools support `page_token` for paging through large result sets with total counts
-- ⚡ **Response Caching** — Docs, tool guide, campaign context, and paged queries are cached to reduce latency and token usage
+- 📄 **Complete, Token-Safe Delivery** — Variable-size reads use stable
+  snapshot pagination or exact CSV artifacts; 100-row previews reserve
+  separate budgets for source rows, shared derived sections, and the complete
+  response without capping Google data
+- ⚡ **Snapshot Correctness** — A tokenless read starts fresh, while explicit
+  continuation and export tokens keep the original credential-scoped
+  snapshot stable
 - 🛡️ **Hardened Inputs** — Enum, ID, and date filters are normalized and validated up front so bad inputs fail fast with clear messages
 - 📥 **CSV Export** — Export any GAQL query to CSV for bulk extraction and downstream analysis
 - 📈 **Optimization** — Recommendations, optimization score, bid/budget simulations, and search term analysis
@@ -35,7 +40,7 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (106)
+## 📋 Available Tools (110)
 
 ### 🔍 Query & Discovery
 
@@ -43,7 +48,14 @@
 |------|-------------|
 | `execute_gaql` | Run any GAQL query with formatted results |
 | `export_gaql_csv` | Export GAQL query results to a CSV file for bulk extraction |
-| `list_accessible_accounts` | List all Google Ads accounts you can access |
+| `export_materialized_response_csv` | Explicitly write an exact deferred oversized read response returned by another tool |
+| `list_accessible_accounts` | Page through a short-lived, exact in-memory snapshot of accessible accounts without writing files |
+| `export_accessible_accounts_csv` | Explicitly export the exact accessible-account snapshot to CSV |
+
+`list_accessible_accounts` now returns a pagination envelope with `accounts`,
+counts, continuation metadata, and an explicit export call instead of the
+legacy bare list. This keeps account discovery read-only while making every
+accessible account available without an unbounded model response.
 
 ### 📖 Docs & Tool Guidance
 
@@ -55,6 +67,7 @@
 | `get_reporting_view_doc` | Reporting view names or detailed view metadata |
 | `get_reporting_fields_doc` | Detailed docs for specific reporting query fields |
 | `search_google_ads_fields` | Live field metadata search for GAQL query building |
+| `export_google_ads_fields_csv` | Export every matching live field-metadata row and requested column |
 
 ### 🔒 Session Controls
 
@@ -99,7 +112,8 @@
 |------|-------------|
 | `list_change_statuses` | Changed resources and last change timestamps |
 | `list_change_events` | Granular change events with field-level detail |
-| `get_change_history_extended` | Combined `change_status` + recent `change_event` rows for windows beyond 30 days |
+| `export_change_history_csv` | Export maximum retrievable change data: daily status slices across 90 days plus a 30-day granular event overlay |
+| `get_change_history_extended` | Preview explicit dates, or 90-day latest-status data plus the 30-day event overlay when dates are omitted |
 
 ### 🏎️ Performance Max
 

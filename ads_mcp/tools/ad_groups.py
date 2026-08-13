@@ -24,6 +24,7 @@ from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import require_unique_values
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import get_ads_client
 
 
@@ -145,12 +146,15 @@ def set_ad_group_criterion_status(
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   resource_names = [result.resource_name for result in response.results]
-  return {
-      "resource_names": resource_names,
-      "criterion_ids": criterion_ids,
-      "status": status_upper,
-      "updated_count": len(resource_names),
-  }
+  return build_bounded_mutation_response(
+      {
+          "resource_names": resource_names,
+          "criterion_ids": criterion_ids,
+          "status": status_upper,
+          "updated_count": len(resource_names),
+      },
+      ("resource_names", "criterion_ids"),
+  )
 
 
 @ad_group_tool
@@ -194,9 +198,14 @@ def remove_ad_group_audiences(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {
-      "removed_resource_names": [r.resource_name for r in response.results],
-  }
+  return build_bounded_mutation_response(
+      {
+          "removed_resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("removed_resource_names",),
+  )
 
 
 @ad_group_tool

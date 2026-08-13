@@ -33,6 +33,7 @@ from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
@@ -178,6 +179,7 @@ def list_offline_conversion_upload_client_summaries(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -270,6 +272,7 @@ def list_offline_conversion_upload_conversion_action_summaries(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -332,7 +335,7 @@ def upload_click_conversions(
   partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
-  return result
+  return build_bounded_mutation_response(result, ("results",))
 
 
 @conversion_upload_tool
@@ -388,4 +391,4 @@ def upload_call_conversions(
   partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
-  return result
+  return build_bounded_mutation_response(result, ("results",))

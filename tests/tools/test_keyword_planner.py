@@ -50,6 +50,21 @@ def _make_result(
   return result
 
 
+class _Pager:
+  """Minimal Google pager stand-in exposing one response page."""
+
+  def __init__(self, results, total_size, next_page_token=""):
+    self._page = mock.Mock(
+        results=results,
+        total_size=total_size,
+        next_page_token=next_page_token,
+    )
+
+  @property
+  def pages(self):
+    return iter([self._page])
+
+
 class TestGenerateKeywordIdeas:
 
   def test_with_seed_keywords(self, mock_ads_client):
@@ -62,19 +77,18 @@ class TestGenerateKeywordIdeas:
         CUSTOMER_ID, keywords=["running shoes"]
     )
 
-    assert result == {
-        "keyword_ideas": [
-            {
-                "keyword": "running shoes",
-                "avg_monthly_searches": 100000,
-                "competition": "HIGH",
-                "competition_index": 85,
-                "low_top_of_page_bid_micros": 500_000,
-                "high_top_of_page_bid_micros": 2_000_000,
-            }
-        ],
-        "total_ideas": 1,
-    }
+    assert result["keyword_ideas"] == [
+        {
+            "keyword": "running shoes",
+            "avg_monthly_searches": 100000,
+            "competition": "HIGH",
+            "competition_index": 85,
+            "low_top_of_page_bid_micros": 500_000,
+            "high_top_of_page_bid_micros": 2_000_000,
+        }
+    ]
+    assert result["total_ideas"] == 1
+    assert result["complete_inline"] is True
 
   def test_with_page_url(self, mock_ads_client):
     mock_service = mock_ads_client.get_service.return_value
@@ -126,7 +140,36 @@ class TestGenerateKeywordIdeas:
     result = keyword_planner.generate_keyword_ideas(
         CUSTOMER_ID, keywords=["xyzabc123"]
     )
-    assert result == {"keyword_ideas": [], "total_ideas": 0}
+    assert result["keyword_ideas"] == []
+    assert result["total_ideas"] == 0
+    assert result["complete_inline"] is True
+
+  def test_returns_one_google_page_with_full_continuation_metadata(
+      self, mock_ads_client
+  ):
+    mock_service = mock_ads_client.get_service.return_value
+    mock_service.generate_keyword_ideas.return_value = _Pager(
+        [_make_result("keyword a", 1000, "LOW", 10, 100_000, 500_000)],
+        total_size=501,
+        next_page_token="google-next-page",
+    )
+
+    result = keyword_planner.generate_keyword_ideas(
+        CUSTOMER_ID,
+        keywords=["test"],
+        page_size=5000,
+        page_token="google-current-page",
+    )
+
+    request = mock_ads_client.get_type.return_value
+    assert request.page_size == 100
+    assert request.page_token == "google-current-page"
+    assert result["returned_count"] == 1
+    assert result["total_count"] == 501
+    assert result["truncated"] is True
+    assert result["next_page_token"] == "google-next-page"
+    assert result["page_size_clamped"] is True
+    assert result["delivery"] == "google_api_pagination"
 
   def test_raises_without_keywords_or_url(self, mock_ads_client):
     with pytest.raises(ToolError, match="At least one"):

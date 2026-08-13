@@ -24,6 +24,7 @@ from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.server.transforms.visibility import get_visibility_rules
 from fastmcp.tools.tool import Tool
 
+from ads_mcp.routing import resolve_intent
 from ads_mcp.tooling import MUTATE_TAG
 from ads_mcp.tooling import compact_search_result_serializer
 
@@ -53,6 +54,23 @@ _SEARCH_TOOL_OUTPUT_SCHEMA = {
 }
 
 
+def _prioritize_search_tools(
+    tool_names: Sequence[str],
+    tools: Sequence[Tool],
+    results: Sequence[Tool],
+) -> list[Tool]:
+  """Places intent-selected tools first without changing other rankings."""
+  tools_by_name = {tool.name: tool for tool in tools}
+  selected_tools = [
+      tools_by_name[tool_name]
+      for tool_name in tool_names
+      if tool_name in tools_by_name
+  ]
+  selected_names = {tool.name for tool in selected_tools}
+  other_results = [tool for tool in results if tool.name not in selected_names]
+  return [*selected_tools, *other_results]
+
+
 async def _mutation_tools_unlocked() -> bool:
   """Returns whether mutate-tagged tools are unlocked for the session."""
   current_ctx = _current_context.get()
@@ -75,7 +93,7 @@ async def _mutation_tools_unlocked() -> bool:
 
 
 class NonMutationVisibleSearchTransform(BM25SearchTransform):
-  """BM25 search that keeps all non-mutation tools directly visible."""
+  """BM25 search with deterministic semantic routing and visibility safety."""
 
   def _make_search_tool(self) -> Tool:
     transform = self
@@ -85,9 +103,40 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
         ctx: Context = None,  # type: ignore[assignment]
     ) -> list[dict[str, object]]:
       """Search for tools using natural language."""
-      visible_tools = await transform._get_visible_tools(ctx)
-      results = await transform._search(visible_tools, query)
-      return await transform._render_results(results)
+      visible_tools = await transform._get_visible_tools(  # pylint: disable=protected-access
+          ctx
+      )
+      results = await transform._search(  # pylint: disable=protected-access
+          visible_tools, query
+      )
+      decision = resolve_intent(query)
+      preferred_targets = decision.preferred_targets or (
+          (decision.target,) if decision.target else ()
+      )
+      visible_target_count = sum(
+          tool.name in preferred_targets for tool in visible_tools
+      )
+      if preferred_targets and visible_target_count:
+        results = _prioritize_search_tools(
+            preferred_targets,
+            visible_tools,
+            results,
+        )[: max(visible_target_count, len(results))]
+      elif decision.requires_mutation_visibility:
+        results = []
+      if decision.excluded_tools:
+        results = [
+            tool
+            for tool in results
+            if tool.name not in decision.excluded_tools
+        ]
+      if decision.exclude_remote_mutations:
+        results = [
+            tool for tool in results if MUTATE_TAG not in set(tool.tags or [])
+        ]
+      return await transform._render_results(  # pylint: disable=protected-access
+          results
+      )
 
     return Tool.from_function(
         fn=search_tools,
@@ -111,7 +160,6 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
     return await self.get_tool_catalog(ctx)
 
 
-# Initialize FastMCP server
 mcp_server = FastMCP(
     name="Google Ads API",
     instructions=(
@@ -127,6 +175,13 @@ mcp_server = FastMCP(
         " custom read queries not covered by dedicated tools. Use"
         " export_gaql_csv instead of execute_gaql when a bulk extract"
         " would be too large for normal JSON tool output. Keep"
+        " the user's requested date range for change-history questions."
+        " When they ask for full, all, or maximum change history without"
+        " dates, use export_change_history_csv so the result covers the"
+        " 90-day change_status window plus the 30-day granular"
+        " change_event overlay; do not treat change_event retention as"
+        " the limit for all change history. Use"
+        " get_change_history_extended for a bounded preview. Keep"
         " call_tool for discovery compatibility, but prefer direct tool"
         " calls once tool names are known. When a list tool returns"
         " returned_count, total_count,"
