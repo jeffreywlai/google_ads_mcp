@@ -125,6 +125,11 @@ _ENUM_LITERAL_PATTERN = re.compile(
 _FIELDS_METADATA_PATH = (
     Path(__file__).resolve().parents[1] / "context" / "fields.yaml"
 )
+_SEGMENT_METRIC_COMPATIBILITY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "context"
+    / "segment_metric_compatibility.yaml"
+)
 _VIEWS_METADATA_DIR = Path(__file__).resolve().parents[1] / "context" / "views"
 _UNIQUE_USER_METRICS = {
     "metrics.unique_users",
@@ -564,6 +569,33 @@ def _load_enum_field_values() -> dict[str, tuple[str, ...]]:
   return enum_fields
 
 
+@functools.lru_cache(maxsize=1)
+def _load_segment_metric_compatibility() -> dict[str, frozenset[str]]:
+  """Loads generated segment-to-compatible-metric edges."""
+  try:
+    with open(
+        _SEGMENT_METRIC_COMPATIBILITY_PATH,
+        "r",
+        encoding="utf-8",
+    ) as compatibility_file:
+      compatibility_data = yaml.safe_load(compatibility_file) or {}
+  except FileNotFoundError:
+    return {}
+
+  compatibility = {}
+  for field_name, compatible_metrics in compatibility_data.items():
+    if not field_name.startswith("segments.") or not isinstance(
+        compatible_metrics, list
+    ):
+      continue
+    compatibility[field_name.lower()] = frozenset(
+        metric.lower()
+        for metric in compatible_metrics
+        if isinstance(metric, str) and metric.startswith("metrics.")
+    )
+  return compatibility
+
+
 def _split_gaql_list_items(list_body: str) -> list[str]:
   """Splits a GAQL parenthesized list body into top-level item strings."""
   items = []
@@ -814,19 +846,39 @@ def _validate_pairwise_field_compatibility(
     resource_name: str,
     referenced_fields: list[str],
 ) -> None:
-  """Validates compact local pairwise compatibility overrides."""
-  del resource_name
-  metrics = {
+  """Validates generated and compact local pairwise compatibility rules."""
+  metrics = [
       field for field in referenced_fields if field.startswith("metrics.")
-  }
-  segments = {
+  ]
+  segments = [
       field for field in referenced_fields if field.startswith("segments.")
-  }
-  unique_user_metrics = sorted(metrics & _UNIQUE_USER_METRICS)
+  ]
+  generated_compatibility = _load_segment_metric_compatibility()
+  for segment in segments:
+    compatible_metrics = generated_compatibility.get(segment)
+    if compatible_metrics is None:
+      continue
+    for metric in metrics:
+      if metric in compatible_metrics:
+        continue
+      compatible_preview = ", ".join(sorted(compatible_metrics)[:12])
+      compatibility_hint = (
+          f" Compatible metrics for {segment} include: {compatible_preview}."
+          if compatible_preview
+          else ""
+      )
+      raise ToolError(
+          f"{metric} is not selectable with {segment}. Split the conflicting "
+          f"fields into separate GAQL queries for FROM {resource_name} and "
+          "join them on shared resource and date dimensions."
+          + compatibility_hint
+      )
+
+  unique_user_metrics = sorted(set(metrics) & _UNIQUE_USER_METRICS)
   if not unique_user_metrics:
     return
 
-  incompatible_segments = sorted(segments - _ALLOWED_UNIQUE_USER_SEGMENTS)
+  incompatible_segments = sorted(set(segments) - _ALLOWED_UNIQUE_USER_SEGMENTS)
   if incompatible_segments:
     raise ToolError(
         f"{unique_user_metrics[0]} is not selectable with "

@@ -139,6 +139,60 @@ def test_get_fields_obj():
   )
 
 
+def test_get_fields_obj_preserves_segment_metric_compatibility():
+  """Generated segment metadata keeps its compatible metric edges."""
+  view_json = _view_json("campaign")
+  segment_name = "segments.new_versus_returning_customers"
+  view_json["segments"] = [segment_name]
+  view_json["fields"][segment_name] = {
+      "field_details": {
+          "name": segment_name,
+          "description": "New versus returning customers.",
+          "category": "SEGMENT",
+          "data_type": "ENUM",
+          "is_repeated": False,
+          "enum_values": ["NEW", "RETURNING"],
+          "filterable": True,
+          "sortable": True,
+          "selectable_with": [
+              "campaign",
+              "metrics.conversions_value",
+              "segments.week",
+              "metrics.conversions",
+          ],
+      },
+      "incompatible_fields": ["metrics.cost_micros"],
+  }
+
+  fields = generate_views.get_fields_obj(view_json, "segments")
+
+  assert fields[segment_name]["compatible_metrics"] == [
+      "metrics.conversions",
+      "metrics.conversions_value",
+  ]
+
+
+def test_check_context_version_requires_compatibility_artifact(tmp_path):
+  """A missing compatibility graph forces context regeneration."""
+  (tmp_path / "fields.yaml").write_text("{}\n", encoding="utf-8")
+  (tmp_path / ".api-version").write_text(
+      generate_views.ADS_API_VERSION, encoding="utf-8"
+  )
+  (tmp_path / ".mcp-server-version").write_text(
+      generate_views.MCP_SERVER_VERSION, encoding="utf-8"
+  )
+  (tmp_path / ".context-schema-version").write_text(
+      generate_views.CONTEXT_SCHEMA_VERSION, encoding="utf-8"
+  )
+
+  with mock.patch.object(generate_views, "CONTEXT_PATH", str(tmp_path)):
+    assert not generate_views.check_context_version()
+    (tmp_path / "segment_metric_compatibility.yaml").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    assert generate_views.check_context_version()
+
+
 @pytest.mark.asyncio
 @mock.patch.object(
     generate_views, "get_view_json", new_callable=mock.AsyncMock
@@ -210,10 +264,14 @@ async def test_update_views_yaml_regenerates_all_when_view_file_missing(
   assert mock_get_view_json.await_count == 2
   assert (tmp_path / "views" / "ad_group.yaml").is_file()
   assert (tmp_path / "fields.yaml").is_file()
+  assert (tmp_path / "segment_metric_compatibility.yaml").is_file()
   assert (tmp_path / ".api-version").read_text() == "v24"
   assert (
       tmp_path / ".mcp-server-version"
   ).read_text() == generate_views.MCP_SERVER_VERSION
+  assert (
+      tmp_path / ".context-schema-version"
+  ).read_text() == generate_views.CONTEXT_SCHEMA_VERSION
   assert (tmp_path / ".views-manifest").read_text() == "ad_group\ncampaign"
 
 
@@ -238,6 +296,7 @@ async def test_update_views_yaml_skips_complete_matching_context(
 
   mock_get_view_json.assert_not_awaited()
   assert not (tmp_path / "fields.yaml").exists()
+  assert not (tmp_path / "segment_metric_compatibility.yaml").exists()
 
 
 @pytest.mark.asyncio
@@ -266,6 +325,7 @@ async def test_update_views_yaml_partial_failure_preserves_retry_state(
   assert not (tmp_path / "fields.yaml").exists()
   assert not (tmp_path / ".api-version").exists()
   assert not (tmp_path / ".mcp-server-version").exists()
+  assert not (tmp_path / ".context-schema-version").exists()
   assert not (tmp_path / ".views-manifest").exists()
   assert caplog.messages == ["Failed to refresh reporting views: ad_group"]
 

@@ -1216,6 +1216,160 @@ def test_get_campaign_performance_ignores_empty_string_list_filters():
   assert "campaign.id IN" not in query
 
 
+def test_analyze_customer_acquisition_performance_splits_and_joins_queries():
+  cohort_rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Search",
+          "segments.week": "2026-08-03",
+          "segments.new_versus_returning_customers": "NEW",
+          "metrics.conversions": 2.0,
+          "metrics.conversions_value": 240.0,
+          "metrics.all_conversions": 3.0,
+          "metrics.all_conversions_value": 300.0,
+          "metrics.new_customer_lifetime_value": 80.0,
+      },
+      {
+          "campaign.id": "111",
+          "campaign.name": "Search",
+          "segments.week": "2026-08-03",
+          "segments.new_versus_returning_customers": "NEW_AND_HIGH_LTV",
+          "metrics.conversions": 1.0,
+          "metrics.conversions_value": 120.0,
+          "metrics.all_conversions": 1.0,
+          "metrics.all_conversions_value": 150.0,
+          "metrics.new_customer_lifetime_value": 40.0,
+      },
+      {
+          "campaign.id": "111",
+          "campaign.name": "Search",
+          "segments.week": "2026-08-03",
+          "segments.new_versus_returning_customers": "RETURNING",
+          "metrics.conversions": 4.0,
+          "metrics.conversions_value": 400.0,
+          "metrics.all_conversions": 5.0,
+          "metrics.all_conversions_value": 500.0,
+          "metrics.new_customer_lifetime_value": 0.0,
+      },
+  ]
+  total_rows = [
+      {
+          "campaign.id": "111",
+          "campaign.name": "Search",
+          "segments.week": "2026-08-03",
+          "metrics.impressions": 1_000,
+          "metrics.clicks": 100,
+          "metrics.cost_micros": 6_000_000,
+      }
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      side_effect=[cohort_rows, total_rows],
+  ) as mock_run:
+    result = reporting.analyze_customer_acquisition_performance(
+        CUSTOMER_ID,
+        campaign_id="111",
+        date_range="LAST_30_DAYS",
+        granularity="week",
+        login_customer_id="999",
+    )
+
+  assert mock_run.call_count == 2
+  cohort_query = mock_run.call_args_list[0].args[0]
+  total_query = mock_run.call_args_list[1].args[0]
+  assert "segments.new_versus_returning_customers" in cohort_query
+  assert "metrics.conversions_value" in cohort_query
+  assert "metrics.cost_micros" not in cohort_query
+  assert "metrics.cost_micros" in total_query
+  assert "segments.new_versus_returning_customers" not in total_query
+  assert "segments.week" in cohort_query
+  assert "segments.week" in total_query
+  assert "campaign.id = 111" in cohort_query
+  assert "campaign.id = 111" in total_query
+  preprocess_gaql_query(cohort_query)
+  preprocess_gaql_query(total_query)
+  assert all(call.args[2] == "999" for call in mock_run.call_args_list)
+
+  assert result["campaign_id"] == "111"
+  assert result["granularity"] == "WEEK"
+  assert result["period_count"] == 1
+  period = result["periods"][0]
+  assert period["period"] == "2026-08-03"
+  assert period["total_performance"] == {
+      "impressions": 1_000,
+      "clicks": 100,
+      "cost_micros": 6_000_000,
+  }
+  assert period["new_customer_summary"] == {
+      "conversions": 3.0,
+      "conversions_value": 360.0,
+      "all_conversions": 4.0,
+      "all_conversions_value": 450.0,
+      "new_customer_lifetime_value": 120.0,
+      "blended_cost_per_new_customer_micros": 2_000_000.0,
+  }
+  assert [
+      row["customer_type"] for row in period["customer_type_performance"]
+  ] == ["NEW", "NEW_AND_HIGH_LTV", "RETURNING"]
+  assert result["methodology"]["cost_is_customer_type_segmented"] is False
+
+
+def test_analyze_customer_acquisition_performance_adds_action_breakdown():
+  cohort_row = {
+      "campaign.id": "111",
+      "campaign.name": "Search",
+      "segments.date": "2026-08-12",
+      "segments.new_versus_returning_customers": "NEW",
+      "segments.conversion_action": "customers/123/conversionActions/77",
+      "segments.conversion_action_name": "Placed Order",
+      "segments.conversion_action_category": "PURCHASE",
+      "metrics.conversions": 1.0,
+      "metrics.conversions_value": 100.0,
+      "metrics.all_conversions": 1.0,
+      "metrics.all_conversions_value": 100.0,
+      "metrics.new_customer_lifetime_value": 25.0,
+  }
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query",
+      side_effect=[[cohort_row], []],
+  ) as mock_run:
+    result = reporting.analyze_customer_acquisition_performance(
+        CUSTOMER_ID,
+        campaign_id="111",
+        granularity="day",
+        include_conversion_action_breakdown=True,
+    )
+
+  cohort_query = mock_run.call_args_list[0].args[0]
+  assert "segments.conversion_action," in cohort_query
+  assert "segments.conversion_action_name" in cohort_query
+  assert result["periods"][0]["conversion_action_breakdown"] == [
+      {
+          "customer_type": "NEW",
+          "conversion_action": "customers/123/conversionActions/77",
+          "conversion_action_name": "Placed Order",
+          "conversion_action_category": "PURCHASE",
+          "conversions": 1.0,
+          "conversions_value": 100.0,
+          "all_conversions": 1.0,
+          "all_conversions_value": 100.0,
+          "new_customer_lifetime_value": 25.0,
+      }
+  ]
+
+
+def test_analyze_customer_acquisition_performance_rejects_bad_granularity():
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+    with pytest.raises(ToolError, match="Invalid granularity"):
+      reporting.analyze_customer_acquisition_performance(
+          CUSTOMER_ID,
+          campaign_id="111",
+          granularity="HOUR",
+      )
+
+  mock_run.assert_not_called()
+
+
 def test_list_keyword_quality_scores_builds_filtered_query():
   with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     mock_run.return_value = {

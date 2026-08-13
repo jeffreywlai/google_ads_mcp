@@ -24,6 +24,7 @@ import inspect
 import os
 from pathlib import Path
 import re
+import tomllib
 from unittest import mock
 
 from fastmcp import Client
@@ -54,6 +55,17 @@ from ads_mcp.tools import recommendations
 from ads_mcp.tools import search_terms
 from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
+
+
+def test_context_schema_marker_is_packaged():
+  """Installed distributions include the context schema marker."""
+  project_root = Path(__file__).resolve().parents[1]
+  pyproject = tomllib.loads(
+      (project_root / "pyproject.toml").read_text(encoding="utf-8")
+  )
+
+  package_data = pyproject["tool"]["setuptools"]["package-data"]["ads_mcp"]
+  assert "context/.context-schema-version" in package_data
 
 
 # All tool modules and their expected public tool functions.
@@ -175,6 +187,7 @@ TOOL_MODULES = {
         "list_geographic_performance",
         "list_impression_share",
         "get_campaign_performance",
+        "analyze_customer_acquisition_performance",
         "get_competitive_pressure_report",
         "get_campaign_conversion_goals",
         "list_keyword_quality_scores",
@@ -214,9 +227,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_110(self):
+  def test_total_tool_count_is_111(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 110, f"Expected 110 tools, found {total}"
+    assert total == 111, f"Expected 111 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -684,7 +697,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 110
+    assert len(registered_tools) == 111
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -1183,6 +1196,27 @@ class TestFastMcpConfiguration:
         assert populated.data[0].workflow == "changes"
         assert empty.structured_content == {"result": []}
         assert empty.data == []
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "new versus returning customer performance",
+          "new customer acquisition performance and CPA",
+      ],
+  )
+  def test_client_search_tools_routes_customer_acquisition_analysis(
+      self,
+      query,
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool("search_tools", {"query": query})
+
+        assert result.structured_content["result"][0]["name"] == (
+            "analyze_customer_acquisition_performance"
+        )
 
     asyncio.run(_run())
 
