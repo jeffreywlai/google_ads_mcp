@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from concurrent import futures
 import contextlib
+from contextvars import ContextVar
 import csv
 from copy import deepcopy
 import difflib
@@ -73,6 +74,7 @@ _PAGED_QUERY_CACHE_TTL_SECONDS = 90.0
 _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _PAGED_QUERY_CACHE_MAX_ENTRIES = 16
 _PAGED_QUERY_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_PAGE_PLAN_INSERT_BATCH_SIZE = 256
 _MAX_INLINE_PAGE_SIZE = 100
 INLINE_PAGE_BYTE_LIMIT = 32 * 1024
 INLINE_SECTION_BYTE_LIMIT = 40 * 1024
@@ -123,6 +125,13 @@ _PAGED_QUERY_BUILDS: dict[
     _PagedQueryCacheKey,
     futures.Future,
 ] = {}
+_PAGED_QUERY_SNAPSHOT_GROUPS: dict[_PagedSnapshotCacheKey, set[str]] = {}
+_PAGED_QUERY_GROUP_SNAPSHOTS: dict[str, set[_PagedSnapshotCacheKey]] = {}
+_ACTIVE_PAGED_QUERY_GROUPS: dict[str, int] = {}
+_CURRENT_PAGED_QUERY_GROUP: ContextVar[str | None] = ContextVar(
+    "google_ads_mcp_paged_query_group",
+    default=None,
+)
 _PAGED_QUERY_CACHE_LOCK = threading.Lock()
 _ACCOUNT_SNAPSHOT_CACHE: OrderedDict[
     tuple[str, str],
@@ -1464,6 +1473,19 @@ def _get_materialized_snapshot_rows(
     return deepcopy(cache_entry[1])
 
 
+def _insert_page_plan_batch(
+    connection: sqlite3.Connection,
+    plans: Sequence[tuple[int, int, int, int, int, int]],
+) -> None:
+  """Writes one bounded batch of page boundaries to a snapshot spool."""
+  connection.executemany(
+      "INSERT OR IGNORE INTO page_plans "
+      "(page_size, start_offset, end_offset, inline_bytes, "
+      "omitted_count, byte_limited) VALUES (?, ?, ?, ?, ?, ?)",
+      plans,
+  )
+
+
 class _SpooledGaqlSnapshot:
   """Immutable disk-backed GAQL rows with bounded page reads."""
 
@@ -1476,8 +1498,12 @@ class _SpooledGaqlSnapshot:
     self.file_path = file_path
     self.row_count = row_count
     self.columns = columns
-    self.serialized_bytes = os.path.getsize(file_path)
     self._plan_lock = threading.Lock()
+
+  @property
+  def serialized_bytes(self) -> int:
+    """Returns the current spool size, including materialized page plans."""
+    return os.path.getsize(self.file_path)
 
   def __del__(self):
     with contextlib.suppress(OSError):
@@ -1530,11 +1556,21 @@ class _SpooledGaqlSnapshot:
       page_bytes = 2
       displayed_count = 0
       plans = []
+
+      def _append_plan(
+          plan: tuple[int, int, int, int, int, int],
+      ) -> None:
+        plans.append(plan)
+        if len(plans) < _PAGE_PLAN_INSERT_BATCH_SIZE:
+          return
+        _insert_page_plan_batch(connection, plans)
+        plans.clear()
+
       for position, row_bytes in cursor:
         row_offset = position - 1
         oversized_row = row_bytes > _MAX_INLINE_PAGE_BYTES - 2
         if oversized_row and displayed_count:
-          plans.append(
+          _append_plan(
               (
                   page_size,
                   start_offset,
@@ -1556,7 +1592,7 @@ class _SpooledGaqlSnapshot:
                   "full_row_available_via": "bulk_export_call",
               }
           }
-          plans.append(
+          _append_plan(
               (
                   page_size,
                   start_offset,
@@ -1576,7 +1612,7 @@ class _SpooledGaqlSnapshot:
             or page_bytes + separator_bytes + row_bytes
             > _MAX_INLINE_PAGE_BYTES
         ):
-          plans.append(
+          _append_plan(
               (
                   page_size,
                   start_offset,
@@ -1593,7 +1629,7 @@ class _SpooledGaqlSnapshot:
         page_bytes += separator_bytes + row_bytes
         displayed_count += 1
       if displayed_count:
-        plans.append(
+        _append_plan(
             (
                 page_size,
                 start_offset,
@@ -1603,12 +1639,8 @@ class _SpooledGaqlSnapshot:
                 0,
             )
         )
-      connection.executemany(
-          "INSERT OR IGNORE INTO page_plans "
-          "(page_size, start_offset, end_offset, inline_bytes, "
-          "omitted_count, byte_limited) VALUES (?, ?, ?, ?, ?, ?)",
-          plans,
-      )
+      if plans:
+        _insert_page_plan_batch(connection, plans)
 
   def page(self, page_size: int, offset: int) -> dict[str, Any] | None:
     """Reads one validated page and compact plan metadata."""
@@ -1696,6 +1728,40 @@ class _SpooledRows(Sequence[dict[str, Any]]):
     return False
 
 
+@contextlib.contextmanager
+def gaql_snapshot_group() -> Iterator[str]:
+  """Groups every exact GAQL snapshot created by one public read tool.
+
+  Cache bounds evict groups atomically, so a composite response never returns
+  one live export token and another token that was already evicted while the
+  response was still being assembled. Nested read helpers inherit the outer
+  group. The newest group may temporarily exceed ordinary cache bounds, just
+  as one oversized exact snapshot already could, and remains subject to the
+  normal TTL and eviction caused by later independent reads.
+  """
+  inherited_group_id = _CURRENT_PAGED_QUERY_GROUP.get()
+  if inherited_group_id is not None:
+    yield inherited_group_id
+    return
+
+  group_id = uuid.uuid4().hex
+  group_token = _CURRENT_PAGED_QUERY_GROUP.set(group_id)
+  with _PAGED_QUERY_CACHE_LOCK:
+    _ACTIVE_PAGED_QUERY_GROUPS[group_id] = (
+        _ACTIVE_PAGED_QUERY_GROUPS.get(group_id, 0) + 1
+    )
+  try:
+    yield group_id
+  finally:
+    _CURRENT_PAGED_QUERY_GROUP.reset(group_token)
+    with _PAGED_QUERY_CACHE_LOCK:
+      remaining_uses = _ACTIVE_PAGED_QUERY_GROUPS.get(group_id, 1) - 1
+      if remaining_uses:
+        _ACTIVE_PAGED_QUERY_GROUPS[group_id] = remaining_uses
+      else:
+        _ACTIVE_PAGED_QUERY_GROUPS.pop(group_id, None)
+
+
 def _snapshot_cache_key(
     query_key: _PagedQueryCacheKey,
     snapshot_id: str,
@@ -1722,6 +1788,14 @@ def _remove_page_snapshot_unlocked(
 ) -> None:
   """Removes a snapshot and any latest-query pointer to it."""
   _PAGED_QUERY_CACHE.pop(snapshot_key, None)
+  group_ids = _PAGED_QUERY_SNAPSHOT_GROUPS.pop(snapshot_key, set())
+  for group_id in group_ids:
+    group_snapshot_keys = _PAGED_QUERY_GROUP_SNAPSHOTS.get(group_id)
+    if group_snapshot_keys is None:
+      continue
+    group_snapshot_keys.discard(snapshot_key)
+    if not group_snapshot_keys:
+      _PAGED_QUERY_GROUP_SNAPSHOTS.pop(group_id, None)
   query_key = _snapshot_query_key(snapshot_key)
   if _PAGED_QUERY_LATEST.get(query_key) == snapshot_key[5]:
     _PAGED_QUERY_LATEST.pop(query_key, None)
@@ -1738,10 +1812,25 @@ def _get_page_snapshot_unlocked(
     return None
 
   cached_at, cached_snapshot, _ = cache_entry
-  if (time.monotonic() - cached_at) > _PAGED_QUERY_CACHE_TTL_SECONDS:
-    _remove_page_snapshot_unlocked(snapshot_key)
+  component_keys = _snapshot_component_keys(snapshot_key)
+  component_group_ids = {
+      group_id
+      for component_key in component_keys
+      for group_id in _snapshot_group_ids(component_key)
+  }
+  if (
+      time.monotonic() - cached_at
+  ) > _PAGED_QUERY_CACHE_TTL_SECONDS and not component_group_ids.intersection(
+      _ACTIVE_PAGED_QUERY_GROUPS
+  ):
+    _remove_page_snapshot_component_unlocked(component_keys)
     return None
 
+  if _CURRENT_PAGED_QUERY_GROUP.get() is not None:
+    _associate_snapshot_with_current_group_unlocked(
+        snapshot_key,
+        snapshot_id,
+    )
   _PAGED_QUERY_CACHE.move_to_end(snapshot_key)
   return cached_snapshot
 
@@ -1779,10 +1868,25 @@ def _prune_page_cache_unlocked(now: float) -> None:
   expired_snapshot_keys = [
       snapshot_key
       for snapshot_key, cache_entry in _PAGED_QUERY_CACHE.items()
-      if (now - cache_entry[0]) > _PAGED_QUERY_CACHE_TTL_SECONDS
+      if (
+          (now - cache_entry[0]) > _PAGED_QUERY_CACHE_TTL_SECONDS
+          and not _snapshot_group_ids(snapshot_key).intersection(
+              _ACTIVE_PAGED_QUERY_GROUPS
+          )
+      )
   ]
   for snapshot_key in expired_snapshot_keys:
-    _remove_page_snapshot_unlocked(snapshot_key)
+    if snapshot_key not in _PAGED_QUERY_CACHE:
+      continue
+    component_keys = _snapshot_component_keys(snapshot_key)
+    component_group_ids = {
+        group_id
+        for component_key in component_keys
+        for group_id in _snapshot_group_ids(component_key)
+    }
+    if component_group_ids.intersection(_ACTIVE_PAGED_QUERY_GROUPS):
+      continue
+    _remove_page_snapshot_component_unlocked(component_keys)
 
   dangling_query_keys = [
       query_key
@@ -1792,34 +1896,139 @@ def _prune_page_cache_unlocked(now: float) -> None:
   for query_key in dangling_query_keys:
     _PAGED_QUERY_LATEST.pop(query_key, None)
 
-
-def _enforce_page_cache_bounds_unlocked(credential_scope: str) -> None:
-  """Applies per-principal and process count/byte snapshot bounds."""
-  scoped_snapshot_keys = [
+  stale_group_keys = [
       snapshot_key
-      for snapshot_key in _PAGED_QUERY_CACHE
-      if snapshot_key[0] == credential_scope
+      for snapshot_key in _PAGED_QUERY_SNAPSHOT_GROUPS
+      if snapshot_key not in _PAGED_QUERY_CACHE
   ]
-  while len(scoped_snapshot_keys) > _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE:
-    _remove_page_snapshot_unlocked(scoped_snapshot_keys.pop(0))
+  for snapshot_key in stale_group_keys:
+    group_ids = _PAGED_QUERY_SNAPSHOT_GROUPS.pop(snapshot_key, set())
+    for group_id in group_ids:
+      group_snapshot_keys = _PAGED_QUERY_GROUP_SNAPSHOTS.get(group_id)
+      if group_snapshot_keys is None:
+        continue
+      group_snapshot_keys.discard(snapshot_key)
+      if not group_snapshot_keys:
+        _PAGED_QUERY_GROUP_SNAPSHOTS.pop(group_id, None)
+
+
+def _snapshot_group_ids(snapshot_key: _PagedSnapshotCacheKey) -> set[str]:
+  """Returns every public-response group that advertises one snapshot."""
+  return _PAGED_QUERY_SNAPSHOT_GROUPS.get(
+      snapshot_key,
+      {snapshot_key[5]},
+  )
+
+
+def _associate_snapshot_with_current_group_unlocked(
+    snapshot_key: _PagedSnapshotCacheKey,
+    fallback_group_id: str,
+) -> str:
+  """Associates a reused snapshot with the response now advertising it."""
+  group_id = _CURRENT_PAGED_QUERY_GROUP.get() or fallback_group_id
+  _PAGED_QUERY_SNAPSHOT_GROUPS.setdefault(snapshot_key, set()).add(group_id)
+  _PAGED_QUERY_GROUP_SNAPSHOTS.setdefault(group_id, set()).add(snapshot_key)
+  return group_id
+
+
+def _snapshot_component_keys(
+    seed_snapshot_key: _PagedSnapshotCacheKey,
+) -> set[_PagedSnapshotCacheKey]:
+  """Returns the transitive atomic component for overlapping responses."""
+  component_keys = set()
+  pending_keys = [seed_snapshot_key]
+  visited_group_ids = set()
+  while pending_keys:
+    snapshot_key = pending_keys.pop()
+    if snapshot_key in component_keys:
+      continue
+    component_keys.add(snapshot_key)
+    for group_id in _snapshot_group_ids(snapshot_key):
+      if group_id in visited_group_ids:
+        continue
+      visited_group_ids.add(group_id)
+      pending_keys.extend(_PAGED_QUERY_GROUP_SNAPSHOTS.get(group_id, ()))
+  return component_keys
+
+
+def _remove_page_snapshot_component_unlocked(
+    snapshot_keys: set[_PagedSnapshotCacheKey],
+) -> None:
+  """Evicts overlapping exact-response groups as one indivisible unit."""
+  for snapshot_key in snapshot_keys:
+    _remove_page_snapshot_unlocked(snapshot_key)
+
+
+def _oldest_removable_snapshot_component(
+    snapshot_keys: Sequence[_PagedSnapshotCacheKey],
+    preserved_group_id: str,
+) -> set[_PagedSnapshotCacheKey] | None:
+  """Returns the oldest inactive component that can be evicted atomically."""
+  for snapshot_key in snapshot_keys:
+    component_keys = _snapshot_component_keys(snapshot_key)
+    component_group_ids = {
+        group_id
+        for component_key in component_keys
+        for group_id in _snapshot_group_ids(component_key)
+    }
+    if preserved_group_id in component_group_ids:
+      continue
+    if component_group_ids.intersection(_ACTIVE_PAGED_QUERY_GROUPS):
+      continue
+    return component_keys
+  return None
+
+
+def _enforce_page_cache_bounds_unlocked(
+    credential_scope: str,
+    preserved_group_id: str,
+) -> None:
+  """Applies cache bounds without splitting an advertised snapshot group."""
+  while True:
+    scoped_snapshot_keys = [
+        snapshot_key
+        for snapshot_key in _PAGED_QUERY_CACHE
+        if snapshot_key[0] == credential_scope
+    ]
+    if len(scoped_snapshot_keys) <= (_PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE):
+      break
+    component_keys = _oldest_removable_snapshot_component(
+        scoped_snapshot_keys,
+        preserved_group_id,
+    )
+    if component_keys is None:
+      break
+    _remove_page_snapshot_component_unlocked(component_keys)
 
   while len(_PAGED_QUERY_CACHE) > _PAGED_QUERY_CACHE_MAX_ENTRIES:
-    oldest_snapshot_key = next(iter(_PAGED_QUERY_CACHE))
-    _remove_page_snapshot_unlocked(oldest_snapshot_key)
+    component_keys = _oldest_removable_snapshot_component(
+        list(_PAGED_QUERY_CACHE),
+        preserved_group_id,
+    )
+    if component_keys is None:
+      break
+    _remove_page_snapshot_component_unlocked(component_keys)
 
   retained_bytes = sum(
       cache_entry[2] for cache_entry in _PAGED_QUERY_CACHE.values()
   )
-  # Preserve the newest completed snapshot even when one on-disk spool exceeds
-  # the ordinary process budget so freshly returned tokens do not start dead.
-  while (
-      retained_bytes > _PAGED_QUERY_CACHE_MAX_BYTES
-      and len(_PAGED_QUERY_CACHE) > 1
-  ):
-    oldest_snapshot_key = next(iter(_PAGED_QUERY_CACHE))
-    removed_entry = _PAGED_QUERY_CACHE[oldest_snapshot_key]
-    _remove_page_snapshot_unlocked(oldest_snapshot_key)
-    retained_bytes -= removed_entry[2]
+  # Preserve every snapshot in the newest public response even when that
+  # response's on-disk spools exceed the ordinary process budget. Splitting a
+  # group would return export tokens that were dead on arrival.
+  while retained_bytes > _PAGED_QUERY_CACHE_MAX_BYTES:
+    component_keys = _oldest_removable_snapshot_component(
+        list(_PAGED_QUERY_CACHE),
+        preserved_group_id,
+    )
+    if component_keys is None:
+      break
+    removed_bytes = sum(
+        _PAGED_QUERY_CACHE[snapshot_key][2]
+        for snapshot_key in component_keys
+        if snapshot_key in _PAGED_QUERY_CACHE
+    )
+    _remove_page_snapshot_component_unlocked(component_keys)
+    retained_bytes -= removed_bytes
 
 
 def _publish_page_snapshot_unlocked(
@@ -1839,12 +2048,46 @@ def _publish_page_snapshot_unlocked(
       snapshot,
       snapshot.serialized_bytes,
   )
+  group_id = _associate_snapshot_with_current_group_unlocked(
+      snapshot_key,
+      snapshot_id,
+  )
   _PAGED_QUERY_CACHE.move_to_end(snapshot_key)
-  _enforce_page_cache_bounds_unlocked(query_key[0])
+  _enforce_page_cache_bounds_unlocked(query_key[0], group_id)
   if make_latest or (
       make_latest_if_missing and query_key not in _PAGED_QUERY_LATEST
   ):
     _PAGED_QUERY_LATEST[query_key] = snapshot_id
+
+
+def _refresh_page_snapshot_size_unlocked(
+    query_key: _PagedQueryCacheKey,
+    snapshot_id: str,
+    snapshot: _SpooledGaqlSnapshot,
+) -> None:
+  """Accounts for page-plan disk growth without extending snapshot TTL."""
+  snapshot_key = _snapshot_cache_key(query_key, snapshot_id)
+  cache_entry = _PAGED_QUERY_CACHE.get(snapshot_key)
+  if cache_entry is None:
+    _publish_page_snapshot_unlocked(
+        query_key,
+        snapshot_id,
+        snapshot,
+        make_latest_if_missing=True,
+    )
+    return
+  cached_at, _, _ = cache_entry
+  _PAGED_QUERY_CACHE[snapshot_key] = (
+      cached_at,
+      snapshot,
+      snapshot.serialized_bytes,
+  )
+  group_id = _associate_snapshot_with_current_group_unlocked(
+      snapshot_key,
+      snapshot_id,
+  )
+  _PAGED_QUERY_CACHE.move_to_end(snapshot_key)
+  _enforce_page_cache_bounds_unlocked(query_key[0], group_id)
 
 
 def _get_or_build_page_snapshot(
@@ -1873,6 +2116,11 @@ def _get_or_build_page_snapshot(
 
   if not owns_build:
     snapshot_id, snapshot = build.result()
+    with _PAGED_QUERY_CACHE_LOCK:
+      _associate_snapshot_with_current_group_unlocked(
+          _snapshot_cache_key(query_key, snapshot_id),
+          snapshot_id,
+      )
     return snapshot_id, snapshot, None
 
   try:
@@ -2574,6 +2822,12 @@ def run_gaql_query_page(
             snapshot_id,
             snapshot,
             make_latest_if_missing=True,
+        )
+      else:
+        _refresh_page_snapshot_size_unlocked(
+            query_key,
+            snapshot_id,
+            snapshot,
         )
     return {
         "rows": page_rows,

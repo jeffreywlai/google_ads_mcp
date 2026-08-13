@@ -51,6 +51,9 @@ def reset_ads_client():
   api._PAGED_QUERY_CACHE = api.OrderedDict()
   api._PAGED_QUERY_LATEST = {}
   api._PAGED_QUERY_BUILDS = {}
+  api._PAGED_QUERY_SNAPSHOT_GROUPS = {}
+  api._PAGED_QUERY_GROUP_SNAPSHOTS = {}
+  api._ACTIVE_PAGED_QUERY_GROUPS = {}
   api._ACCOUNT_SNAPSHOT_CACHE = api.OrderedDict()
   api._MANAGED_TEMP_ARTIFACTS = api.OrderedDict()
   api._MANAGED_TEMP_ARTIFACT_REAPER = None
@@ -70,6 +73,9 @@ def reset_ads_client():
   api._PAGED_QUERY_CACHE = api.OrderedDict()
   api._PAGED_QUERY_LATEST = {}
   api._PAGED_QUERY_BUILDS = {}
+  api._PAGED_QUERY_SNAPSHOT_GROUPS = {}
+  api._PAGED_QUERY_GROUP_SNAPSHOTS = {}
+  api._ACTIVE_PAGED_QUERY_GROUPS = {}
   api._ACCOUNT_SNAPSHOT_CACHE = api.OrderedDict()
   for artifact_path in list(api._MANAGED_TEMP_ARTIFACTS):
     api.remove_temp_csv_file(artifact_path)
@@ -1497,6 +1503,40 @@ def test_paged_delivery_bounds_heterogeneous_rows_by_serialized_bytes():
   ]
 
 
+def test_spooled_page_plan_inserts_boundaries_in_bounded_batches():
+  rows = [{"campaign.id": str(index)} for index in range(600)]
+  with mock.patch.object(
+      api,
+      "_iter_gaql_query_attempt",
+      return_value=rows,
+  ):
+    snapshot = api._build_spooled_gaql_snapshot(
+        "SELECT campaign.id FROM campaign",
+        "123",
+        None,
+        None,
+    )
+
+  batch_sizes = []
+  original_insert = api._insert_page_plan_batch
+
+  def _record_batch(connection, plans):
+    batch_sizes.append(len(plans))
+    return original_insert(connection, plans)
+
+  with mock.patch.object(
+      api,
+      "_insert_page_plan_batch",
+      side_effect=_record_batch,
+  ):
+    page = snapshot.page(page_size=1, offset=0)
+
+  assert page["rows"] == [rows[0]]
+  assert len(batch_sizes) > 1
+  assert sum(batch_sizes) == len(rows)
+  assert max(batch_sizes) <= api._PAGE_PLAN_INSERT_BATCH_SIZE
+
+
 def test_single_oversized_row_uses_placeholder_and_exact_export_path():
   original_row = {"campaign.id": "1", "payload": "x" * 60_000}
   with mock.patch.object(
@@ -1795,6 +1835,161 @@ def test_page_snapshot_cache_evicts_by_spool_bytes(monkeypatch, tmp_path):
   assert api._snapshot_cache_key(second_key, "b" * 32) in (
       api._PAGED_QUERY_CACHE
   )
+
+
+def test_snapshot_cache_keeps_composite_response_group_atomic(
+    monkeypatch,
+    tmp_path,
+):
+  monkeypatch.setattr(api, "_PAGED_QUERY_CACHE_MAX_BYTES", 2_500)
+  monkeypatch.setattr(api, "_PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE", 1)
+  monkeypatch.setattr(api, "_PAGED_QUERY_CACHE_MAX_ENTRIES", 1)
+  query_keys = [
+      api._page_cache_key(f"SELECT {marker}", "123", None)
+      for marker in ("first", "second", "later")
+  ]
+  snapshot_ids = ["a" * 32, "b" * 32, "c" * 32]
+  snapshots = []
+  for index, marker in enumerate(("a", "b", "c")):
+    spool_path = tmp_path / f"grouped-snapshot-{index}.sqlite3"
+    spool_path.write_bytes(marker.encode() * 1_500)
+    snapshots.append(api._SpooledGaqlSnapshot(str(spool_path), 1, ()))
+
+  with api.gaql_snapshot_group():
+    with api._PAGED_QUERY_CACHE_LOCK:
+      api._publish_page_snapshot_unlocked(
+          query_keys[0],
+          snapshot_ids[0],
+          snapshots[0],
+      )
+      api._publish_page_snapshot_unlocked(
+          query_keys[1],
+          snapshot_ids[1],
+          snapshots[1],
+      )
+
+  first_rows = api._get_export_snapshot_rows(
+      api._encode_snapshot_token(snapshot_ids[0])
+  )
+  second_rows = api._get_export_snapshot_rows(
+      api._encode_snapshot_token(snapshot_ids[1])
+  )
+  assert first_rows._snapshot is snapshots[0]
+  assert second_rows._snapshot is snapshots[1]
+  assert len(api._PAGED_QUERY_CACHE) == 2
+  assert (
+      len(
+          {
+              group_id
+              for group_ids in api._PAGED_QUERY_SNAPSHOT_GROUPS.values()
+              for group_id in group_ids
+          }
+      )
+      == 1
+  )
+
+  with api._PAGED_QUERY_CACHE_LOCK:
+    api._publish_page_snapshot_unlocked(
+        query_keys[2],
+        snapshot_ids[2],
+        snapshots[2],
+    )
+
+  assert list(api._PAGED_QUERY_CACHE) == [
+      api._snapshot_cache_key(query_keys[2], snapshot_ids[2])
+  ]
+
+
+def test_snapshot_cache_keeps_active_composite_group_past_ttl(
+    monkeypatch,
+    tmp_path,
+):
+  monotonic_time = [100.0]
+  monkeypatch.setattr(
+      api.time,
+      "monotonic",
+      lambda: monotonic_time[0],
+  )
+  first_key = api._page_cache_key("SELECT first", "123", None)
+  second_key = api._page_cache_key("SELECT second", "123", None)
+  first_id = "a" * 32
+  second_id = "b" * 32
+  snapshots = []
+  for index, marker in enumerate(("a", "b")):
+    spool_path = tmp_path / f"ttl-group-{index}.sqlite3"
+    spool_path.write_bytes(marker.encode() * 100)
+    snapshots.append(api._SpooledGaqlSnapshot(str(spool_path), 1, ()))
+
+  with api.gaql_snapshot_group():
+    with api._PAGED_QUERY_CACHE_LOCK:
+      api._publish_page_snapshot_unlocked(
+          first_key,
+          first_id,
+          snapshots[0],
+      )
+    monotonic_time[0] += api._PAGED_QUERY_CACHE_TTL_SECONDS + 1
+    with api._PAGED_QUERY_CACHE_LOCK:
+      api._publish_page_snapshot_unlocked(
+          second_key,
+          second_id,
+          snapshots[1],
+      )
+    assert (
+        api._get_export_snapshot_rows(
+            api._encode_snapshot_token(first_id)
+        )._snapshot
+        is snapshots[0]
+    )
+
+  monotonic_time[0] += 1
+  with pytest.raises(ToolError, match="expired"):
+    api._get_export_snapshot_rows(api._encode_snapshot_token(first_id))
+
+
+def test_snapshot_cache_evicts_overlapping_response_groups_atomically(
+    monkeypatch,
+    tmp_path,
+):
+  monkeypatch.setattr(api, "_PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE", 1)
+  monkeypatch.setattr(api, "_PAGED_QUERY_CACHE_MAX_ENTRIES", 1)
+  query_keys = [
+      api._page_cache_key(f"SELECT {index}", "123", None) for index in range(4)
+  ]
+  snapshot_ids = [character * 32 for character in "abcd"]
+  snapshots = []
+  for index, marker in enumerate("abcd"):
+    spool_path = tmp_path / f"overlap-{index}.sqlite3"
+    spool_path.write_bytes(marker.encode() * 100)
+    snapshots.append(api._SpooledGaqlSnapshot(str(spool_path), 1, ()))
+
+  with api.gaql_snapshot_group():
+    with api._PAGED_QUERY_CACHE_LOCK:
+      api._publish_page_snapshot_unlocked(
+          query_keys[0], snapshot_ids[0], snapshots[0]
+      )
+      api._publish_page_snapshot_unlocked(
+          query_keys[1], snapshot_ids[1], snapshots[1]
+      )
+
+  with api.gaql_snapshot_group():
+    with api._PAGED_QUERY_CACHE_LOCK:
+      assert (
+          api._get_page_snapshot_unlocked(query_keys[1], snapshot_ids[1])
+          is snapshots[1]
+      )
+      api._publish_page_snapshot_unlocked(
+          query_keys[2], snapshot_ids[2], snapshots[2]
+      )
+
+  assert len(api._PAGED_QUERY_CACHE) == 3
+  with api._PAGED_QUERY_CACHE_LOCK:
+    api._publish_page_snapshot_unlocked(
+        query_keys[3], snapshot_ids[3], snapshots[3]
+    )
+
+  assert list(api._PAGED_QUERY_CACHE) == [
+      api._snapshot_cache_key(query_keys[3], snapshot_ids[3])
+  ]
 
 
 def test_mutation_artifact_failure_does_not_make_mutation_retryable():

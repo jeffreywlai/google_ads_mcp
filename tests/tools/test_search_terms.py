@@ -16,6 +16,7 @@
 
 from unittest import mock
 
+from ads_mcp.tools import api
 from ads_mcp.tools import search_terms
 import pytest
 
@@ -397,6 +398,33 @@ def test_compare_search_terms_ignores_empty_string_campaign_ids():
   first_query = mock_query.call_args_list[0].args[0]
   assert "campaign.id IN ()" not in first_query
   assert "campaign.id IN" not in first_query
+
+
+def test_compare_search_terms_groups_both_exact_source_snapshots():
+  observed_group_ids = []
+
+  def _grouped_snapshot(*_args, **_kwargs):
+    observed_group_ids.append(api._CURRENT_PAGED_QUERY_GROUP.get())
+    marker = "a" if len(observed_group_ids) == 1 else "b"
+    return _snapshot([], marker)
+
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      side_effect=_grouped_snapshot,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.search_terms.get_campaign_context",
+        return_value={},
+    ):
+      search_terms.compare_search_terms(
+          CUSTOMER_ID,
+          period_a="LAST_7_DAYS",
+          period_b="LAST_14_DAYS",
+      )
+
+  assert observed_group_ids[0] is not None
+  assert observed_group_ids[0] == observed_group_ids[1]
+  assert api._CURRENT_PAGED_QUERY_GROUP.get() is None
 
 
 def test_compare_search_terms_bounds_preview_without_capping_analysis():
