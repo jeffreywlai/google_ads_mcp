@@ -80,7 +80,7 @@ def test_list_recommendations_fresh_snapshots_have_deterministic_total_order():
     ):
       with mock.patch.object(
           api,
-          "run_gaql_query",
+          "_iter_gaql_query_attempt",
           side_effect=[first_rows, second_rows],
       ):
         first_result = recommendations.list_recommendations(CUSTOMER_ID)

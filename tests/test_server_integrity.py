@@ -16,11 +16,13 @@
 and cross-tool state management.
 """
 
+import ast
 import asyncio
 from datetime import date
 from datetime import timedelta
 import inspect
 import os
+from pathlib import Path
 import re
 from unittest import mock
 
@@ -59,6 +61,8 @@ TOOL_MODULES = {
     api: [
         "execute_gaql",
         "export_gaql_csv",
+        "export_accessible_accounts_csv",
+        "export_materialized_response_csv",
         "list_accessible_accounts",
     ],
     audiences: [
@@ -124,6 +128,7 @@ TOOL_MODULES = {
         "get_reporting_view_doc",
         "get_reporting_fields_doc",
         "search_google_ads_fields",
+        "export_google_ads_fields_csv",
         "get_tool_visibility_profile",
         "unlock_mutation_tools",
         "lock_mutation_tools",
@@ -209,9 +214,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_107(self):
+  def test_total_tool_count_is_110(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 107, f"Expected 107 tools, found {total}"
+    assert total == 110, f"Expected 110 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -221,6 +226,71 @@ class TestToolRegistration:
     func = getattr(module, func_name, None)
     assert func is not None, f"{module.__name__}.{func_name} does not exist"
     assert callable(func), f"{module.__name__}.{func_name} is not callable"
+
+  def test_gaql_page_envelopes_preserve_exact_snapshot_export(self):
+    """Future GAQL page responses must propagate the source snapshot token."""
+    tools_dir = Path(api.__file__).parent
+    excluded_modules = {"api.py", "docs.py", "keyword_planner.py"}
+    missing_snapshot_tokens = []
+    for source_path in tools_dir.glob("*.py"):
+      if source_path.name in excluded_modules:
+        continue
+      tree = ast.parse(source_path.read_text(encoding="utf-8"))
+      for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+          continue
+        if node.name.startswith("_empty_"):
+          continue
+        for call in ast.walk(node):
+          if not isinstance(call, ast.Call):
+            continue
+          if not (
+              isinstance(call.func, ast.Name)
+              and call.func.id == "build_paginated_list_response"
+          ):
+            continue
+          keyword_names = {keyword.arg for keyword in call.keywords}
+          if "snapshot_token" not in keyword_names:
+            missing_snapshot_tokens.append(f"{source_path.name}:{node.name}")
+
+    assert (
+        not missing_snapshot_tokens
+    ), "GAQL list envelopes without exact snapshot export: " + ", ".join(
+        missing_snapshot_tokens
+    )
+
+  def test_variable_mutation_results_use_lossless_bounded_delivery(self):
+    """Mutation result arrays must use the shared preview/artifact contract."""
+    registered_tools = {
+        tool.name: tool
+        for tool in asyncio.run(mcp_server._local_provider.list_tools())
+    }
+    unbounded_mutation_results = []
+    for module, function_names in TOOL_MODULES.items():
+      for function_name in function_names:
+        tool = registered_tools[function_name]
+        if MUTATE_TAG not in set(tool.tags or []):
+          continue
+        source = inspect.getsource(getattr(module, function_name))
+        source_without_single_result = re.sub(
+            r"response\.results\s*\[\s*0\s*\]",
+            "",
+            source,
+        )
+        if "response.results" not in source_without_single_result:
+          continue
+        if not (
+            "build_bounded_mutation_response" in source
+            or "_bound_audience_mutation_result" in source
+        ):
+          unbounded_mutation_results.append(
+              f"{module.__name__}.{function_name}"
+          )
+
+    assert not unbounded_mutation_results, (
+        "Variable-cardinality mutation results without the shared lossless "
+        "delivery helper: " + ", ".join(unbounded_mutation_results)
+    )
 
 
 # ===================================================================
@@ -261,6 +331,9 @@ class TestToolSignatures:
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
       "search_google_ads_fields",
+      "export_google_ads_fields_csv",
+      "export_accessible_accounts_csv",
+      "export_materialized_response_csv",
       "list_accessible_accounts",
       "get_tool_visibility_profile",
       "unlock_mutation_tools",
@@ -289,6 +362,9 @@ class TestToolSignatures:
       "get_reporting_view_doc",
       "get_reporting_fields_doc",
       "search_google_ads_fields",
+      "export_google_ads_fields_csv",
+      "export_accessible_accounts_csv",
+      "export_materialized_response_csv",
       "list_accessible_accounts",
       "get_tool_visibility_profile",
       "unlock_mutation_tools",
@@ -309,6 +385,9 @@ class TestToolSignatures:
               "get_reporting_view_doc",
               "get_reporting_fields_doc",
               "search_google_ads_fields",
+              "export_google_ads_fields_csv",
+              "export_accessible_accounts_csv",
+              "export_materialized_response_csv",
               "list_accessible_accounts",
               "get_tool_visibility_profile",
               "unlock_mutation_tools",
@@ -395,15 +474,30 @@ class TestEmbeddedGaqlSyntax:
 
   @pytest.fixture(autouse=True)
   def mock_ads_client(self):
+    def _paged_query(**kwargs):
+      self.paged_query = kwargs["query"]
+      return {
+          "rows": [],
+          "total_results_count": 0,
+          "next_page_token": None,
+      }
+
+    self.paged_query = None
     with mock.patch("ads_mcp.tools.negatives.get_ads_client") as m:
       client = mock.Mock()
       m.return_value = client
       service = client.get_service.return_value
       service.search_stream.return_value = []
       self.service = service
-      yield
+      with mock.patch(
+          "ads_mcp.tools.negatives.run_gaql_query_page",
+          side_effect=_paged_query,
+      ):
+        yield
 
   def _get_query(self):
+    if self.paged_query is not None:
+      return self.paged_query
     return self.service.search_stream.call_args.kwargs.get(
         "query",
         self.service.search_stream.call_args[1].get("query", ""),
@@ -590,7 +684,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 107
+    assert len(registered_tools) == 110
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -599,6 +693,10 @@ class TestFastMcpConfiguration:
       ), f"{tool_name} should have FastMCP annotations"
 
     assert registered_tools["execute_gaql"].annotations.readOnlyHint is True
+    assert (
+        registered_tools["list_accessible_accounts"].annotations.readOnlyHint
+        is True
+    )
     assert (
         registered_tools["export_gaql_csv"].annotations.readOnlyHint is False
     )
@@ -616,6 +714,18 @@ class TestFastMcpConfiguration:
         is True
     )
     assert MUTATE_TAG not in registered_tools["export_gaql_csv"].tags
+    assert (
+        registered_tools[
+            "export_accessible_accounts_csv"
+        ].annotations.readOnlyHint
+        is False
+    )
+    assert (
+        registered_tools[
+            "export_accessible_accounts_csv"
+        ].annotations.destructiveHint
+        is True
+    )
     export_search_items = compact_search_result_serializer(
         [registered_tools["export_gaql_csv"]]
     )
@@ -907,21 +1017,27 @@ class TestFastMcpConfiguration:
               },
           )
 
-        expected = {
-            "change_events": rows,
-            "returned_count": 1,
-            "total_count": 1,
-            "total_page_count": 1,
-            "truncated": False,
-            "next_page_token": None,
-            "page_size": 100,
-            "account_time_zone": "Etc/UTC",
-            "account_today": account_today.isoformat(),
-            "resolved_date_range": {
-                "start_date": (account_today - timedelta(days=7)).isoformat(),
-                "end_date": account_today.isoformat(),
-            },
-        }
+          expected = {
+              "change_events": rows,
+              "returned_count": 1,
+              "total_count": 1,
+              "total_page_count": 1,
+              "truncated": False,
+              "has_more": False,
+              "complete_inline": True,
+              "next_page_token": None,
+              "page_size": 100,
+              "requested_page_size": 100,
+              "page_size_clamped": False,
+              "account_time_zone": "Etc/UTC",
+              "account_today": account_today.isoformat(),
+              "resolved_date_range": {
+                  "start_date": (
+                      account_today - timedelta(days=7)
+                  ).isoformat(),
+                  "end_date": account_today.isoformat(),
+              },
+          }
         assert direct_result.structured_content == expected
         assert proxy_result.structured_content == expected
         assert "change_events" in direct_result.data
@@ -960,21 +1076,27 @@ class TestFastMcpConfiguration:
               },
           )
 
-        expected = {
-            "change_events": [],
-            "returned_count": 0,
-            "total_count": 0,
-            "total_page_count": 0,
-            "truncated": False,
-            "next_page_token": None,
-            "page_size": 100,
-            "account_time_zone": "Etc/UTC",
-            "account_today": account_today.isoformat(),
-            "resolved_date_range": {
-                "start_date": (account_today - timedelta(days=7)).isoformat(),
-                "end_date": account_today.isoformat(),
-            },
-        }
+          expected = {
+              "change_events": [],
+              "returned_count": 0,
+              "total_count": 0,
+              "total_page_count": 0,
+              "truncated": False,
+              "has_more": False,
+              "complete_inline": True,
+              "next_page_token": None,
+              "page_size": 100,
+              "requested_page_size": 100,
+              "page_size_clamped": False,
+              "account_time_zone": "Etc/UTC",
+              "account_today": account_today.isoformat(),
+              "resolved_date_range": {
+                  "start_date": (
+                      account_today - timedelta(days=7)
+                  ).isoformat(),
+                  "end_date": account_today.isoformat(),
+              },
+          }
         assert direct_result.structured_content == expected
         assert proxy_result.structured_content == expected
         assert direct_result.data == expected
@@ -1020,15 +1142,19 @@ class TestFastMcpConfiguration:
               },
           )
 
-        expected = {
-            "customer_search_term_insights": rows,
-            "returned_count": 1,
-            "total_count": 1,
-            "total_page_count": 1,
-            "truncated": False,
-            "next_page_token": None,
-            "page_size": 1000,
-        }
+          expected = {
+              "customer_search_term_insights": rows,
+              "returned_count": 1,
+              "total_count": 1,
+              "total_page_count": 1,
+              "truncated": False,
+              "has_more": False,
+              "complete_inline": True,
+              "next_page_token": None,
+              "page_size": 100,
+              "requested_page_size": 1000,
+              "page_size_clamped": True,
+          }
         assert direct_result.structured_content == expected
         assert proxy_result.structured_content == expected
         assert direct_result.data == expected
@@ -1228,12 +1354,13 @@ class TestFastMcpConfiguration:
             {"query": query},
         )
 
-        assert result.structured_content["result"][0]["name"] not in (
+        result_items = result.structured_content["result"]
+        assert not result_items or result_items[0]["name"] not in {
             "export_change_history_csv",
             "get_change_history_extended",
             "list_change_events",
             "list_change_statuses",
-        )
+        }
 
     asyncio.run(_run())
 
@@ -1548,28 +1675,45 @@ class TestFastMcpConfiguration:
     asyncio.run(_run())
 
   @pytest.mark.parametrize(
-      "query",
+      ("query", "expected_tool"),
       [
-          "export all asset group assets to csv",
-          "export all audience performance",
-          "full demographic performance export",
-          "export every campaign audience",
-          "download all recommendations",
-          "dump complete audience performance to disk",
-          "dump all recommendations",
-          "save all recommendations to disk",
-          "write recommendations to disk",
-          "persist all recommendations to disk",
-          "store recommendations on disk",
-          "save all recommendations as a spreadsheet",
-          "save demographic performance as XLSX",
-          "send asset group assets to disk",
-          "archive audience performance on disk",
-          "save audience performance locally",
-          "store recommendations locally",
+          ("export all asset group assets to csv", "list_asset_group_assets"),
+          ("export all audience performance", "list_audience_performance"),
+          (
+              "full demographic performance export",
+              "get_demographic_performance",
+          ),
+          ("export every campaign audience", "list_campaign_audiences"),
+          ("download all recommendations", "list_recommendations"),
+          (
+              "dump complete audience performance to disk",
+              "list_audience_performance",
+          ),
+          ("dump all recommendations", "list_recommendations"),
+          ("save all recommendations to disk", "list_recommendations"),
+          ("write recommendations to disk", "list_recommendations"),
+          ("persist all recommendations to disk", "list_recommendations"),
+          ("store recommendations on disk", "list_recommendations"),
+          (
+              "save all recommendations as a spreadsheet",
+              "list_recommendations",
+          ),
+          (
+              "save demographic performance as XLSX",
+              "get_demographic_performance",
+          ),
+          ("send asset group assets to disk", "list_asset_group_assets"),
+          (
+              "archive audience performance on disk",
+              "list_audience_performance",
+          ),
+          ("save audience performance locally", "list_audience_performance"),
+          ("store recommendations locally", "list_recommendations"),
       ],
   )
-  def test_client_search_tools_routes_large_exports_to_gaql_csv(self, query):
+  def test_client_search_tools_routes_large_exports_to_dedicated_sources(
+      self, query, expected_tool
+  ):
     async def _run():
       async with Client(mcp_server) as client:
         result = await client.call_tool(
@@ -1577,9 +1721,7 @@ class TestFastMcpConfiguration:
             {"query": query},
         )
 
-        assert result.structured_content["result"][0]["name"] == (
-            "export_gaql_csv"
-        )
+        assert result.structured_content["result"][0]["name"] == expected_tool
 
     asyncio.run(_run())
 
@@ -1742,16 +1884,7 @@ class TestFastMcpConfiguration:
             item["name"] for item in locked_result.structured_content["result"]
         }
 
-        assert expected_tool not in locked_names
-        assert locked_names.isdisjoint(
-            {
-                "export_change_history_csv",
-                "get_change_history_extended",
-                "get_competitive_pressure_report",
-                "list_change_events",
-                "list_change_statuses",
-            }
-        )
+        assert not locked_names
 
         await client.call_tool("unlock_mutation_tools", {})
         unlocked_result = await client.call_tool(
@@ -1776,6 +1909,187 @@ class TestFastMcpConfiguration:
         )
 
         await client.call_tool("lock_mutation_tools", {})
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      ("query", "expected_read_tool"),
+      [
+          ("do not pause campaign 123", None),
+          ("should I pause campaign 123", None),
+          ("which recommendations should I apply", "list_recommendations"),
+          ("show change to campaign 123 budget", None),
+          ("pause campaign 123 and apply recommendations", None),
+          ("remove campaign audiences and pause campaign 123", None),
+      ],
+  )
+  def test_client_search_tools_excludes_guarded_or_ambiguous_mutations(
+      self, query, expected_read_tool
+  ):
+    async def _run():
+      mutation_tools = {
+          "apply_recommendations",
+          "copy_audiences_between_campaigns",
+          "remove_campaign_audiences",
+          "set_campaign_status",
+          "update_campaign_budget",
+      }
+      async with Client(mcp_server) as client:
+        await client.call_tool("unlock_mutation_tools", {})
+        result = await client.call_tool("search_tools", {"query": query})
+        result_names = {
+            item["name"] for item in result.structured_content["result"]
+        }
+
+        assert result_names.isdisjoint(mutation_tools)
+        if expected_read_tool:
+          assert result.structured_content["result"][0]["name"] == (
+              expected_read_tool
+          )
+
+        await client.call_tool("lock_mutation_tools", {})
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "do not delete shared set 123",
+          "should I upload these conversions",
+          "should I bid 2 dollars",
+          "do not exclude this placement",
+          "campaigns with no clicks",
+      ],
+  )
+  def test_client_generic_speech_guard_excludes_every_mutate_tagged_tool(
+      self, query
+  ):
+    async def _run():
+      registered_tools = await mcp_server._local_provider.list_tools()
+      mutation_tools = {
+          tool.name
+          for tool in registered_tools
+          if MUTATE_TAG in set(tool.tags or [])
+      }
+      assert len(mutation_tools) > 5
+
+      async with Client(mcp_server) as client:
+        await client.call_tool("unlock_mutation_tools", {})
+        result = await client.call_tool("search_tools", {"query": query})
+        result_names = {
+            item["name"] for item in result.structured_content["result"]
+        }
+
+        assert result_names.isdisjoint(mutation_tools)
+        await client.call_tool("lock_mutation_tools", {})
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "did we pause campaign 123 yesterday",
+          "did we apply recommendations yesterday",
+          "did we delete shared set yesterday",
+          "did campaign 123 budget change",
+          "did the campaign stop",
+      ],
+  )
+  def test_client_retrospective_questions_prioritize_history_not_mutations(
+      self, query
+  ):
+    async def _run():
+      registered_tools = await mcp_server._local_provider.list_tools()
+      mutation_tools = {
+          tool.name
+          for tool in registered_tools
+          if MUTATE_TAG in set(tool.tags or [])
+      }
+
+      async with Client(mcp_server) as client:
+        await client.call_tool("unlock_mutation_tools", {})
+        result = await client.call_tool("search_tools", {"query": query})
+        result_names = [
+            item["name"] for item in result.structured_content["result"]
+        ]
+
+        assert result_names[0] == "get_change_history_extended"
+        assert set(result_names).isdisjoint(mutation_tools)
+        await client.call_tool("lock_mutation_tools", {})
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      "query",
+      [
+          "export full change history including campaign cost changes",
+          "full history of campaign budget and spend changes",
+      ],
+  )
+  def test_client_full_mixed_history_surfaces_both_data_capabilities(
+      self, query
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool("search_tools", {"query": query})
+        result_names = [
+            item["name"] for item in result.structured_content["result"]
+        ]
+
+        assert result_names[:3] == [
+            "export_change_history_csv",
+            "get_competitive_pressure_report",
+            "export_gaql_csv",
+        ]
+
+    asyncio.run(_run())
+
+  @pytest.mark.parametrize(
+      ("query", "expected_tool"),
+      [
+          (
+              "campaign audience changes last week",
+              "get_change_history_extended",
+          ),
+          (
+              "export all campaign audience changes",
+              "export_change_history_csv",
+          ),
+          (
+              "export all asset group asset changes",
+              "export_change_history_csv",
+          ),
+          (
+              "export full campaign budget change history",
+              "export_change_history_csv",
+          ),
+          (
+              "next page of campaign budget change events",
+              "list_change_events",
+          ),
+          (
+              "full demographic targeting change history",
+              "export_change_history_csv",
+          ),
+          (
+              "Google Ads API campaign budget history",
+              "get_change_history_extended",
+          ),
+          (
+              "export all campaign audiences via the API",
+              "list_campaign_audiences",
+          ),
+          ("audit account changes", "get_change_history_extended"),
+          ("account change audit", "get_change_history_extended"),
+      ],
+  )
+  def test_client_search_tools_routes_semantics_before_resource_words(
+      self, query, expected_tool
+  ):
+    async def _run():
+      async with Client(mcp_server) as client:
+        result = await client.call_tool("search_tools", {"query": query})
+        assert result.structured_content["result"][0]["name"] == expected_tool
 
     asyncio.run(_run())
 
@@ -1815,12 +2129,12 @@ class TestFastMcpConfiguration:
           (
               "save audience performance locally",
               "locally save audience performance",
-              "export_gaql_csv",
+              "list_audience_performance",
           ),
           (
               "save recommendations to a local file",
               "recommendations saved to a local file",
-              "export_gaql_csv",
+              "list_recommendations",
           ),
           (
               "next page of campaign audiences",
@@ -1973,8 +2287,7 @@ class TestFastMcpConfiguration:
               item["name"]
               for item in locked_result.structured_content["result"]
           }
-          assert expected_tool not in locked_names
-          assert locked_names.isdisjoint(excluded_tools)
+          assert not locked_names
 
         await client.call_tool("unlock_mutation_tools", {})
         for query in (canonical_query, paired_query):

@@ -37,11 +37,14 @@ from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import applied_inline_page_size
+from ads_mcp.tools.api import bound_inline_sections
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
-from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
+from ads_mcp.tools.api import run_gaql_query_snapshot
 
 
 campaign_read_tool = ads_read_tool(mcp, tags={"campaigns", "audiences"})
@@ -329,13 +332,13 @@ def _campaign_audience_query(
   """
 
 
-def _read_campaign_audiences(
+def _read_campaign_audience_snapshot(
     customer_id: str,
     campaign_ids: list[str] | str,
     include_negative: bool | None = None,
     login_customer_id: str | None = None,
-) -> list[dict[str, Any]]:
-  return run_gaql_query(
+) -> dict[str, Any]:
+  return run_gaql_query_snapshot(
       _campaign_audience_query(campaign_ids, include_negative),
       customer_id,
       login_customer_id,
@@ -365,6 +368,65 @@ def _diff_campaign_audience_rows(
           if key not in source_by_key
       ],
   }
+
+
+def _complete_campaign_audience_diff(
+    customer_id: str,
+    source_campaign_id: str,
+    target_campaign_id: str,
+    include_negative: bool | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Computes a complete audience diff for presentation or mutation use."""
+  source_snapshot = _read_campaign_audience_snapshot(
+      customer_id,
+      [source_campaign_id, target_campaign_id],
+      include_negative=include_negative,
+      login_customer_id=login_customer_id,
+  )
+  rows = source_snapshot["rows"]
+  source_campaign_id = quote_int_value(
+      source_campaign_id, "source_campaign_id"
+  )
+  target_campaign_id = quote_int_value(
+      target_campaign_id, "target_campaign_id"
+  )
+  source_rows = [
+      row for row in rows if str(row.get("campaign.id")) == source_campaign_id
+  ]
+  target_rows = [
+      row for row in rows if str(row.get("campaign.id")) == target_campaign_id
+  ]
+  diff = _diff_campaign_audience_rows(source_rows, target_rows)
+  return {
+      "source_campaign_id": source_campaign_id,
+      "target_campaign_id": target_campaign_id,
+      "missing_count": len(diff["missing_in_target"]),
+      "common_count": len(diff["common"]),
+      "target_only_count": len(diff["target_only"]),
+      "source_bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {
+              "snapshot_token": source_snapshot["snapshot_token"],
+          },
+      },
+      **diff,
+  }
+
+
+def _bound_audience_mutation_result(
+    mutation_result: dict[str, Any],
+) -> dict[str, Any]:
+  """Applies the shared lossless mutation-result delivery contract."""
+  return build_bounded_mutation_response(
+      mutation_result,
+      (
+          "created_criterion_ids",
+          "resource_names",
+          "successes",
+          "failures",
+      ),
+  )
 
 
 def _get_campaign_target_restrictions(
@@ -829,18 +891,51 @@ def list_campaign_audiences(
       page_token=page_token,
       login_customer_id=login_customer_id,
   )
-  result = build_paginated_list_response(
-      "campaign_audiences",
-      page["rows"],
-      total_count=page["total_results_count"],
-      page_size=limit,
-      next_page_token=page["next_page_token"],
-  )
-  result["copy_ready_audiences"] = [
+  copy_ready_audiences = [
       _audience_payload_from_row(row)
       for row in page["rows"]
       if _audience_resource_name_from_row(row)
   ]
+  shared_preview = bound_inline_sections(
+      {
+          "campaign_audiences": page["rows"],
+          "copy_ready_audiences": copy_ready_audiences,
+      }
+  )
+  preview_sections = shared_preview.pop("sections")
+  primary_rows_omitted = shared_preview["omitted_counts"]["campaign_audiences"]
+  next_page_token = None if primary_rows_omitted else page["next_page_token"]
+  result = build_paginated_list_response(
+      "campaign_audiences",
+      preview_sections["campaign_audiences"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=next_page_token,
+      snapshot_token=page.get("snapshot_token"),
+  )
+  result["copy_ready_audiences"] = preview_sections["copy_ready_audiences"]
+  result["copy_ready_total_count"] = len(copy_ready_audiences)
+  result["copy_ready_returned_count"] = shared_preview["returned_counts"][
+      "copy_ready_audiences"
+  ]
+  result["derived_preview_truncated"] = bool(
+      shared_preview["omitted_counts"]["copy_ready_audiences"]
+  )
+  result["shared_inline_delivery"] = shared_preview
+  if primary_rows_omitted:
+    result.update(
+        {
+            "truncated": True,
+            "has_more": False,
+            "complete_inline": False,
+            "pagination_suppressed": True,
+            "pagination_suppressed_reason": (
+                "Post-processing needed a smaller inline preview than the "
+                "source page. Use bulk_export_call for the complete exact "
+                "snapshot, or restart with a smaller limit."
+            ),
+        }
+    )
   return result
 
 
@@ -850,9 +945,15 @@ def diff_campaign_audiences(
     source_campaign_id: str,
     target_campaign_id: str,
     include_negative: bool | None = None,
+    limit_per_section: int = 25,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Compares campaign audiences and returns copy-ready differences.
+
+  The complete source and target are compared before presentation is bounded.
+  Counts always describe the complete diff. If any section is truncated, use
+  full_source_call to retrieve all underlying rows with stable pagination or
+  an exact snapshot export.
 
   Args:
       customer_id: Google Ads customer ID.
@@ -860,38 +961,80 @@ def diff_campaign_audiences(
       target_campaign_id: Campaign ID to compare against.
       include_negative: Optional filter for exclusions (`true`) or positive
           audiences (`false`). Leave unset to include both.
+      limit_per_section: Requested inline size for each diff section. Values
+          above the server's token-safe presentation cap are clamped; complete
+          counts and the full source route remain available.
       login_customer_id: Optional manager account ID.
 
   Returns:
-      A dict with missing_in_target, common, and target_only audience payloads.
+      Bounded diff sections, complete counts, and a full source retrieval call.
   """
-  rows = _read_campaign_audiences(
+  validate_limit(limit_per_section)
+  page_size = applied_inline_page_size(limit_per_section)
+  complete_diff = _complete_campaign_audience_diff(
       customer_id,
-      [source_campaign_id, target_campaign_id],
+      source_campaign_id,
+      target_campaign_id,
       include_negative=include_negative,
       login_customer_id=login_customer_id,
   )
-  source_campaign_id = quote_int_value(
-      source_campaign_id, "source_campaign_id"
-  )
-  target_campaign_id = quote_int_value(
-      target_campaign_id, "target_campaign_id"
-  )
-  source_rows = [
-      row for row in rows if str(row.get("campaign.id")) == source_campaign_id
-  ]
-  target_rows = [
-      row for row in rows if str(row.get("campaign.id")) == target_campaign_id
-  ]
-  diff = _diff_campaign_audience_rows(source_rows, target_rows)
-  return {
-      "source_campaign_id": source_campaign_id,
-      "target_campaign_id": target_campaign_id,
-      "missing_count": len(diff["missing_in_target"]),
-      "common_count": len(diff["common"]),
-      "target_only_count": len(diff["target_only"]),
-      **diff,
+  section_counts = {
+      "missing_in_target": complete_diff["missing_count"],
+      "common": complete_diff["common_count"],
+      "target_only": complete_diff["target_only_count"],
   }
+  shared_preview = bound_inline_sections(
+      {
+          section: complete_diff[section][:page_size]
+          for section in section_counts
+      }
+  )
+  preview_sections = shared_preview.pop("sections")
+  truncated_sections = [
+      section
+      for section, count in section_counts.items()
+      if count > len(preview_sections[section])
+  ]
+  public_diff = {
+      key: value
+      for key, value in complete_diff.items()
+      if key != "source_bulk_export_call"
+  }
+  result = {
+      **public_diff,
+      **preview_sections,
+      "returned_counts": shared_preview["returned_counts"],
+      "shared_inline_delivery": shared_preview,
+      "limit_per_section": page_size,
+      "requested_limit_per_section": limit_per_section,
+      "limit_per_section_clamped": limit_per_section != page_size,
+      "truncated": bool(truncated_sections),
+      "truncated_sections": truncated_sections,
+      "bulk_export_call": complete_diff["source_bulk_export_call"],
+      "bulk_export_scope": "complete_source_rows_for_this_exact_diff",
+  }
+  if truncated_sections:
+    source_arguments: dict[str, Any] = {
+        "customer_id": customer_id,
+        "campaign_ids": [
+            complete_diff["source_campaign_id"],
+            complete_diff["target_campaign_id"],
+        ],
+        "limit": 100,
+    }
+    if include_negative is not None:
+      source_arguments["include_negative"] = include_negative
+    if login_customer_id is not None:
+      source_arguments["login_customer_id"] = login_customer_id
+    result["full_source_call"] = {
+        "tool": "list_campaign_audiences",
+        "arguments": source_arguments,
+    }
+    result["full_source_note"] = (
+        "bulk_export_call is the exact source snapshot used for this diff. "
+        "full_source_call starts a fresh current-state paginated read."
+    )
+  return result
 
 
 @campaign_tool
@@ -981,7 +1124,7 @@ def add_campaign_audiences(
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
 
-  return result
+  return _bound_audience_mutation_result(result)
 
 
 @campaign_tool
@@ -1007,7 +1150,7 @@ def copy_audiences_between_campaigns(
   Returns:
       A dict with the audience diff and mutation result when dry_run=false.
   """
-  diff = diff_campaign_audiences(
+  diff = _complete_campaign_audience_diff(
       customer_id=customer_id,
       source_campaign_id=source_campaign_id,
       target_campaign_id=target_campaign_id,
@@ -1017,15 +1160,31 @@ def copy_audiences_between_campaigns(
   audiences_to_create = diff["missing_in_target"]
   normalized_source_campaign_id = diff["source_campaign_id"]
   normalized_target_campaign_id = diff["target_campaign_id"]
+  preview_delivery = bound_inline_sections(
+      {"audiences_to_create": audiences_to_create}
+  )
+  audience_preview = preview_delivery.pop("sections")["audiences_to_create"]
   result = {
       "source_campaign_id": normalized_source_campaign_id,
       "target_campaign_id": normalized_target_campaign_id,
       "dry_run": dry_run,
-      "audiences_to_create": audiences_to_create,
+      "audiences_to_create": audience_preview,
       "create_count": len(audiences_to_create),
+      "returned_create_count": preview_delivery["returned_counts"][
+          "audiences_to_create"
+      ],
       "common_count": diff["common_count"],
       "target_only_count": diff["target_only_count"],
+      "truncated": len(audience_preview) < len(audiences_to_create),
+      "shared_inline_delivery": preview_delivery,
+      "bulk_export_call": diff["source_bulk_export_call"],
+      "bulk_export_scope": "complete_source_rows_for_this_exact_diff",
   }
+  if result["truncated"]:
+    result["next_step"] = (
+        "The complete diff was used. For every underlying source row, call "
+        "bulk_export_call with the arguments exactly as shown."
+    )
   if dry_run or not audiences_to_create:
     return result
 
@@ -1089,6 +1248,11 @@ def remove_campaign_audiences(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {
-      "removed_resource_names": [r.resource_name for r in response.results],
-  }
+  return build_bounded_mutation_response(
+      {
+          "removed_resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("removed_resource_names",),
+  )

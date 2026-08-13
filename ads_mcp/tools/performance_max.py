@@ -134,6 +134,7 @@ def list_asset_group_assets(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   result["primary_status_details_included"] = include_primary_status_details
   return result
@@ -207,6 +208,7 @@ def list_asset_group_top_combinations(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -276,4 +278,5 @@ def list_performance_max_placements(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )

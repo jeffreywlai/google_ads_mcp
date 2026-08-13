@@ -23,6 +23,14 @@ import pytest
 CUSTOMER_ID = "1234567890"
 
 
+def _snapshot(rows, marker="a"):
+  return {
+      "rows": rows,
+      "total_results_count": len(rows),
+      "snapshot_token": f"gaql-snapshot-v1:{marker * 32}",
+  }
+
+
 def test_list_campaign_search_term_insights_builds_query():
   with mock.patch(
       "ads_mcp.tools.search_terms.run_gaql_query_page",
@@ -189,6 +197,7 @@ def test_list_customer_search_term_insights_term_detail_paginates():
           "rows": [{"customer_search_term_insight.id": "1"}],
           "next_page_token": "1",
           "total_results_count": 2,
+          "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
       },
   ) as mock_query:
     result = search_terms.list_customer_search_term_insights(
@@ -208,8 +217,18 @@ def test_list_customer_search_term_insights_term_detail_paginates():
       "total_count": 2,
       "total_page_count": 2,
       "truncated": True,
+      "has_more": True,
+      "complete_inline": False,
       "next_page_token": "1",
       "page_size": 1,
+      "requested_page_size": 1,
+      "page_size_clamped": False,
+      "bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {
+              "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+          },
+      },
   }
 
 
@@ -317,8 +336,11 @@ def test_compare_search_terms_returns_period_diff():
   ]
 
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      side_effect=[period_a_rows, period_b_rows],
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      side_effect=[
+          _snapshot(period_a_rows, "a"),
+          _snapshot(period_b_rows, "b"),
+      ],
   ) as mock_query:
     with mock.patch(
         "ads_mcp.tools.search_terms.get_campaign_context",
@@ -330,7 +352,7 @@ def test_compare_search_terms_returns_period_diff():
           period_b={"start_date": "2026-04-06", "end_date": "2026-04-07"},
           campaign_ids='["111"]',
           ad_group_id="222",
-          period_limit=50,
+          period_limit=1,
           top_n=5,
       )
 
@@ -340,21 +362,26 @@ def test_compare_search_terms_returns_period_diff():
   assert "ad_group.id = 222" in first_query
   assert "segments.date BETWEEN '2026-04-13' AND '2026-04-14'" in first_query
   assert "ORDER BY metrics.clicks DESC" in first_query
-  assert "LIMIT 50" in first_query
+  assert "LIMIT" not in first_query
   assert result["new_count"] == 1
   assert result["lost_count"] == 1
   assert result["common_count"] == 1
+  assert result["analysis_complete"] is True
+  assert result["period_limit_applied"] is False
   assert result["new_terms"][0]["search_term"] == "new winner"
   assert result["lost_terms"][0]["search_term"] == "lost term"
   assert result["improved_terms"][0]["search_term"] == "shared term"
   assert result["improved_terms"][0]["delta"]["metrics.clicks"] == 20
+  assert result["bulk_export_calls_by_period"]["period_a"]["arguments"] == {
+      "snapshot_token": "gaql-snapshot-v1:" + "a" * 32
+  }
   assert result["campaign_context"] == {"111": {"campaign.name": "Brand"}}
 
 
 def test_compare_search_terms_ignores_empty_string_campaign_ids():
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      side_effect=[[], []],
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      side_effect=[_snapshot([], "a"), _snapshot([], "b")],
   ) as mock_query:
     with mock.patch(
         "ads_mcp.tools.search_terms.get_campaign_context",
@@ -370,6 +397,42 @@ def test_compare_search_terms_ignores_empty_string_campaign_ids():
   first_query = mock_query.call_args_list[0].args[0]
   assert "campaign.id IN ()" not in first_query
   assert "campaign.id IN" not in first_query
+
+
+def test_compare_search_terms_bounds_preview_without_capping_analysis():
+  period_a_rows = [
+      {
+          "campaign.id": "111",
+          "ad_group.id": "222",
+          "search_term_view.search_term": f"new term {index}",
+          "metrics.clicks": 1_000 - index,
+      }
+      for index in range(101)
+  ]
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      side_effect=[_snapshot(period_a_rows, "a"), _snapshot([], "b")],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.search_terms.get_campaign_context",
+        return_value={},
+    ):
+      result = search_terms.compare_search_terms(
+          CUSTOMER_ID,
+          period_a="LAST_7_DAYS",
+          period_b="LAST_14_DAYS",
+          period_limit=1,
+          top_n=1_000,
+      )
+
+  assert result["analysis_complete"] is True
+  assert result["period_a_row_count"] == 101
+  assert result["new_count"] == 101
+  assert len(result["new_terms"]) == 25
+  assert result["requested_top_n"] == 1_000
+  assert result["top_n"] == 25
+  assert result["top_n_clamped"] is True
+  assert result["truncated_by_bucket"]["new_terms"] is True
 
 
 def test_compare_search_terms_preserves_status_and_match_type_dimensions():
@@ -399,8 +462,8 @@ def test_compare_search_terms_preserves_status_and_match_type_dimensions():
   ]
 
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      side_effect=[period_a_rows, []],
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      side_effect=[_snapshot(period_a_rows, "a"), _snapshot([], "b")],
   ):
     with mock.patch(
         "ads_mcp.tools.search_terms.get_campaign_context",
@@ -423,8 +486,8 @@ def test_compare_search_terms_preserves_status_and_match_type_dimensions():
 
 def test_compare_search_terms_orders_period_queries_by_sort_metric():
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      side_effect=[[], []],
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      side_effect=[_snapshot([], "a"), _snapshot([], "b")],
   ) as mock_query:
     search_terms.compare_search_terms(
         CUSTOMER_ID,
@@ -563,8 +626,8 @@ def test_analyze_search_terms_returns_candidates():
   ]
 
   with mock.patch(
-      "ads_mcp.tools.search_terms.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      return_value=_snapshot(rows),
   ):
     with mock.patch(
         "ads_mcp.tools.search_terms.get_campaign_context",
@@ -587,4 +650,47 @@ def test_analyze_search_terms_returns_candidates():
           "campaign.status": "ENABLED",
           "recent_30_day_cost_micros": 6_000_000,
       }
+  }
+
+
+def test_analyze_search_terms_classifies_rows_beyond_preview_limit():
+  rows = [
+      {
+          "campaign.id": "111",
+          "search_term_view.search_term": "not a candidate",
+          "search_term_view.status": "NONE",
+          "metrics.clicks": 1,
+          "metrics.cost_micros": 1,
+          "metrics.conversions": 0,
+      },
+      {
+          "campaign.id": "111",
+          "search_term_view.search_term": "late negative",
+          "search_term_view.status": "NONE",
+          "metrics.clicks": 20,
+          "metrics.cost_micros": 8_000_000,
+          "metrics.conversions": 0,
+      },
+  ]
+  with mock.patch(
+      "ads_mcp.tools.search_terms.run_gaql_query_snapshot",
+      return_value=_snapshot(rows),
+  ) as mock_query:
+    with mock.patch(
+        "ads_mcp.tools.search_terms.get_campaign_context",
+        return_value={},
+    ):
+      result = search_terms.analyze_search_terms(
+          CUSTOMER_ID,
+          limit=1,
+      )
+
+  query = mock_query.call_args.args[0]
+  assert "LIMIT" not in query
+  assert result["analyzed_row_count"] == 2
+  assert result["analysis_complete"] is True
+  assert result["negative_keyword_candidate_count"] == 1
+  assert result["negative_keyword_candidates"] == [rows[1]]
+  assert result["bulk_export_call"]["arguments"] == {
+      "snapshot_token": "gaql-snapshot-v1:" + "a" * 32
   }

@@ -25,16 +25,21 @@ import yaml
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_read_tool
+from ads_mcp.tooling import local_write_tool
 from ads_mcp.tooling import session_control_tool
+from ads_mcp.tools.api import applied_inline_page_size
+from ads_mcp.tools.api import bound_inline_sections
+from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import handle_google_ads_errors
+from ads_mcp.tools.api import write_rows_to_explicit_csv
 from ads_mcp.utils import MODULE_DIR
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.server.transforms.visibility import disable_components
 from fastmcp.server.transforms.visibility import enable_components
 from fastmcp.server.transforms.visibility import get_visibility_rules
-from google.ads.googleads.errors import GoogleAdsException
 from pydantic import StrictInt
 
 
@@ -148,25 +153,55 @@ def _build_resource_metadata_query(resource_name: str) -> str:
   )
 
 
-def _search_google_ads_field_rows(
+def _applied_field_page_size(limit: int) -> int:
+  """Validates the public field limit and applies the inline response cap."""
+  if isinstance(limit, bool) or not isinstance(limit, int):
+    raise ToolError("limit must be an integer.")
+  if limit <= 0:
+    raise ToolError("limit must be greater than 0.")
+  return applied_inline_page_size(limit)
+
+
+def _search_google_ads_field_page(
     query: str,
-    limit: int,
-) -> list[Any]:
-  """Runs a GoogleAdsFieldService query and returns raw field rows."""
+    page_size: int,
+    page_token: str | None = None,
+) -> dict[str, Any]:
+  """Runs one bounded GoogleAdsFieldService page with its API cursor."""
   ads_client = get_ads_client()
   field_service = ads_client.get_service("GoogleAdsFieldService")
-  pager = field_service.search_google_ads_fields(
-      request={
-          "query": query,
-          "page_size": min(limit, 1000),
-      }
-  )
-  rows = []
-  for index, field in enumerate(pager):
-    if index >= limit:
-      break
-    rows.append(field)
-  return rows
+  request: dict[str, Any] = {
+      "query": query,
+      "page_size": page_size,
+  }
+  if page_token:
+    request["page_token"] = page_token
+
+  with handle_google_ads_errors():
+    pager = field_service.search_google_ads_fields(request=request)
+    if getattr(type(pager), "pages", None) is not None:
+      response_page = next(iter(pager.pages), None)
+      if response_page is None:
+        rows = []
+        total_count = 0
+        next_page_token = None
+      else:
+        rows = list(response_page.results)
+        total_count = max(
+            int(response_page.total_results_count),
+            len(rows),
+        )
+        next_page_token = response_page.next_page_token or None
+    else:
+      rows = list(pager)
+      total_count = len(rows)
+      next_page_token = None
+
+  return {
+      "rows": rows,
+      "total_results_count": total_count,
+      "next_page_token": next_page_token,
+  }
 
 
 def _topic_matches(topic: str, *texts: str) -> bool:
@@ -203,6 +238,10 @@ tool_guide_tool = local_read_tool(
     output_schema=_TOOL_GUIDE_OUTPUT_SCHEMA,
 )
 ads_field_tool = ads_read_tool(mcp, tags={"docs", "fields", "gaql"})
+ads_field_export_tool = local_write_tool(
+    mcp,
+    tags={"docs", "fields", "gaql"},
+)
 visibility_tool = session_control_tool(
     mcp,
     tags={"profiles", "visibility"},
@@ -239,29 +278,41 @@ def get_reporting_view_doc(view: str | None = None) -> str:
 
 
 @ads_field_tool
-def get_resource_metadata(resource_name: str) -> dict[str, Any]:
+def get_resource_metadata(
+    resource_name: str,
+    limit: StrictInt = 50,
+    page_token: str | None = None,
+) -> dict[str, Any]:
   """Get selectable, filterable, and sortable fields for one resource.
+
+  Results use Google-provided pagination so all live metadata remains
+  available without placing the entire resource schema in one model response.
 
   Args:
       resource_name: Google Ads resource name, for example `campaign`
           or `ad_group`.
+      limit: Requested inline page size. Values above the server's token-safe
+          presentation cap are clamped; later pages remain available.
+      page_token: Google continuation token from the previous response.
 
   Returns:
-      A dict containing sorted field names grouped by metadata type.
+      Current-page field names grouped by metadata type, plus total counts and
+      continuation metadata.
   """
+  applied_page_size = _applied_field_page_size(limit)
   query = _build_resource_metadata_query(resource_name)
-
-  try:
-    fields = _search_google_ads_field_rows(query, limit=5000)
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+  page = _search_google_ads_field_page(
+      query,
+      page_size=applied_page_size,
+      page_token=page_token,
+  )
 
   resource_prefix = f"{resource_name}."
   selectable = []
   filterable = []
   sortable = []
 
-  for field in fields:
+  for field in page["rows"]:
     field_name = getattr(field, "name", "")
     if not field_name.startswith(resource_prefix):
       continue
@@ -272,11 +323,20 @@ def get_resource_metadata(resource_name: str) -> dict[str, Any]:
     if field.sortable:
       sortable.append(field_name)
 
+  delivery = build_paginated_list_response(
+      "_metadata_fields",
+      [{} for _ in page["rows"]],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+  )
+  delivery.pop("_metadata_fields")
   return {
       "resource": resource_name,
       "selectable": sorted(selectable),
       "filterable": sorted(filterable),
       "sortable": sorted(sortable),
+      **delivery,
   }
 
 
@@ -417,30 +477,94 @@ async def lock_mutation_tools(
 def search_google_ads_fields(
     query: str,
     limit: StrictInt = 50,
-) -> dict[str, list[dict[str, Any]]]:
+    page_token: str | None = None,
+) -> dict[str, Any]:
   """Searches live GoogleAdsField metadata to help build GAQL queries.
+
+  Results use Google-provided pagination so all matching live metadata remains
+  available without placing the entire result set in one model response.
 
   Args:
       query: A GoogleAdsFieldService query, for example:
           SELECT name, category, selectable WHERE name LIKE 'campaign.%'
-      limit: Maximum number of fields to return.
+      limit: Requested inline page size. Values above the server's token-safe
+          presentation cap are clamped; later pages remain available.
+      page_token: Google continuation token from the previous response.
 
   Returns:
-      A dict containing live field metadata rows.
+      Current-page live field metadata plus counts and continuation metadata.
   """
   if not query.strip():
     raise ToolError("query must not be empty.")
-  if isinstance(limit, bool) or not isinstance(limit, int):
-    raise ToolError("limit must be an integer.")
-  if limit <= 0:
-    raise ToolError("limit must be greater than 0.")
+  applied_page_size = _applied_field_page_size(limit)
+  page = _search_google_ads_field_page(
+      query,
+      page_size=applied_page_size,
+      page_token=page_token,
+  )
+  fields = [format_value(field) for field in page["rows"]]
+  shared_delivery = bound_inline_sections({"fields": fields})
+  bounded_fields = shared_delivery.pop("sections")["fields"]
+  omitted_count = shared_delivery["omitted_counts"]["fields"]
+  result = build_paginated_list_response(
+      "fields",
+      bounded_fields,
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=(None if omitted_count else page["next_page_token"]),
+  )
+  result["source_page_returned_count"] = len(fields)
+  result["shared_inline_delivery"] = shared_delivery
+  result["bulk_export_call"] = {
+      "tool": "export_google_ads_fields_csv",
+      "arguments": {"query": query},
+  }
+  if omitted_count:
+    result["truncated"] = True
+    result["complete_inline"] = False
+    result["shared_inline_omitted_count"] = omitted_count
+    result["continuation_unavailable"] = (
+        "The inline byte budget omitted rows from Google's current page, so "
+        "its later-page token would skip data. Use bulk_export_call for every "
+        "matching field and requested metadata column."
+    )
+  return result
 
-  try:
-    fields = [
-        format_value(field)
-        for field in _search_google_ads_field_rows(query, limit=limit)
-    ]
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {"fields": fields}
+@ads_field_export_tool
+def export_google_ads_fields_csv(query: str) -> dict[str, Any]:
+  """Exports every live GoogleAdsField row matching a metadata query.
+
+  Args:
+      query: A GoogleAdsFieldService query selecting the desired metadata
+          columns.
+
+  Returns:
+      A temporary CSV artifact containing the complete matching result.
+  """
+  if not query.strip():
+    raise ToolError("query must not be empty.")
+  ads_client = get_ads_client()
+  field_service = ads_client.get_service("GoogleAdsFieldService")
+  with handle_google_ads_errors():
+    pager = field_service.search_google_ads_fields(
+        request={"query": query, "page_size": 1000}
+    )
+    if getattr(type(pager), "pages", None) is not None:
+      field_rows = [
+          format_value(field)
+          for response_page in pager.pages
+          for field in response_page.results
+      ]
+    else:
+      field_rows = [format_value(field) for field in pager]
+
+  file_path, columns, bytes_written = write_rows_to_explicit_csv(field_rows)
+  return {
+      "file_path": file_path,
+      "row_count": len(field_rows),
+      "bytes_written": bytes_written,
+      "columns": columns,
+      "complete": True,
+      "query": query,
+  }

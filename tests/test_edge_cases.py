@@ -14,6 +14,7 @@
 
 """Edge case and stress tests for the MCP server tools."""
 
+import json
 from unittest import mock
 
 from ads_mcp.tools import ad_groups
@@ -266,16 +267,12 @@ class TestKeywordPlannerEdgeCases:
 
   @mock.patch("ads_mcp.tools.keyword_planner.get_ads_client")
   def test_page_size_zero(self, mock_get):
-    """page_size=0 is accepted (API will handle it)."""
-    client = mock.Mock()
-    mock_get.return_value = client
-    mock_service = client.get_service.return_value
-    mock_service.generate_keyword_ideas.return_value = iter([])
-
-    result = keyword_planner.generate_keyword_ideas(
-        CUSTOMER_ID, keywords=["test"], page_size=0
-    )
-    assert result == {"keyword_ideas": [], "total_ideas": 0}
+    """Invalid page sizes fail before consuming API quota."""
+    with pytest.raises(ToolError, match="page_size must be greater than 0"):
+      keyword_planner.generate_keyword_ideas(
+          CUSTOMER_ID, keywords=["test"], page_size=0
+      )
+    mock_get.assert_not_called()
 
   @mock.patch("ads_mcp.tools.keyword_planner.get_ads_client")
   def test_very_large_page_size(self, mock_get):
@@ -342,7 +339,7 @@ class TestGaqlInterpolation:
 
     mock_service.search_stream.return_value = []
 
-    with pytest.raises(ToolError, match="not OR"):
+    with pytest.raises(ToolError, match="shared_set_id must be an integer"):
       negatives.list_shared_set_keywords(CUSTOMER_ID, "123 OR 1=1")
     mock_service.search_stream.assert_not_called()
 
@@ -353,9 +350,9 @@ class TestGaqlInterpolation:
     mock_service = client.get_service.return_value
     mock_service.search_stream.return_value = []
 
-    negatives.list_campaign_negative_keywords(CUSTOMER_ID, "123; DROP TABLE")
-    call_args = mock_service.search_stream.call_args
-    assert "123; DROP TABLE" in call_args.kwargs["query"]
+    with pytest.raises(ToolError, match="campaign_id must be an integer"):
+      negatives.list_campaign_negative_keywords(CUSTOMER_ID, "123; DROP TABLE")
+    mock_service.search_stream.assert_not_called()
 
 
 # =========================================================================
@@ -738,7 +735,13 @@ class TestLargeBatchOperations:
     result = negatives.add_shared_set_keywords(
         CUSTOMER_ID, "111", keywords=kws
     )
-    assert len(result["resource_names"]) == 500
+    assert result["complete_counts"]["resource_names"] == 500
+    assert result["returned_counts"]["resource_names"] < 500
+    assert result["full_mutation_result_artifact"]["row_count"] == 500
+    assert (
+        len(json.dumps(result).encode("utf-8"))
+        <= api.INLINE_RESPONSE_BYTE_LIMIT
+    )
 
     call_args = mock_service.mutate_shared_criteria.call_args
     assert len(call_args.kwargs["operations"]) == 500
@@ -760,7 +763,16 @@ class TestLargeBatchOperations:
     result = negatives.add_campaign_negative_keywords(
         CUSTOMER_ID, "111", keywords=kws
     )
-    assert len(result["resource_names"]) == 200
+    assert result["complete_counts"]["resource_names"] == 200
+    assert result["returned_counts"]["resource_names"] < 200
+    assert result["full_mutation_result_artifact"]["row_count"] == 200
+    assert len(
+        mock_service.mutate_campaign_criteria.call_args.kwargs["operations"]
+    ) == len(kws)
+    assert (
+        len(json.dumps(result).encode("utf-8"))
+        <= api.INLINE_RESPONSE_BYTE_LIMIT
+    )
 
 
 # =========================================================================

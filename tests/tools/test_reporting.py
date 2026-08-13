@@ -14,9 +14,11 @@
 
 """Tests for reporting.py."""
 
+import json
 from pathlib import Path
 from unittest import mock
 
+from ads_mcp.tools import api
 from ads_mcp.tools import reporting
 from ads_mcp.tools._gaql import preprocess_gaql_query
 from fastmcp.exceptions import ToolError
@@ -119,8 +121,21 @@ def test_get_competitive_pressure_report_bundles_queries_and_changes():
   pressure_rows = [{"campaign.id": "111", "metrics.cost_micros": 100}]
   auction_rows = [{"segments.auction_insight_domain": "example.com"}]
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      side_effect=[pressure_rows, auction_rows],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      side_effect=[
+          {
+              "rows": pressure_rows,
+              "next_page_token": "pressure-next",
+              "total_results_count": 12,
+              "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+          },
+          {
+              "rows": auction_rows,
+              "next_page_token": "auction-next",
+              "total_results_count": 7,
+              "snapshot_token": "gaql-snapshot-v1:" + "b" * 32,
+          },
+      ],
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.changes.get_change_history_extended",
@@ -134,26 +149,110 @@ def test_get_competitive_pressure_report_bundles_queries_and_changes():
           auction_insight_limit=5,
       )
 
-  pressure_query = mock_run.call_args_list[0].args[0]
-  auction_query = mock_run.call_args_list[1].args[0]
+  pressure_query = mock_run.call_args_list[0].kwargs["query"]
+  auction_query = mock_run.call_args_list[1].kwargs["query"]
   assert "metrics.search_budget_lost_impression_share" in pressure_query
   assert "segments.date" in pressure_query
   assert "campaign.id IN (111)" in pressure_query
-  assert "LIMIT 10" in pressure_query
+  assert "LIMIT" not in pressure_query
   assert "segments.auction_insight_domain" in auction_query
-  assert "LIMIT 5" in auction_query
+  assert "LIMIT" not in auction_query
   mock_changes.assert_called_once()
   assert mock_changes.call_args.kwargs["start_date"] == "2026-02-01"
   assert mock_changes.call_args.kwargs["end_date"] == "2026-02-28"
   assert result["pressure_trend"] == pressure_rows
+  assert result["pressure_trend_total_count"] == 12
+  assert (
+      result["pressure_trend_delivery"]["next_page_token"] == "pressure-next"
+  )
+  assert (
+      result["pressure_trend_delivery"]["bulk_export_call"]["arguments"][
+          "snapshot_token"
+      ]
+      == "gaql-snapshot-v1:" + "a" * 32
+  )
   assert result["auction_insights"] == auction_rows
+  assert result["auction_insight_total_count"] == 7
   assert result["change_history"] == {"change_statuses": []}
+
+
+def test_competitive_report_shares_one_budget_and_keeps_exact_exports():
+  source_tokens = {
+      "trend": "gaql-snapshot-v1:" + "a" * 32,
+      "auction": "gaql-snapshot-v1:" + "b" * 32,
+      "status": "gaql-snapshot-v1:" + "c" * 32,
+      "event": "gaql-snapshot-v1:" + "d" * 32,
+  }
+  change_history = {
+      "change_statuses": [{"kind": "status", "payload": "s" * 20_000}],
+      "change_status_returned_count": 1,
+      "change_status_next_page_token": "status-next",
+      "recent_change_events": [{"kind": "event", "payload": "e" * 20_000}],
+      "recent_change_event_returned_count": 1,
+      "recent_change_event_next_page_token": "event-next",
+      "continuation_guidance": {},
+      "bulk_export_calls_by_source": {
+          "change_status": {
+              "tool": "export_gaql_csv",
+              "arguments": {"snapshot_token": source_tokens["status"]},
+          },
+          "change_event": {
+              "tool": "export_gaql_csv",
+              "arguments": {"snapshot_token": source_tokens["event"]},
+          },
+      },
+  }
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      side_effect=[
+          {
+              "rows": [{"kind": "trend", "payload": "t" * 20_000}],
+              "next_page_token": "trend-next",
+              "total_results_count": 2,
+              "snapshot_token": source_tokens["trend"],
+          },
+          {
+              "rows": [{"kind": "auction", "payload": "a" * 20_000}],
+              "next_page_token": "auction-next",
+              "total_results_count": 2,
+              "snapshot_token": source_tokens["auction"],
+          },
+      ],
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.get_change_history_extended",
+        return_value=change_history,
+    ):
+      result = reporting.get_competitive_pressure_report(
+          CUSTOMER_ID,
+          date_range={"start_date": "2026-07-01", "end_date": "2026-07-07"},
+      )
+
+  shared = result["shared_inline_delivery"]
+  assert shared["inline_bytes"] <= shared["inline_byte_limit"]
+  assert result["pressure_trend_returned_count"] == 1
+  assert result["auction_insight_returned_count"] == 1
+  history = result["change_history"]
+  assert history["change_statuses"] == []
+  assert history["recent_change_events"] == []
+  assert history["change_status_next_page_token"] is None
+  assert history["recent_change_event_next_page_token"] is None
+  assert history["continuation_guidance"]["change_status"]["arguments"] == {
+      "snapshot_token": source_tokens["status"]
+  }
+  assert history["continuation_guidance"]["change_event"]["arguments"] == {
+      "snapshot_token": source_tokens["event"]
+  }
 
 
 def test_get_competitive_pressure_report_can_skip_optional_sections():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_run:
     result = reporting.get_competitive_pressure_report(
         CUSTOMER_ID,
@@ -170,8 +269,12 @@ def test_get_competitive_pressure_report_can_skip_optional_sections():
 
 def test_get_competitive_pressure_report_all_time_skips_change_call():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ):
     with mock.patch(
         "ads_mcp.tools.changes.get_change_history_extended",
@@ -188,13 +291,18 @@ def test_get_competitive_pressure_report_all_time_skips_change_call():
 
 def test_summarize_cart_data_sales_builds_v24_cart_query():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[
-          {
-              "campaign.id": "111",
-              "metrics.all_gross_profit_micros": 12_000_000,
-          }
-      ],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [
+              {
+                  "campaign.id": "111",
+                  "metrics.all_gross_profit_micros": 12_000_000,
+              }
+          ],
+          "next_page_token": "cart-next",
+          "total_results_count": 15,
+          "snapshot_token": "gaql-snapshot-v1:" + "c" * 32,
+      },
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
@@ -208,27 +316,36 @@ def test_summarize_cart_data_sales_builds_v24_cart_query():
           top_limit=10,
       )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM cart_data_sales_view" in query
   assert "campaign.id" in query
   assert "metrics.all_revenue_micros" in query
   assert "metrics.all_cross_sell_gross_profit_micros" in query
   assert "campaign.id IN (111)" in query
   assert "segments.date DURING LAST_7_DAYS" in query
-  assert "LIMIT 10" in query
+  assert "LIMIT" not in query
   assert result["group_by"] == "CAMPAIGN"
   assert result["returned_count"] == 1
+  assert result["total_count"] == 15
+  assert result["next_page_token"] == "cart-next"
+  assert result["bulk_export_call"]["arguments"]["snapshot_token"] == (
+      "gaql-snapshot-v1:" + "c" * 32
+  )
 
 
 def test_summarize_cart_data_sales_uses_filter_context_for_non_campaign_group():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[
-          {
-              "segments.product_sold_brand": "Brand",
-              "metrics.all_gross_profit_micros": 12_000_000,
-          }
-      ],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [
+              {
+                  "segments.product_sold_brand": "Brand",
+                  "metrics.all_gross_profit_micros": 12_000_000,
+              }
+          ],
+          "next_page_token": None,
+          "total_results_count": 1,
+      },
   ):
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
@@ -246,7 +363,14 @@ def test_summarize_cart_data_sales_uses_filter_context_for_non_campaign_group():
 
 
 def test_summarize_cart_data_sales_normalizes_comma_string_campaign_ids():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query", return_value=[]):
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ):
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
         return_value={},
@@ -297,8 +421,12 @@ def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
       }
   ]
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": rows,
+          "next_page_token": None,
+          "total_results_count": 1,
+      },
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
@@ -310,7 +438,7 @@ def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
           date_range="last_30_days",
       )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM cart_data_sales_view" in query
   assert "metrics.gross_profit_micros" in query
   assert "metrics.all_gross_profit_micros" in query
@@ -319,6 +447,67 @@ def test_compare_biddable_vs_all_cart_value_adds_delta_metrics():
   assert comparison["non_biddable_revenue_micros"] == 5_000_000
   assert comparison["non_biddable_gross_profit_micros"] == 3_000_000
   assert comparison["non_biddable_units_sold"] == 2.0
+
+
+def test_compare_cart_value_bounds_enrichment_and_context_together():
+  rows = [
+      {
+          "campaign.id": str(index),
+          "campaign.name": f"Campaign {index}",
+          "metrics.all_revenue_micros": 20_000_000,
+          "metrics.revenue_micros": 15_000_000,
+          "metrics.all_gross_profit_micros": 8_000_000,
+          "metrics.gross_profit_micros": 5_000_000,
+          "metrics.all_units_sold": 6.0,
+          "metrics.units_sold": 4.0,
+          "padding": "x" * 60,
+      }
+      for index in range(100)
+  ]
+  campaign_context = {
+      str(index): {
+          "campaign.name": f"Campaign {index}",
+          "campaign.status": "ENABLED",
+          "recent_30_day_cost_micros": index,
+      }
+      for index in range(100)
+  }
+  with (
+      mock.patch(
+          "ads_mcp.tools.reporting.run_gaql_query_page",
+          return_value={
+              "rows": rows,
+              "next_page_token": None,
+              "total_results_count": len(rows),
+              "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+          },
+      ),
+      mock.patch.object(
+          api,
+          "get_ads_credential_cache_scope",
+          return_value="scope",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.reporting.get_campaign_context",
+        return_value=campaign_context,
+    ):
+      result = reporting.compare_biddable_vs_all_cart_value(
+          CUSTOMER_ID,
+          limit=100,
+      )
+
+  assert result["returned_count"] < 100
+  assert result["pagination_suppressed"] is True
+  assert result["campaign_context_total_count"] == 100
+  assert result["campaign_context_returned_count"] < 100
+  assert result["campaign_context_preview_truncated"] is True
+  assert (
+      len(json.dumps(result).encode("utf-8")) <= api.INLINE_RESPONSE_BYTE_LIMIT
+  )
+  assert result["bulk_export_call"]["arguments"]["snapshot_token"].startswith(
+      "gaql-snapshot-v1:"
+  )
 
 
 def test_list_cart_profit_outliers_builds_paginated_query():
@@ -713,8 +902,12 @@ def test_summarize_shopping_product_status_builds_compact_summary():
       },
   ]
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.reporting.run_gaql_query_snapshot",
+      return_value={
+          "rows": rows,
+          "total_results_count": len(rows),
+          "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+      },
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
@@ -725,7 +918,7 @@ def test_summarize_shopping_product_status_builds_compact_summary():
           campaign_ids=["111"],
           statuses=["LIMITED", "ELIGIBLE"],
           date_range="last_30_days",
-          row_limit=500,
+          row_limit=1,
           top_issue_products_limit=5,
       )
 
@@ -734,9 +927,11 @@ def test_summarize_shopping_product_status_builds_compact_summary():
   assert "shopping_product.campaign = 'customers/123/campaigns/111'" in query
   assert "shopping_product.status IN (LIMITED, ELIGIBLE)" in query
   assert "shopping_product.issues" in query
-  assert "LIMIT 500" in query
+  assert "LIMIT 1" not in query
   assert result["date_range"] == "LAST_30_DAYS"
   assert result["analyzed_row_count"] == 2
+  assert result["analysis_complete"] is True
+  assert result["row_limit_applied"] is False
   assert result["status_distribution"] == [
       {"status": "ELIGIBLE", "product_count": 1},
       {"status": "LIMITED", "product_count": 1},
@@ -746,13 +941,19 @@ def test_summarize_shopping_product_status_builds_compact_summary():
   ]
   assert result["top_issue_products"] == [rows[0]]
   assert result["campaign_ids"] == ["111"]
+  assert result["bulk_export_call"]["arguments"] == {
+      "snapshot_token": "gaql-snapshot-v1:" + "a" * 32
+  }
+  assert result["bulk_export_scope"] == "complete_source_rows"
 
 
 @pytest.mark.parametrize("campaign_ids", [None, [], ["111", "222"]])
 def test_summarize_shopping_product_status_requires_single_campaign(
     campaign_ids,
 ):
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_snapshot"
+  ) as mock_run:
     with pytest.raises(ToolError, match="requires exactly one campaign_id"):
       reporting.summarize_shopping_product_status(
           CUSTOMER_ID,
@@ -785,8 +986,14 @@ def test_list_shopping_product_status_builds_paginated_query():
 
 
 def test_shopping_product_status_tools_ignore_empty_string_status_filters():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
-    mock_run.return_value = []
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_snapshot"
+  ) as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "total_results_count": 0,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+    }
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
         return_value={},
@@ -1062,18 +1269,25 @@ def test_list_keyword_quality_scores_rejects_invalid_score():
 
 
 def test_list_keyword_quality_scores_can_omit_limit_clause():
-  with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[],
-  ) as mock_run:
-    reporting.list_keyword_quality_scores(
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
+    mock_run.return_value = {
+        "rows": [],
+        "next_page_token": None,
+        "total_results_count": 0,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+    }
+    result = reporting.list_keyword_quality_scores(
         CUSTOMER_ID,
         limit=None,
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM keyword_view" in query
   assert "LIMIT" not in query
+  assert mock_run.call_args.kwargs["page_size"] is None
+  assert result["requested_page_size"] is None
+  assert result["page_size"] == 100
+  assert result["page_size_clamped"] is True
 
 
 def test_list_keyword_quality_scores_returns_pagination_metadata():
@@ -1088,6 +1302,7 @@ def test_list_keyword_quality_scores_returns_pagination_metadata():
         ],
         "next_page_token": "next-page",
         "total_results_count": 18050,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
     }
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
@@ -1119,10 +1334,20 @@ def test_list_keyword_quality_scores_returns_pagination_metadata():
       "total_count": 18050,
       "returned_row_count": 1,
       "total_row_count": 18050,
-      "total_page_count": 19,
+      "total_page_count": 181,
       "truncated": True,
+      "has_more": True,
+      "complete_inline": False,
       "next_page_token": "next-page",
-      "page_size": 1000,
+      "page_size": 100,
+      "requested_page_size": 1000,
+      "page_size_clamped": True,
+      "bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {
+              "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+          },
+      },
       "campaign_context": {
           "77": {
               "campaign.name": "Brand",
@@ -1237,8 +1462,12 @@ def test_summarize_keyword_quality_scores_returns_compact_distributions():
   ]
 
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.reporting.run_gaql_query_snapshot",
+      return_value={
+          "rows": rows,
+          "total_results_count": len(rows),
+          "snapshot_token": f"gaql-snapshot-v1:{'a' * 32}",
+      },
   ):
     with mock.patch(
         "ads_mcp.tools.reporting.get_campaign_context",
@@ -1287,6 +1516,72 @@ def test_summarize_keyword_quality_scores_returns_compact_distributions():
           "keyword_count": 1,
       },
   ]
+
+
+def test_summarize_keyword_quality_scores_bounds_large_campaign_enrichment():
+  rows = [
+      {
+          "campaign.id": str(index),
+          "campaign.name": "😀" * 128,
+          "ad_group_criterion.keyword.match_type": "EXACT",
+          "ad_group_criterion.status": "ENABLED",
+          "ad_group_criterion.quality_info.quality_score": 5,
+      }
+      for index in range(1_000)
+  ]
+  snapshot_token = f"gaql-snapshot-v1:{'b' * 32}"
+
+  def _context(_customer_id, campaign_ids, _login_customer_id):
+    return {
+        campaign_id: {
+            "campaign.name": "😀" * 128,
+            "campaign.status": "ENABLED",
+            "recent_30_day_cost_micros": 1,
+        }
+        for campaign_id in campaign_ids
+    }
+
+  with (
+      mock.patch(
+          "ads_mcp.tools.reporting.run_gaql_query_snapshot",
+          return_value={
+              "rows": rows,
+              "total_results_count": len(rows),
+              "snapshot_token": snapshot_token,
+          },
+      ),
+      mock.patch(
+          "ads_mcp.tools.reporting.get_campaign_context",
+          side_effect=_context,
+      ),
+      mock.patch.object(
+          api,
+          "get_ads_credential_cache_scope",
+          return_value="scope",
+      ),
+  ):
+    result = reporting.summarize_keyword_quality_scores(
+        CUSTOMER_ID,
+        top_campaigns_limit=1_000,
+    )
+
+  assert result["complete_counts"]["campaign_distribution"] == 1_000
+  assert result["complete_counts"]["campaign_context"] == 1_000
+  assert result["bulk_export_call"]["arguments"]["snapshot_token"] == (
+      snapshot_token
+  )
+  assert (
+      result["full_materialized_response_export"]["export_call"]["tool"]
+      == "export_materialized_response_csv"
+  )
+  assert (
+      len(
+          json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode(
+              "utf-8"
+          )
+      )
+      <= api.INLINE_RESPONSE_BYTE_LIMIT
+  )
 
 
 def test_list_rsa_ad_strength_filters_to_responsive_search_ads():
@@ -1420,10 +1715,20 @@ def test_list_audience_performance_rejects_ad_group_ids_for_campaign_scope():
 
 def test_get_demographic_performance_fans_out_selected_views():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
+      "ads_mcp.tools.reporting.run_gaql_query_page",
       side_effect=[
-          [{"ad_group_criterion.age_range.type": "AGE_RANGE_25_34"}],
-          [{"ad_group_criterion.gender.type": "MALE"}],
+          {
+              "rows": [
+                  {"ad_group_criterion.age_range.type": "AGE_RANGE_25_34"}
+              ],
+              "next_page_token": None,
+              "total_results_count": 1,
+          },
+          {
+              "rows": [{"ad_group_criterion.gender.type": "MALE"}],
+              "next_page_token": None,
+              "total_results_count": 1,
+          },
       ],
   ) as mock_run:
     result = reporting.get_demographic_performance(
@@ -1434,14 +1739,15 @@ def test_get_demographic_performance_fans_out_selected_views():
         limit_per_type=12,
     )
 
-  age_query = mock_run.call_args_list[0].args[0]
-  gender_query = mock_run.call_args_list[1].args[0]
+  age_query = mock_run.call_args_list[0].kwargs["query"]
+  gender_query = mock_run.call_args_list[1].kwargs["query"]
   assert "FROM age_range_view" in age_query
   assert "ad_group_criterion.age_range.type" in age_query
   assert "campaign.id IN (111)" in age_query
   assert "ad_group.id IN (222)" in age_query
-  assert "LIMIT 13" in age_query
+  assert "LIMIT" not in age_query
   assert "FROM gender_view" in gender_query
+  assert mock_run.call_args_list[0].kwargs["page_size"] == 12
   assert result["demographic_types"] == ["AGE", "GENDER"]
   assert result["returned_counts"] == {"AGE": 1, "GENDER": 1}
   assert result["truncated_by_type"] == {"AGE": False, "GENDER": False}
@@ -1451,26 +1757,35 @@ def test_get_demographic_performance_fans_out_selected_views():
 
 def test_get_demographic_performance_uses_token_safe_default_limit():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_run:
     result = reporting.get_demographic_performance(
         CUSTOMER_ID,
         demographic_types=["age"],
     )
 
-  assert "LIMIT 11" in mock_run.call_args.args[0]
+  assert mock_run.call_args.kwargs["page_size"] == 10
   assert result["limit_per_type"] == 10
 
 
 def test_get_demographic_performance_flags_and_slices_truncated_types():
   rows = [
       {"ad_group_criterion.age_range.type": f"AGE_RANGE_{index}"}
-      for index in range(11)
+      for index in range(10)
   ]
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": rows,
+          "next_page_token": "age-next",
+          "total_results_count": 11,
+          "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+      },
   ):
     result = reporting.get_demographic_performance(
         CUSTOMER_ID,
@@ -1479,6 +1794,7 @@ def test_get_demographic_performance_flags_and_slices_truncated_types():
 
   assert len(result["demographic_performance"]["AGE"]) == 10
   assert result["returned_counts"] == {"AGE": 10}
+  assert result["total_counts"] == {"AGE": 11}
   assert result["truncated_by_type"] == {"AGE": True}
   assert result["has_more_by_type"] == {"AGE": True}
   assert result["truncated"] is True
@@ -1486,23 +1802,24 @@ def test_get_demographic_performance_flags_and_slices_truncated_types():
   assert "bulk_export_calls_by_type" in result["next_step"]
   export_call = result["bulk_export_calls_by_type"]["AGE"]
   assert export_call["tool"] == "export_gaql_csv"
-  assert export_call["arguments"]["customer_id"] == CUSTOMER_ID
-  assert export_call["arguments"]["login_customer_id"] is None
-  export_query = " ".join(export_call["arguments"]["query"].split())
-  assert "FROM age_range_view" in export_query
-  assert "ad_group_criterion.age_range.type" in export_query
-  assert "LIMIT" not in export_query
-  assert (
-      "ORDER BY metrics.cost_micros DESC, campaign.id, ad_group.id, "
-      "ad_group_criterion.criterion_id"
-  ) in export_query
-  assert "age_range_view.resource_name" in export_query
+  assert export_call["arguments"]["snapshot_token"] == (
+      "gaql-snapshot-v1:" + "a" * 32
+  )
+  assert result["next_page_tokens_by_type"] == {"AGE": "age-next"}
 
 
-def test_demographic_order_fields_are_sortable_for_queries_and_exports():
+def test_demographic_order_fields_are_sortable_and_snapshot_exportable():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[{"row": "1"}, {"row": "2"}],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      side_effect=[
+          {
+              "rows": [{"row": "1"}],
+              "next_page_token": f"{snapshot_id}:1",
+              "total_results_count": 2,
+              "snapshot_token": f"gaql-snapshot-v1:{snapshot_id}",
+          }
+          for snapshot_id in ("a" * 32, "b" * 32, "c" * 32)
+      ],
   ) as mock_run:
     result = reporting.get_demographic_performance(
         CUSTOMER_ID,
@@ -1514,17 +1831,10 @@ def test_demographic_order_fields_are_sortable_for_queries_and_exports():
   with fields_path.open(encoding="utf-8") as fields_file:
     field_metadata = yaml.safe_load(fields_file)
 
-  capped_queries = [call.args[0] for call in mock_run.call_args_list]
-  export_queries = [
-      result["bulk_export_calls_by_type"][demographic_type]["arguments"][
-          "query"
-      ]
-      for demographic_type in ("AGE", "GENDER", "INCOME")
-  ]
-  for query in [*capped_queries, *export_queries]:
+  queries = [call.kwargs["query"] for call in mock_run.call_args_list]
+  for query in queries:
     normalized_query = " ".join(query.split())
     order_clause = normalized_query.split(" ORDER BY ", maxsplit=1)[1]
-    order_clause = order_clause.split(" LIMIT ", maxsplit=1)[0]
     order_fields = [
         ordering.removesuffix(" DESC").removesuffix(" ASC")
         for ordering in order_clause.split(", ")
@@ -1535,13 +1845,155 @@ def test_demographic_order_fields_are_sortable_for_queries_and_exports():
         field.endswith("_view.resource_name") for field in order_fields
     )
     preprocess_gaql_query(query)
+  for demographic_type in ("AGE", "GENDER", "INCOME"):
+    assert result["bulk_export_calls_by_type"][demographic_type]["arguments"][
+        "snapshot_token"
+    ].startswith("gaql-snapshot-v1:")
+    assert (
+        "bulk_export_call"
+        not in result["deliveries_by_type"][demographic_type]
+    )
+
+
+def test_get_demographic_performance_clamps_inline_pages_not_access():
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [{"row": index} for index in range(100)],
+          "next_page_token": "age-next",
+          "total_results_count": 500,
+          "snapshot_token": "gaql-snapshot-v1:" + "d" * 32,
+      },
+  ) as mock_run:
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age"],
+        limit_per_type=10_000,
+        page_tokens_by_type={"age": "age-current"},
+    )
+
+  assert mock_run.call_args.kwargs["page_size"] == 100
+  assert mock_run.call_args.kwargs["page_token"] == "age-current"
+  assert result["requested_limit_per_type"] == 10_000
+  assert result["limit_per_type"] == 100
+  assert result["limit_per_type_clamped"] is True
+  assert result["total_counts"] == {"AGE": 500}
+  assert len(result["demographic_performance"]["AGE"]) == 100
+  assert result["bulk_export_calls_by_type"]["AGE"]["arguments"][
+      "snapshot_token"
+  ] == ("gaql-snapshot-v1:" + "d" * 32)
+
+
+def test_demographic_fanout_shares_bytes_and_keeps_all_exact_exports():
+  tokens = {
+      "AGE": "gaql-snapshot-v1:" + "a" * 32,
+      "GENDER": "gaql-snapshot-v1:" + "b" * 32,
+      "INCOME": "gaql-snapshot-v1:" + "c" * 32,
+  }
+  responses = [
+      {
+          "rows": [{"type": demographic_type, "payload": "x" * 20_000}],
+          "next_page_token": None,
+          "total_results_count": 1,
+          "snapshot_token": tokens[demographic_type],
+      }
+      for demographic_type in ("AGE", "GENDER", "INCOME")
+  ]
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      side_effect=responses,
+  ):
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age", "gender", "income"],
+        limit_per_type=30,
+    )
+
+  shared = result["shared_inline_delivery"]
+  assert shared["inline_bytes"] <= shared["inline_byte_limit"]
+  assert sum(result["returned_counts"].values()) == 2
+  assert shared["omitted_counts"]["INCOME"] == 1
+  assert result["truncated_by_type"]["INCOME"] is True
+  assert result["returned_counts"]["INCOME"] == 0
+  assert result["deliveries_by_type"]["INCOME"]["returned_count"] == 0
+  assert result["next_page_tokens_by_type"]["INCOME"] is None
+  assert result["deliveries_by_type"]["INCOME"]["has_more"] is False
+  assert (
+      "would skip data"
+      in result["deliveries_by_type"]["INCOME"]["continuation_unavailable"]
+  )
+  assert set(result["bulk_export_calls_by_type"]) == set(tokens)
+  for demographic_type, token in tokens.items():
+    assert (
+        result["bulk_export_calls_by_type"][demographic_type]["arguments"][
+            "snapshot_token"
+        ]
+        == token
+    )
+
+
+def test_demographic_complete_inline_still_exposes_explicit_export():
+  snapshot_token = "gaql-snapshot-v1:" + "d" * 32
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [{"type": "AGE"}],
+          "next_page_token": None,
+          "total_results_count": 1,
+          "snapshot_token": snapshot_token,
+      },
+  ):
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age"],
+    )
+
+  assert result["truncated"] is False
+  assert result["bulk_export_calls_by_type"]["AGE"]["arguments"] == {
+      "snapshot_token": snapshot_token
+  }
+  assert "requested a file" in result["next_step"]
+
+
+def test_demographic_oversized_placeholder_is_reported_as_truncated():
+  snapshot_token = "gaql-snapshot-v1:" + "e" * 32 + ":10:1:1"
+  oversized_placeholder = {
+      "_google_ads_mcp_inline_omission": {
+          "reason": "single_row_exceeds_inline_byte_budget"
+      }
+  }
+  with mock.patch(
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [oversized_placeholder],
+          "next_page_token": None,
+          "total_results_count": 1,
+          "snapshot_token": snapshot_token,
+      },
+  ):
+    result = reporting.get_demographic_performance(
+        CUSTOMER_ID,
+        demographic_types=["age"],
+    )
+
+  assert result["returned_counts"]["AGE"] == 0
+  assert result["truncated_by_type"]["AGE"] is True
+  assert result["has_more_by_type"]["AGE"] is False
+  assert result["bulk_export_calls_by_type"]["AGE"]["arguments"] == {
+      "snapshot_token": snapshot_token
+  }
 
 
 def test_get_landing_page_performance_uses_expanded_view_and_device():
   rows = [{"expanded_landing_page_view.expanded_final_url": "https://x.test"}]
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": rows,
+          "next_page_token": "landing-next",
+          "total_results_count": 150,
+          "snapshot_token": "gaql-snapshot-v1:" + "d" * 32,
+      },
   ) as mock_run:
     result = reporting.get_landing_page_performance(
         CUSTOMER_ID,
@@ -1551,22 +2003,32 @@ def test_get_landing_page_performance_uses_expanded_view_and_device():
         limit=15,
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM expanded_landing_page_view" in query
   assert "expanded_landing_page_view.expanded_final_url" in query
   assert "segments.device" in query
   assert "campaign.id IN (111, 222)" in query
-  assert "LIMIT 15" in query
+  assert "LIMIT" not in query
   assert result["landing_page_performance"] == rows
   assert result["landing_page_view"] == "EXPANDED"
   assert result["segment_by_device"] is True
+  assert result["total_count"] == 150
+  assert result["next_page_token"] == "landing-next"
+  assert result["bulk_export_call"]["arguments"]["snapshot_token"] == (
+      "gaql-snapshot-v1:" + "d" * 32
+  )
 
 
 def test_get_ad_inventory_can_return_structure_without_metrics_or_text():
   rows = [{"ad_group_ad.ad.id": "7"}]
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=rows,
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": rows,
+          "next_page_token": "ad-next",
+          "total_results_count": 120,
+          "snapshot_token": "gaql-snapshot-v1:" + "e" * 32,
+      },
   ) as mock_run:
     result = reporting.get_ad_inventory(
         CUSTOMER_ID,
@@ -1579,7 +2041,7 @@ def test_get_ad_inventory_can_return_structure_without_metrics_or_text():
         limit=20,
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "FROM ad_group_ad" in query
   assert "campaign.id IN (111)" in query
   assert "ad_group.id IN (222)" in query
@@ -1587,15 +2049,23 @@ def test_get_ad_inventory_can_return_structure_without_metrics_or_text():
   assert "ad_group_ad.ad.type IN (RESPONSIVE_SEARCH_AD)" in query
   assert "metrics.cost_micros" not in query
   assert "responsive_search_ad.headlines" not in query
-  assert "LIMIT 20" in query
+  assert "LIMIT" not in query
   assert result["ad_inventory"] == rows
   assert result["include_metrics"] is False
+  assert result["total_count"] == 120
+  assert result["bulk_export_call"]["arguments"]["snapshot_token"] == (
+      "gaql-snapshot-v1:" + "e" * 32
+  )
 
 
 def test_get_ad_inventory_ignores_empty_string_enum_filters():
   with mock.patch(
-      "ads_mcp.tools.reporting.run_gaql_query",
-      return_value=[],
+      "ads_mcp.tools.reporting.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
   ) as mock_run:
     reporting.get_ad_inventory(
         CUSTOMER_ID,
@@ -1604,7 +2074,7 @@ def test_get_ad_inventory_ignores_empty_string_enum_filters():
         include_metrics=False,
     )
 
-  query = mock_run.call_args.args[0]
+  query = mock_run.call_args.kwargs["query"]
   assert "ad_group_ad.status IN ()" not in query
   assert "ad_group_ad.ad.type IN ()" not in query
   assert "ad_group_ad.status IN" not in query
@@ -1612,7 +2082,7 @@ def test_get_ad_inventory_ignores_empty_string_enum_filters():
 
 
 def test_get_ad_inventory_validates_date_range_without_metrics():
-  with mock.patch("ads_mcp.tools.reporting.run_gaql_query") as mock_run:
+  with mock.patch("ads_mcp.tools.reporting.run_gaql_query_page") as mock_run:
     with pytest.raises(ToolError, match="Invalid date_range"):
       reporting.get_ad_inventory(
           CUSTOMER_ID,
@@ -1696,6 +2166,7 @@ def test_list_video_enhancements_returns_pagination_metadata():
         "rows": rows,
         "next_page_token": "next-page",
         "total_results_count": 5,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
     }
     result = reporting.list_video_enhancements(
         CUSTOMER_ID,
@@ -1711,6 +2182,16 @@ def test_list_video_enhancements_returns_pagination_metadata():
       "total_count": 5,
       "total_page_count": 5,
       "truncated": True,
+      "has_more": True,
+      "complete_inline": False,
       "next_page_token": "next-page",
       "page_size": 1,
+      "requested_page_size": 1,
+      "page_size_clamped": False,
+      "bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {
+              "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+          },
+      },
   }

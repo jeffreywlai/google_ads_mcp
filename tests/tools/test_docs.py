@@ -23,6 +23,21 @@ from fastmcp.exceptions import ToolError
 import pytest
 
 
+class _FieldPager:
+  """Minimal GoogleAdsField pager stand-in exposing one response page."""
+
+  def __init__(self, results, total_count, next_page_token=""):
+    self._page = mock.Mock(
+        results=results,
+        total_results_count=total_count,
+        next_page_token=next_page_token,
+    )
+
+  @property
+  def pages(self):
+    return iter([self._page])
+
+
 @pytest.fixture(autouse=True)
 def reset_doc_caches():
   docs._TEXT_FILE_CACHE = {}  # pylint: disable=protected-access
@@ -144,6 +159,16 @@ def test_get_resource_metadata(mock_get_ads_client):
       "selectable": ["campaign.id", "campaign.status"],
       "filterable": ["campaign.id", "campaign.status"],
       "sortable": ["campaign.id"],
+      "returned_count": 3,
+      "total_count": 3,
+      "total_page_count": 1,
+      "truncated": False,
+      "has_more": False,
+      "complete_inline": True,
+      "next_page_token": None,
+      "page_size": 50,
+      "requested_page_size": 50,
+      "page_size_clamped": False,
   }
   mock_service.search_google_ads_fields.assert_called_once_with(
       request={
@@ -151,9 +176,49 @@ def test_get_resource_metadata(mock_get_ads_client):
               "SELECT name, selectable, filterable, sortable "
               "WHERE name LIKE 'campaign.%'"
           ),
-          "page_size": 1000,
+          "page_size": 50,
       }
   )
+
+
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_get_resource_metadata_preserves_google_pagination(
+    mock_get_ads_client,
+):
+  """Metadata pages stay compact while the API cursor preserves all fields."""
+  mock_client = mock_get_ads_client.return_value
+  mock_service = mock_client.get_service.return_value
+  campaign_id = mock.Mock()
+  campaign_id.name = "campaign.id"
+  campaign_id.selectable = True
+  campaign_id.filterable = True
+  campaign_id.sortable = True
+  mock_service.search_google_ads_fields.return_value = _FieldPager(
+      [campaign_id],
+      total_count=275,
+      next_page_token="next-fields-page",
+  )
+
+  result = docs.get_resource_metadata(
+      "campaign",
+      limit=5000,
+      page_token="current-fields-page",
+  )
+
+  assert result["selectable"] == ["campaign.id"]
+  assert result["returned_count"] == 1
+  assert result["total_count"] == 275
+  assert result["next_page_token"] == "next-fields-page"
+  assert result["page_size"] == 100
+  assert result["page_size_clamped"] is True
+  assert mock_service.search_google_ads_fields.call_args.kwargs["request"] == {
+      "query": (
+          "SELECT name, selectable, filterable, sortable "
+          "WHERE name LIKE 'campaign.%'"
+      ),
+      "page_size": 100,
+      "page_token": "current-fields-page",
+  }
 
 
 def test_get_resource_metadata_rejects_invalid_resource_name():
@@ -382,13 +447,115 @@ def test_search_google_ads_fields(mock_get_ads_client, mock_format_value):
       "SELECT name WHERE name LIKE 'campaign.%'", limit=2
   )
 
-  assert result == {
-      "fields": [
-          {"name": "campaign.id"},
-          {"name": "campaign.name"},
-      ]
+  assert result["fields"] == [
+      {"name": "campaign.id"},
+      {"name": "campaign.name"},
+  ]
+  assert result["returned_count"] == 2
+  assert result["total_count"] == 2
+  assert result["truncated"] is False
+  assert result["next_page_token"] is None
+  assert result["source_page_returned_count"] == 2
+  assert result["bulk_export_call"] == {
+      "tool": "export_google_ads_fields_csv",
+      "arguments": {"query": "SELECT name WHERE name LIKE 'campaign.%'"},
   }
   mock_service.search_google_ads_fields.assert_called_once()
+
+
+@mock.patch("ads_mcp.tools.docs.format_value")
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_search_google_ads_fields_returns_api_continuation(
+    mock_get_ads_client, mock_format_value
+):
+  """A bounded field page reports Google's complete count and next token."""
+  mock_client = mock_get_ads_client.return_value
+  mock_service = mock_client.get_service.return_value
+  field = mock.Mock()
+  mock_service.search_google_ads_fields.return_value = _FieldPager(
+      [field],
+      total_count=500,
+      next_page_token="next-fields-page",
+  )
+  mock_format_value.return_value = {"name": "campaign.id"}
+
+  result = docs.search_google_ads_fields(
+      "SELECT name WHERE name LIKE 'campaign.%'",
+      limit=10000,
+      page_token="current-fields-page",
+  )
+
+  assert result["fields"] == [{"name": "campaign.id"}]
+  assert result["total_count"] == 500
+  assert result["next_page_token"] == "next-fields-page"
+  assert result["page_size"] == 100
+  assert result["page_size_clamped"] is True
+
+
+@mock.patch("ads_mcp.tools.docs.format_value")
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_search_google_ads_fields_spills_large_metadata_without_skip_token(
+    mock_get_ads_client,
+    mock_format_value,
+):
+  query = "SELECT name, selectable_with WHERE name LIKE 'campaign.%'"
+  mock_service = mock_get_ads_client.return_value.get_service.return_value
+  source_fields = [mock.Mock(), mock.Mock(), mock.Mock()]
+  mock_service.search_google_ads_fields.return_value = _FieldPager(
+      source_fields,
+      total_count=10,
+      next_page_token="google-next-page",
+  )
+  mock_format_value.side_effect = [
+      {"name": f"campaign.field_{index}", "selectable_with": ["x" * 20_000]}
+      for index in range(3)
+  ]
+
+  result = docs.search_google_ads_fields(query, limit=100)
+
+  assert result["returned_count"] == 2
+  assert result["source_page_returned_count"] == 3
+  assert result["shared_inline_omitted_count"] == 1
+  assert result["next_page_token"] is None
+  assert result["truncated"] is True
+  assert "would skip data" in result["continuation_unavailable"]
+  assert result["bulk_export_call"] == {
+      "tool": "export_google_ads_fields_csv",
+      "arguments": {"query": query},
+  }
+  shared = result["shared_inline_delivery"]
+  assert shared["inline_bytes"] <= shared["inline_byte_limit"]
+
+
+@mock.patch("ads_mcp.tools.docs.write_rows_to_explicit_csv")
+@mock.patch("ads_mcp.tools.docs.format_value")
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_export_google_ads_fields_csv_writes_every_matching_field(
+    mock_get_ads_client,
+    mock_format_value,
+    mock_write_rows,
+):
+  query = "SELECT name, selectable_with WHERE name LIKE 'campaign.%'"
+  source_fields = [mock.Mock(), mock.Mock()]
+  field_service = mock_get_ads_client.return_value.get_service.return_value
+  field_service.search_google_ads_fields.return_value = source_fields
+  formatted_fields = [
+      {"name": "campaign.id", "selectable_with": ["ad_group.id"]},
+      {"name": "campaign.name", "selectable_with": ["ad_group.name"]},
+  ]
+  mock_format_value.side_effect = formatted_fields
+  mock_write_rows.return_value = (
+      "/tmp/google-fields.csv",
+      ["name", "selectable_with"],
+      321,
+  )
+
+  result = docs.export_google_ads_fields_csv(query)
+
+  mock_write_rows.assert_called_once_with(formatted_fields)
+  assert result["row_count"] == 2
+  assert result["file_path"] == "/tmp/google-fields.csv"
+  assert result["complete"] is True
 
 
 @mock.patch("ads_mcp.tools.docs.get_ads_client")

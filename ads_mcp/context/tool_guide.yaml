@@ -22,6 +22,19 @@ principles:
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.
+  - Inline rows are a presentation preview, capped at 100 rows. Source pages
+    use 32 KiB, fan-out/derived sections share 40 KiB, and the complete
+    response targets 48 KiB. These are presentation budgets, never source-data
+    caps; follow stable page tokens or call the exact bulk_export_call. If
+    shared post-processing would make a continuation skip rows, the response
+    suppresses that token and makes exact export the completeness path.
+  - Variable mutation receipts use the same bounded-preview principle. Every
+    requested operation is still applied, and omitted result details spill to
+    a CSV artifact. If that local artifact cannot be written, the response
+    states that the mutation completed and must not be retried.
+  - A tokenless read starts a fresh Google snapshot. page_token and
+    snapshot_token deliberately preserve the original snapshot and may expire
+    after 90 seconds; on expiry, restart the source tool without a token.
   - Date-range args accept native GAQL ranges plus LAST_90_DAYS,
     LAST_180_DAYS, LAST_365_DAYS, LAST_12_MONTHS, LAST_QUARTER, YTD,
     ALL_TIME, or {start_date, end_date}.
@@ -34,9 +47,11 @@ categories:
   discovery:
     summary: Account discovery and custom reads.
     tools:
-      list_accessible_accounts: List accounts that can be used as login_customer_id.
+      list_accessible_accounts: Page through an exact, short-lived in-memory account snapshot without implicit file writes.
+      export_accessible_accounts_csv: Explicitly write the exact accessible-account snapshot to CSV.
       execute_gaql: Custom reporting reads when no dedicated read tool exists.
       export_gaql_csv: Bulk-export GAQL results to a CSV file when JSON responses would be too large.
+      export_materialized_response_csv: Explicitly write the exact deferred oversized read response only when another tool returns this export call.
 
   reporting:
     summary: High-frequency performance and configuration reports.
@@ -88,6 +103,7 @@ categories:
       get_tool_guide: Compact map of tools and when to use them.
       get_gaql_doc: Compact GAQL syntax reference.
       get_resource_metadata: Resource-specific selectable, filterable, and sortable field lists.
+      export_google_ads_fields_csv: Export every matching live GoogleAdsField metadata row and requested column to CSV.
       get_reporting_view_doc: View names or detailed view metadata.
       get_reporting_fields_doc: Cached field metadata for known fields.
       search_google_ads_fields: Live field metadata search for GAQL building.

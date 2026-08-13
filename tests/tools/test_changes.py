@@ -270,7 +270,7 @@ def test_change_tools_flag_when_google_cap_is_reached():
           "rows": [
               {"change_status.resource_name": "customers/123/campaigns/1"}
           ],
-          "next_page_token": None,
+          "next_page_token": "capped-status-snapshot-page-2",
           "total_results_count": 10000,
       },
   ):
@@ -278,6 +278,268 @@ def test_change_tools_flag_when_google_cap_is_reached():
 
   assert result["truncated"] is True
   assert result["api_result_cap"] == 10000
+  assert result["complete_inline"] is False
+  assert result["next_page_token"] is None
+  assert result["has_more"] is False
+  assert result["pagination_suppressed"] is True
+  assert "continuation" not in result
+  assert result["bulk_export_call"]["tool"] == "export_change_history_csv"
+  assert result["bulk_export_call"]["arguments"]["include_recent_events"] is (
+      False
+  )
+  assert "incomplete capped snapshot" in result["bulk_export_note"]
+
+
+def test_capped_event_export_guidance_preserves_operation_filter():
+  with mock.patch(
+      "ads_mcp.tools.changes.run_gaql_query_page",
+      return_value={
+          "rows": [
+              {"change_event.resource_name": "customers/123/campaigns/1"}
+          ],
+          "next_page_token": "capped-event-snapshot-page-2",
+          "total_results_count": 10000,
+      },
+  ):
+    result = changes.list_change_events(
+        CUSTOMER_ID,
+        resource_change_operations=["UPDATE"],
+        change_resource_types=["CAMPAIGN"],
+        limit=10000,
+    )
+
+  arguments = result["bulk_export_call"]["arguments"]
+  assert result["bulk_export_call"]["tool"] == "export_change_history_csv"
+  assert arguments["resource_change_operations"] == ["UPDATE"]
+  assert arguments["resource_types"] == ["CAMPAIGN"]
+  assert result["next_page_token"] is None
+  assert result["has_more"] is False
+  assert result["pagination_suppressed"] is True
+  assert "continuation" not in result
+
+
+def test_change_history_export_applies_event_operation_filter():
+  account_today = date(2026, 7, 31)
+  captured_queries = []
+  empty_collection = {
+      "fragment_paths": [],
+      "fragments": [],
+      "row_count": 0,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+
+  def collect_rows(query_builder, customer_id, start, end, *_args, **_kwargs):
+    del customer_id
+    captured_queries.append(query_builder(start, end))
+    return dict(empty_collection)
+
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      return_value=(account_today, "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=collect_rows,
+    ):
+      with mock.patch(
+          "ads_mcp.tools.changes.merge_temp_csv_files",
+          side_effect=[
+              ("/tmp/status.csv", ["change_status.resource_name"], 0),
+              ("/tmp/events.csv", ["change_event.resource_name"], 0),
+          ],
+      ):
+        result = changes.export_change_history_csv(
+            CUSTOMER_ID,
+            resource_types=["CAMPAIGN"],
+            resource_change_operations=["UPDATE"],
+            start_date=account_today.isoformat(),
+            end_date=account_today.isoformat(),
+        )
+
+  assert len(captured_queries) == 2
+  assert "change_event.resource_change_operation IN (UPDATE)" in (
+      captured_queries[1]
+  )
+  assert result["resource_change_operations"] == ["UPDATE"]
+
+
+def test_export_status_same_day_retention_failure_is_actionable():
+  account_today = date(2026, 7, 31)
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      return_value=(account_today, "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=ToolError("START_DATE_TOO_OLD"),
+    ):
+      with pytest.raises(
+          ToolError,
+          match=(
+              "change_status retention rejected.*"
+              "Rerun export_change_history_csv"
+          ),
+      ) as exc_info:
+        changes.export_change_history_csv(
+            CUSTOMER_ID,
+            include_recent_events=False,
+        )
+
+  assert str(exc_info.value) != "START_DATE_TOO_OLD"
+
+
+def test_export_event_same_day_retention_failure_is_actionable():
+  account_today = date(2026, 7, 31)
+  empty_status_collection = {
+      "fragment_paths": [],
+      "fragments": [],
+      "row_count": 0,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      return_value=(account_today, "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            empty_status_collection,
+            ToolError("START_DATE_TOO_OLD"),
+        ],
+    ):
+      with pytest.raises(
+          ToolError,
+          match=(
+              "change_event retention rejected.*"
+              "Rerun export_change_history_csv"
+          ),
+      ) as exc_info:
+        changes.export_change_history_csv(CUSTOMER_ID)
+
+  assert str(exc_info.value) != "START_DATE_TOO_OLD"
+
+
+def test_export_status_second_retention_failure_is_actionable():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, next_day])
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (next(account_days), "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            ToolError("START_DATE_TOO_OLD first"),
+            ToolError("START_DATE_TOO_OLD retry"),
+        ],
+    ):
+      with pytest.raises(
+          ToolError,
+          match=(
+              "change_status retention rejected.*"
+              "Rerun export_change_history_csv"
+          ),
+      ) as exc_info:
+        changes.export_change_history_csv(
+            CUSTOMER_ID,
+            include_recent_events=False,
+        )
+
+  assert "START_DATE_TOO_OLD retry" not in str(exc_info.value)
+
+
+def test_export_event_second_retention_failure_is_actionable():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter(
+      [first_day, first_day, first_day, next_day, next_day, next_day]
+  )
+  empty_status_collection = {
+      "fragment_paths": [],
+      "fragments": [],
+      "row_count": 0,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (next(account_days), "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            empty_status_collection,
+            ToolError("START_DATE_TOO_OLD first"),
+            ToolError("START_DATE_TOO_OLD retry"),
+        ],
+    ):
+      with pytest.raises(
+          ToolError,
+          match=(
+              "change_event retention rejected.*"
+              "Rerun export_change_history_csv"
+          ),
+      ) as exc_info:
+        changes.export_change_history_csv(
+            CUSTOMER_ID,
+            start_date=first_day.isoformat(),
+            end_date=first_day.isoformat(),
+        )
+
+  assert "START_DATE_TOO_OLD retry" not in str(exc_info.value)
+
+
+def test_export_realign_retention_failure_is_actionable():
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, first_day, next_day])
+  status_start = datetime.combine(
+      first_day - timedelta(days=89),
+      datetime.min.time(),
+  )
+  status_collection = {
+      "fragment_paths": ["/tmp/status-fragment.csv"],
+      "fragments": [
+          {
+              "start": status_start,
+              "end_exclusive": status_start + timedelta(days=1),
+              "fragment_path": "/tmp/status-fragment.csv",
+              "row_count": 1,
+          }
+      ],
+      "row_count": 1,
+      "query_count": 1,
+      "complete": True,
+      "unresolved_windows": [],
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (next(account_days), "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes._collect_complete_change_rows",
+        side_effect=[
+            status_collection,
+            ToolError("START_DATE_TOO_OLD realign"),
+        ],
+    ):
+      with mock.patch("ads_mcp.tools.changes._remove_temp_file"):
+        with pytest.raises(
+            ToolError,
+            match=(
+                "change_status retention rejected.*"
+                "Rerun export_change_history_csv"
+            ),
+        ) as exc_info:
+          changes.export_change_history_csv(CUSTOMER_ID)
+
+  assert "START_DATE_TOO_OLD realign" not in str(exc_info.value)
 
 
 def test_list_change_events_rejects_dates_older_than_30_days():
@@ -411,7 +673,7 @@ def test_direct_change_pagination_keeps_omitted_dates_across_midnight(
           return_value="test-scope",
       ):
         with mock.patch(
-            "ads_mcp.tools.api.run_gaql_query",
+            "ads_mcp.tools.api._iter_gaql_query_attempt",
             return_value=rows,
         ) as mock_query:
           first_page = tool(CUSTOMER_ID, limit=1)
@@ -441,6 +703,93 @@ def test_direct_change_pagination_keeps_omitted_dates_across_midnight(
   assert second_page["resolved_date_range"] == expected_range
   assert second_page["account_today"] == next_day.isoformat()
   mock_query.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("tool", "item_key", "source_name"),
+    [
+        (changes.list_change_statuses, "change_statuses", "change_status"),
+        (changes.list_change_events, "change_events", "change_event"),
+    ],
+)
+def test_direct_change_reads_replan_once_when_retention_advances(
+    tool,
+    item_key,
+    source_name,
+):
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_days = iter([first_day, next_day])
+  page = {
+      "rows": [{"row": source_name}],
+      "next_page_token": None,
+      "total_results_count": 1,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (
+          next(account_days),
+          "Pacific/Kiritimati",
+      ),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.run_gaql_query_page",
+        side_effect=[ToolError("START_DATE_TOO_OLD"), page],
+    ) as mock_page:
+      result = tool(CUSTOMER_ID)
+
+  assert mock_page.call_count == 2
+  assert result[item_key] == [{"row": source_name}]
+  assert result["resolved_date_range"] == {
+      "start_date": (next_day - timedelta(days=7)).isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert result["account_today"] == next_day.isoformat()
+  assert source_name in result["retention_refresh_note"]
+
+
+@pytest.mark.parametrize(
+    ("start_omitted", "end_omitted", "day_delta"),
+    [
+        (start_omitted, end_omitted, day_delta)
+        for start_omitted in (False, True)
+        for end_omitted in (False, True)
+        for day_delta in (1, 2, 7)
+    ],
+)
+def test_resolved_history_request_advance_preserves_date_intent(
+    start_omitted,
+    end_omitted,
+    day_delta,
+):
+  first_day = date(2026, 7, 31)
+  later_day = first_day + timedelta(days=day_delta)
+  explicit_start = first_day - timedelta(days=20)
+  intent = changes._HistoryDateIntent(  # pylint: disable=protected-access
+      start_date=None if start_omitted else explicit_start.isoformat(),
+      end_date=None if end_omitted else first_day.isoformat(),
+      default_days_back=20,
+  )
+  request = intent.resolve(
+      changes._AccountSnapshot(  # pylint: disable=protected-access
+          first_day,
+          "Pacific/Kiritimati",
+      )
+  )
+  advanced = request.advance(
+      changes._AccountSnapshot(  # pylint: disable=protected-access
+          later_day,
+          "Pacific/Kiritimati",
+      )
+  )
+
+  expected_start = (
+      later_day - timedelta(days=20) if start_omitted else explicit_start
+  )
+  expected_end = later_day if end_omitted else first_day
+  assert advanced.start_date == expected_start.isoformat()
+  assert advanced.end_date == expected_end.isoformat()
+  assert advanced.start_date <= advanced.end_date
 
 
 def test_get_change_history_extended_stitches_statuses_and_recent_events():
@@ -668,7 +1017,7 @@ def test_extended_continuation_arguments_use_live_snapshot_across_midnight():
           return_value="test-scope",
       ):
         with mock.patch(
-            "ads_mcp.tools.api.run_gaql_query",
+            "ads_mcp.tools.api._iter_gaql_query_attempt",
             return_value=rows,
         ) as mock_query:
           result = changes.get_change_history_extended(
@@ -787,7 +1136,9 @@ def test_extended_recovers_status_preview_when_retention_advances():
 def test_extended_recovers_event_and_refreshes_status_preview():
   first_day = date(2026, 7, 31)
   next_day = first_day + timedelta(days=1)
-  account_days = iter([first_day, first_day, first_day, next_day])
+  account_days = iter(
+      [first_day, first_day, first_day, next_day, next_day, next_day]
+  )
   old_status_response = {
       "change_statuses": [{"row": "old-status"}],
       "returned_count": 1,
@@ -822,12 +1173,16 @@ def test_extended_recovers_event_and_refreshes_status_preview():
     ) as mock_statuses:
       with mock.patch(
           "ads_mcp.tools.changes.list_change_events",
-          side_effect=[ToolError("START_DATE_TOO_OLD"), event_response],
+          side_effect=[
+              ToolError("START_DATE_TOO_OLD"),
+              event_response,
+              event_response,
+          ],
       ) as mock_events:
         result = changes.get_change_history_extended(CUSTOMER_ID)
 
   assert mock_statuses.call_count == 2
-  assert mock_events.call_count == 2
+  assert mock_events.call_count == 3
   assert (
       mock_statuses.call_args.kwargs["start_date"]
       == (next_day - timedelta(days=89)).isoformat()
@@ -854,6 +1209,134 @@ def test_extended_recovers_event_and_refreshes_status_preview():
   )
   assert result["account_today"] == next_day.isoformat()
   assert "change_event retention advanced" in result["retention_refresh_note"]
+
+
+def test_extended_converges_when_event_then_status_advance_again():
+  first_day = date(2026, 7, 31)
+  second_day = first_day + timedelta(days=1)
+  third_day = second_day + timedelta(days=1)
+  account_days = iter(
+      [
+          first_day,
+          first_day,
+          first_day,
+          second_day,
+          second_day,
+          third_day,
+          third_day,
+      ]
+  )
+  status_response = {
+      "change_statuses": [{"row": "status"}],
+      "returned_count": 1,
+      "total_count": 1,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  event_response = {
+      "change_events": [{"row": "event"}],
+      "returned_count": 1,
+      "total_count": 1,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=lambda *_args: (next(account_days), "Etc/UTC"),
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_statuses",
+        side_effect=[
+            status_response,
+            ToolError("START_DATE_TOO_OLD"),
+            status_response,
+        ],
+    ) as mock_statuses:
+      with mock.patch(
+          "ads_mcp.tools.changes.list_change_events",
+          side_effect=[
+              ToolError("START_DATE_TOO_OLD"),
+              event_response,
+              event_response,
+          ],
+      ) as mock_events:
+        result = changes.get_change_history_extended(CUSTOMER_ID)
+
+  assert mock_statuses.call_count == 3
+  assert mock_events.call_count == 3
+  assert result["account_today"] == third_day.isoformat()
+  assert result["date_range"]["end_date"] == third_day.isoformat()
+  assert result["change_status_window"]["end_date"] == third_day.isoformat()
+  assert result["change_event_window"]["end_date"] == third_day.isoformat()
+  assert result["change_event_coverage"]["window"]["end_date"] == (
+      third_day.isoformat()
+  )
+
+
+@pytest.mark.parametrize("failing_source", ["change_status", "change_event"])
+def test_extended_shared_runner_replans_each_source_without_raw_error(
+    failing_source,
+):
+  first_day = date(2026, 7, 31)
+  next_day = first_day + timedelta(days=1)
+  account_call_count = 0
+  rollover_call = 3 if failing_source == "change_status" else 4
+
+  def _moving_account_today(*_args):
+    nonlocal account_call_count
+    account_call_count += 1
+    current_day = first_day if account_call_count < rollover_call else next_day
+    return current_day, "Pacific/Kiritimati"
+
+  status_response = {
+      "change_statuses": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  event_response = {
+      "change_events": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  status_side_effect = (
+      [ToolError("START_DATE_TOO_OLD"), status_response]
+      if failing_source == "change_status"
+      else None
+  )
+  event_side_effect = (
+      [
+          ToolError("START_DATE_TOO_OLD"),
+          event_response,
+          event_response,
+      ]
+      if failing_source == "change_event"
+      else None
+  )
+  with mock.patch(
+      "ads_mcp.tools.changes._account_today",
+      side_effect=_moving_account_today,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_statuses",
+        return_value=status_response,
+        side_effect=status_side_effect,
+    ):
+      with mock.patch(
+          "ads_mcp.tools.changes.list_change_events",
+          return_value=event_response,
+          side_effect=event_side_effect,
+      ):
+        result = changes.get_change_history_extended(CUSTOMER_ID)
+
+  assert result["date_range"] == {
+      "start_date": (next_day - timedelta(days=89)).isoformat(),
+      "end_date": next_day.isoformat(),
+  }
+  assert failing_source in result["retention_refresh_note"]
 
 
 def test_collect_complete_change_rows_splits_capped_windows():
@@ -1982,6 +2465,122 @@ def test_cap_export_guidance_arguments_are_directly_executable():
   assert guidance["arguments"]["resource_types"] == ["CAMPAIGN"]
   assert guidance["arguments"]["include_recent_events"] is False
   assert export["change_status_export"]["row_count"] == 1
+
+
+def test_cap_export_guidance_beats_incomplete_snapshot_continuation():
+  today = date.today()
+  event_window = {
+      "start_date": (today - timedelta(days=6)).isoformat(),
+      "end_date": today.isoformat(),
+  }
+  exact_export_call = {
+      "tool": "export_change_history_csv",
+      "arguments": {
+          "customer_id": CUSTOMER_ID,
+          "resource_types": ["CAMPAIGN"],
+          "resource_change_operations": ["UPDATE"],
+          **event_window,
+          "include_recent_events": True,
+          "login_customer_id": "987",
+      },
+  }
+  statuses = {
+      "change_statuses": [],
+      "returned_count": 0,
+      "total_count": 0,
+      "truncated": False,
+      "next_page_token": None,
+  }
+  capped_events = {
+      "change_events": [{"change_event.resource_name": "x"}],
+      "returned_count": 100,
+      "total_count": 10_000,
+      "truncated": True,
+      "api_result_cap": 10_000,
+      "next_page_token": "known-incomplete-page-2",
+      "bulk_export_call": exact_export_call,
+  }
+
+  guidance = changes._preview_continuation_guidance(  # pylint: disable=protected-access
+      statuses,
+      capped_events,
+      customer_id=CUSTOMER_ID,
+      status_window=event_window,
+      event_window=event_window,
+      status_resource_types=["CAMPAIGN"],
+      event_resource_types=["CAMPAIGN"],
+      limit=100,
+      login_customer_id="987",
+  )
+
+  assert guidance["change_event"]["tool"] == "export_change_history_csv"
+  assert guidance["change_event"]["arguments"] == (
+      exact_export_call["arguments"]
+  )
+  assert "page through" in guidance["change_event"]["instruction"]
+
+
+def test_extended_history_shares_byte_budget_without_skip_token():
+  today = date.today()
+  window = {
+      "start_date": (today - timedelta(days=6)).isoformat(),
+      "end_date": today.isoformat(),
+  }
+  status_export = {
+      "tool": "export_gaql_csv",
+      "arguments": {"snapshot_token": "gaql-snapshot-v1:" + "a" * 32},
+  }
+  event_export = {
+      "tool": "export_gaql_csv",
+      "arguments": {"snapshot_token": "gaql-snapshot-v1:" + "b" * 32},
+  }
+  statuses = {
+      "change_statuses": [{"kind": "status", "payload": "s" * 20_000}],
+      "returned_count": 1,
+      "total_count": 1,
+      "truncated": False,
+      "has_more": False,
+      "complete_inline": True,
+      "next_page_token": None,
+      "bulk_export_call": status_export,
+  }
+  events = {
+      "change_events": [
+          {"kind": "event-1", "payload": "e" * 20_000},
+          {"kind": "event-2", "payload": "e" * 20_000},
+      ],
+      "returned_count": 2,
+      "total_count": 3,
+      "truncated": True,
+      "has_more": True,
+      "complete_inline": False,
+      "next_page_token": "after-event-2",
+      "bulk_export_call": event_export,
+  }
+  with mock.patch(
+      "ads_mcp.tools.changes.list_change_statuses",
+      return_value=statuses,
+  ):
+    with mock.patch(
+        "ads_mcp.tools.changes.list_change_events",
+        return_value=events,
+    ):
+      result = changes.get_change_history_extended(
+          CUSTOMER_ID,
+          resource_types=["CAMPAIGN"],
+          **window,
+      )
+
+  shared = result["shared_inline_delivery"]
+  assert shared["inline_bytes"] <= shared["inline_byte_limit"]
+  assert result["change_status_returned_count"] == 1
+  assert result["recent_change_event_returned_count"] == 1
+  assert result["recent_change_event_next_page_token"] is None
+  assert shared["omitted_counts"]["change_events"] == 1
+  guidance = result["continuation_guidance"]["change_event"]
+  assert guidance["tool"] == "export_gaql_csv"
+  assert guidance["arguments"] == event_export["arguments"]
+  assert "would skip data" in guidance["instruction"]
 
 
 def test_status_partition_windows_coarsen_without_date_gaps():

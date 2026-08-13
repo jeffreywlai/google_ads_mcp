@@ -17,11 +17,11 @@
 from collections.abc import Callable
 import contextlib
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
 import functools
-import os
 from typing import Any
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
@@ -36,18 +36,23 @@ from ads_mcp.tools._gaql import gaql_quote_string
 from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import get_ads_credential_cache_scope
 from ads_mcp.tools.api import merge_temp_csv_files
+from ads_mcp.tools.api import remove_temp_csv_file
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
-from ads_mcp.tools.api import write_rows_to_temp_csv
+from ads_mcp.tools.api import (
+    write_rows_to_intermediate_csv as write_rows_to_temp_csv,
+)
 
 
 _CHANGE_STATUS_MAX_LOOKBACK_DAYS = 90
 _CHANGE_EVENT_MAX_LOOKBACK_DAYS = 30
 _CHANGE_HISTORY_RESULT_CAP = 10_000
 _DEFAULT_EXPORT_QUERY_BUDGET = 200
+_PREVIEW_CONVERGENCE_MAX_ATTEMPTS = 4
 _ACCOUNT_TODAY_OVERRIDE: ContextVar[tuple[date, str] | None] = ContextVar(
     "change_history_account_today",
     default=None,
@@ -60,6 +65,102 @@ class _ChangeHistoryQueryError(ToolError):
   def __init__(self, message: str, queries_attempted: int):
     super().__init__(message)
     self.queries_attempted = queries_attempted
+
+
+@dataclass(frozen=True)
+class _AccountSnapshot:
+  """One account-local calendar snapshot used to plan history reads."""
+
+  today: date
+  time_zone: str
+
+
+@dataclass(frozen=True)
+class _HistoryDateIntent:
+  """Original date intent, including which bounds were omitted."""
+
+  start_date: str | None
+  end_date: str | None
+  default_days_back: int
+
+  def resolve(self, snapshot: _AccountSnapshot) -> "_ResolvedHistoryRequest":
+    start_date, end_date = _resolve_date_range(
+        self.start_date,
+        self.end_date,
+        self.default_days_back,
+        snapshot.today,
+    )
+    return _ResolvedHistoryRequest(
+        intent=self,
+        start_date=start_date,
+        end_date=end_date,
+        snapshot=snapshot,
+    )
+
+
+@dataclass(frozen=True)
+class _ResolvedHistoryRequest:
+  """Resolved request bounds tied to the snapshot that produced them."""
+
+  intent: _HistoryDateIntent
+  start_date: str
+  end_date: str
+  snapshot: _AccountSnapshot
+
+  def advance(self, snapshot: _AccountSnapshot) -> "_ResolvedHistoryRequest":
+    """Moves only omitted bounds when the account calendar advances."""
+    if snapshot.today <= self.snapshot.today:
+      return self
+    start_date = self.start_date
+    end_date = self.end_date
+    if self.intent.start_date is None:
+      start_date = (
+          snapshot.today - timedelta(days=self.intent.default_days_back)
+      ).isoformat()
+    if self.intent.end_date is None:
+      end_date = snapshot.today.isoformat()
+    if start_date > end_date:
+      if self.intent.start_date is None and self.intent.end_date is not None:
+        start_date = end_date
+      elif self.intent.end_date is None and self.intent.start_date is not None:
+        end_date = start_date
+    return _ResolvedHistoryRequest(
+        intent=self.intent,
+        start_date=start_date,
+        end_date=end_date,
+        snapshot=snapshot,
+    )
+
+
+@dataclass(frozen=True)
+class _HistorySourceSpec:
+  """Static retention and response contract for one history resource."""
+
+  name: str
+  item_key: str
+  lookback_days: int
+  direct_tool: str
+
+
+@dataclass(frozen=True)
+class _SourcePagePlan:
+  """One source window derived from a resolved history request."""
+
+  source: _HistorySourceSpec
+  request: _ResolvedHistoryRequest
+  start_date: str
+  end_date: str
+  retention_mode: str
+
+
+@dataclass(frozen=True)
+class _SourcePageRead:
+  """A page response plus the final plan used after optional recovery."""
+
+  response: dict[str, Any]
+  plan: _SourcePagePlan | None
+  request: _ResolvedHistoryRequest
+  retention_refreshed: bool
 
 
 _CHANGE_STATUS_RESOURCE_TYPES = frozenset(
@@ -113,6 +214,22 @@ _CHANGE_EVENT_RESOURCE_TYPES = frozenset(
         "UNKNOWN",
         "UNSPECIFIED",
     }
+)
+_CHANGE_STATUS_SOURCE = _HistorySourceSpec(
+    name="change_status",
+    item_key="change_statuses",
+    lookback_days=_CHANGE_STATUS_MAX_LOOKBACK_DAYS,
+    direct_tool="list_change_statuses",
+)
+_CHANGE_EVENT_SOURCE = _HistorySourceSpec(
+    name="change_event",
+    item_key="change_events",
+    lookback_days=_CHANGE_EVENT_MAX_LOOKBACK_DAYS,
+    direct_tool="list_change_events",
+)
+_DELEGATED_SOURCE_PLAN: ContextVar[_SourcePagePlan | None] = ContextVar(
+    "change_history_delegated_source_plan",
+    default=None,
 )
 _CHANGE_STATUS_EXPORT_FIELDS = [
     "change_status.resource_name",
@@ -207,6 +324,18 @@ def _account_today(
     return account_today_override
   customer_zone = _customer_time_zone(customer_id, login_customer_id)
   return datetime.now(customer_zone).date(), customer_zone.key
+
+
+def _account_snapshot(
+    customer_id: str,
+    login_customer_id: str | None,
+) -> _AccountSnapshot:
+  """Captures one immutable account-local date and timezone pair."""
+  account_today, account_time_zone = _account_today(
+      customer_id,
+      login_customer_id,
+  )
+  return _AccountSnapshot(account_today, account_time_zone)
 
 
 def _default_date_range(
@@ -529,6 +658,45 @@ def _available_date_window(
   }
 
 
+def _source_page_plan(
+    request: _ResolvedHistoryRequest,
+    source: _HistorySourceSpec,
+    retention_mode: str,
+) -> _SourcePagePlan | None:
+  """Plans a strict, clamped, or snapshot-continuation source window."""
+  if retention_mode == "available":
+    window = _available_date_window(
+        request.start_date,
+        request.end_date,
+        _oldest_supported_start(source.lookback_days, request.snapshot.today),
+        request.snapshot.today,
+    )
+    if window is None:
+      return None
+    start_date = window["start_date"]
+    end_date = window["end_date"]
+  elif retention_mode == "strict":
+    start_date, end_date = _resolve_supported_date_range(
+        request.start_date,
+        request.end_date,
+        request.intent.default_days_back,
+        source.name,
+        source.lookback_days,
+        request.snapshot.today,
+    )
+  elif retention_mode == "continuation":
+    start_date, end_date = request.start_date, request.end_date
+  else:
+    raise ValueError(f"Unsupported retention_mode: {retention_mode}")
+  return _SourcePagePlan(
+      source=source,
+      request=request,
+      start_date=start_date,
+      end_date=end_date,
+      retention_mode=retention_mode,
+  )
+
+
 def _status_window_after_retention_refresh(
     previous_window: dict[str, str] | None,
     retained_window: dict[str, str] | None,
@@ -588,12 +756,41 @@ def _retention_retry_budget_error(
   )
 
 
-def _preview_retention_retry_error(source_name: str) -> ToolError:
-  """Builds a contextual error after preview retention cannot be refreshed."""
+def _retention_refresh_unavailable_error(source_name: str) -> ToolError:
+  """Builds an actionable export error when retention cannot be replanned."""
   return ToolError(
-      f"{source_name} retention changed while the preview was running and "
-      "could not be refreshed safely. Call get_change_history_extended again; "
-      "a new call recomputes the available account-local date window."
+      f"{source_name} retention rejected the planned start date, but a fresh "
+      "account-local date lookup did not expose a newer retention window. "
+      "Rerun export_change_history_csv to create a new snapshot. If the "
+      "condition persists, use a more recent explicit start_date; Google Ads "
+      "does not expose rows older than the source retention window."
+  )
+
+
+def _source_retention_retry_error(
+    source: _HistorySourceSpec,
+    operation_name: str,
+) -> ToolError:
+  """Builds a contextual error after a source read cannot be refreshed."""
+  return ToolError(
+      f"{source.name} retention changed while {operation_name} was running and "
+      "could not be refreshed safely. Call "
+      f"{source.direct_tool} again without page_token; a new call recomputes "
+      "the available account-local date window. For complete retained history, "
+      "call export_change_history_csv."
+  )
+
+
+def _preview_retention_retry_error(source_name: str) -> ToolError:
+  """Compatibility wrapper for contextual preview retention errors."""
+  source = (
+      _CHANGE_STATUS_SOURCE
+      if source_name == "change_status"
+      else _CHANGE_EVENT_SOURCE
+  )
+  return _source_retention_retry_error(
+      source,
+      "get_change_history_extended",
   )
 
 
@@ -605,6 +802,7 @@ def _build_export_query(
     resource_types: list[str],
     start_datetime: datetime,
     end_datetime: datetime,
+    extra_where_conditions: list[str] | None = None,
 ) -> str:
   where_conditions = _datetime_window_conditions(
       datetime_field,
@@ -615,6 +813,8 @@ def _build_export_query(
     where_conditions.append(
         f"{resource_type_field} IN ({quote_enum_values(resource_types)})"
     )
+  if extra_where_conditions:
+    where_conditions.extend(extra_where_conditions)
   return f"""
       SELECT
         {", ".join(select_fields)}
@@ -627,8 +827,7 @@ def _build_export_query(
 
 def _remove_temp_file(file_path: str) -> None:
   """Removes a known temporary export file if it still exists."""
-  with contextlib.suppress(OSError):
-    os.remove(file_path)
+  remove_temp_csv_file(file_path)
 
 
 def _collect_complete_change_rows(
@@ -703,8 +902,7 @@ def _collect_complete_change_rows(
       midpoint = leaf["start"] + timedelta(microseconds=span_microseconds // 2)
       later = _query_window(midpoint, leaf["end_exclusive"])
       earlier = _query_window(leaf["start"], midpoint)
-      with contextlib.suppress(OSError):
-        os.remove(leaf["fragment_path"])
+      remove_temp_csv_file(leaf["fragment_path"])
       leaves[leaf_index : leaf_index + 1] = [later, earlier]
 
     unresolved_windows = []
@@ -735,6 +933,20 @@ def _collect_complete_change_rows(
     }
     cleanup_stack.pop_all()
     return result
+
+
+def _collect_after_retention_refresh(
+    source_name: str,
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+  """Collects a replanned export without leaking a second retention error."""
+  try:
+    return _collect_complete_change_rows(*args, **kwargs)
+  except ToolError as exc:
+    if _is_start_date_too_old_error(exc):
+      raise _retention_refresh_unavailable_error(source_name) from exc
+    raise
 
 
 def _remove_collection_fragments(collection: dict[str, Any]) -> None:
@@ -869,7 +1081,8 @@ def _realign_change_status_collection(
   new_collection = None
   if initial_windows and remaining_queries > 0:
     try:
-      new_collection = _collect_complete_change_rows(
+      new_collection = _collect_after_retention_refresh(
+          "change_status",
           query_builder,
           customer_id,
           new_start,
@@ -980,11 +1193,95 @@ def _build_change_page_response(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
   if page["total_results_count"] >= _CHANGE_HISTORY_RESULT_CAP:
     result["truncated"] = True
     result["api_result_cap"] = _CHANGE_HISTORY_RESULT_CAP
+    result["complete_inline"] = False
   return result
+
+
+def _empty_source_page_response(
+    source: _HistorySourceSpec,
+    limit: int,
+) -> dict[str, Any]:
+  return build_paginated_list_response(
+      source.item_key,
+      [],
+      total_count=0,
+      page_size=limit,
+      next_page_token=None,
+  )
+
+
+def _run_source_page_plan(
+    plan: _SourcePagePlan,
+    *,
+    customer_id: str,
+    login_customer_id: str | None,
+    limit: int,
+    operation_name: str,
+    execute: Callable[[_SourcePagePlan], dict[str, Any]],
+) -> _SourcePageRead:
+  """Executes one source plan with one account-day refresh and replan."""
+  try:
+    response = execute(plan)
+  except ToolError as exc:
+    if not _is_start_date_too_old_error(exc):
+      raise
+    if plan.retention_mode == "continuation":
+      raise _source_retention_retry_error(
+          plan.source,
+          operation_name,
+      ) from exc
+
+    retry_snapshot = _account_snapshot(customer_id, login_customer_id)
+    if retry_snapshot.today <= plan.request.snapshot.today:
+      raise _source_retention_retry_error(
+          plan.source,
+          operation_name,
+      ) from exc
+    retry_request = plan.request.advance(retry_snapshot)
+    try:
+      retry_plan = _source_page_plan(
+          retry_request,
+          plan.source,
+          plan.retention_mode,
+      )
+    except ToolError as planning_exc:
+      raise _source_retention_retry_error(
+          plan.source,
+          operation_name,
+      ) from planning_exc
+    if retry_plan is None:
+      return _SourcePageRead(
+          response=_empty_source_page_response(plan.source, limit),
+          plan=None,
+          request=retry_request,
+          retention_refreshed=True,
+      )
+    try:
+      response = execute(retry_plan)
+    except ToolError as retry_exc:
+      if _is_start_date_too_old_error(retry_exc):
+        raise _source_retention_retry_error(
+            plan.source,
+            operation_name,
+        ) from retry_exc
+      raise
+    return _SourcePageRead(
+        response=response,
+        plan=retry_plan,
+        request=retry_request,
+        retention_refreshed=True,
+    )
+  return _SourcePageRead(
+      response=response,
+      plan=plan,
+      request=plan.request,
+      retention_refreshed=False,
+  )
 
 
 def _decode_change_page_token(
@@ -1078,7 +1375,57 @@ def _preview_continuation_guidance(
   """Builds explicit next-call guidance for bounded history previews."""
   guidance = {}
   status_token = statuses.get("next_page_token")
-  if status_token and status_window:
+  status_shared_omission = bool(statuses.get("shared_inline_omitted_count"))
+  status_at_cap = bool(statuses.get("api_result_cap")) or (
+      statuses.get("truncated")
+      and not status_token
+      and not status_shared_omission
+  )
+  if status_shared_omission:
+    export_call = statuses.get("bulk_export_call") or {
+        "tool": "export_change_history_csv",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_types": status_resource_types,
+            "start_date": status_window["start_date"]
+            if status_window
+            else None,
+            "end_date": status_window["end_date"] if status_window else None,
+            "include_recent_events": False,
+            "login_customer_id": login_customer_id,
+        },
+    }
+    guidance["change_status"] = {
+        **export_call,
+        "instruction": (
+            "The shared response budget omitted rows from this source page, "
+            "so a later-page token would skip data. Call the exact export "
+            "above instead."
+        ),
+    }
+  elif status_at_cap:
+    export_call = statuses.get("bulk_export_call") or {
+        "tool": "export_change_history_csv",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_types": status_resource_types,
+            "start_date": status_window["start_date"]
+            if status_window
+            else None,
+            "end_date": status_window["end_date"] if status_window else None,
+            "include_recent_events": False,
+            "login_customer_id": login_customer_id,
+        },
+    }
+    guidance["change_status"] = {
+        **export_call,
+        "instruction": (
+            "The preview reached Google's result cap; call "
+            "export_change_history_csv with the arguments exactly as shown. "
+            "Do not page through the known-incomplete capped snapshot."
+        ),
+    }
+  elif status_token and status_window:
     arguments = {
         "customer_id": customer_id,
         "resource_types": status_resource_types,
@@ -1096,27 +1443,57 @@ def _preview_continuation_guidance(
             "Call list_change_statuses with the arguments exactly as shown."
         ),
     }
-  elif statuses.get("truncated"):
-    guidance["change_status"] = {
+
+  event_token = recent_events.get("next_page_token")
+  event_shared_omission = bool(
+      recent_events.get("shared_inline_omitted_count")
+  )
+  event_at_cap = bool(recent_events.get("api_result_cap")) or (
+      recent_events.get("truncated")
+      and not event_token
+      and not event_shared_omission
+  )
+  if event_shared_omission:
+    export_call = recent_events.get("bulk_export_call") or {
         "tool": "export_change_history_csv",
         "arguments": {
             "customer_id": customer_id,
-            "resource_types": status_resource_types,
-            "start_date": status_window["start_date"]
-            if status_window
-            else None,
-            "end_date": status_window["end_date"] if status_window else None,
-            "include_recent_events": False,
+            "resource_types": event_resource_types,
+            "start_date": event_window["start_date"] if event_window else None,
+            "end_date": event_window["end_date"] if event_window else None,
+            "include_recent_events": True,
             "login_customer_id": login_customer_id,
         },
+    }
+    guidance["change_event"] = {
+        **export_call,
         "instruction": (
-            "The preview reached Google's result cap; call "
-            "export_change_history_csv with the arguments exactly as shown."
+            "The shared response budget omitted rows from this source page, "
+            "so a later-page token would skip data. Call the exact export "
+            "above instead."
         ),
     }
-
-  event_token = recent_events.get("next_page_token")
-  if event_token and event_window:
+  elif event_at_cap:
+    export_call = recent_events.get("bulk_export_call") or {
+        "tool": "export_change_history_csv",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_types": event_resource_types,
+            "start_date": event_window["start_date"] if event_window else None,
+            "end_date": event_window["end_date"] if event_window else None,
+            "include_recent_events": True,
+            "login_customer_id": login_customer_id,
+        },
+    }
+    guidance["change_event"] = {
+        **export_call,
+        "instruction": (
+            "The preview reached Google's result cap; call "
+            "export_change_history_csv with the arguments exactly as shown. "
+            "Do not page through the known-incomplete capped snapshot."
+        ),
+    }
+  elif event_token and event_window:
     arguments = {
         "customer_id": customer_id,
         "change_resource_types": event_resource_types,
@@ -1132,22 +1509,6 @@ def _preview_continuation_guidance(
         "arguments": arguments,
         "instruction": (
             "Call list_change_events with the arguments exactly as shown."
-        ),
-    }
-  elif recent_events.get("truncated"):
-    guidance["change_event"] = {
-        "tool": "export_change_history_csv",
-        "arguments": {
-            "customer_id": customer_id,
-            "resource_types": event_resource_types,
-            "start_date": event_window["start_date"] if event_window else None,
-            "end_date": event_window["end_date"] if event_window else None,
-            "include_recent_events": True,
-            "login_customer_id": login_customer_id,
-        },
-        "instruction": (
-            "The preview reached Google's result cap; call "
-            "export_change_history_csv with the arguments exactly as shown."
         ),
     }
   return guidance
@@ -1305,6 +1666,207 @@ def _apply_resource_type_coverage(
   return coverage
 
 
+def _execute_change_status_page(
+    plan: _SourcePagePlan,
+    *,
+    customer_id: str,
+    resource_types: list[str],
+    limit: int,
+    page_token: str | None,
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Executes one already-resolved change_status page plan."""
+  where_conditions = _datetime_range_conditions(
+      "change_status.last_change_date_time",
+      plan.start_date,
+      plan.end_date,
+  )
+  if resource_types:
+    where_conditions.append(
+        "change_status.resource_type IN "
+        f"({quote_enum_values(resource_types)})"
+    )
+  query = f"""
+      SELECT
+        change_status.resource_name,
+        change_status.resource_type,
+        change_status.resource_status,
+        change_status.last_change_date_time
+      FROM change_status
+      {build_where_clause(where_conditions)}
+      ORDER BY change_status.last_change_date_time DESC
+      LIMIT {_CHANGE_HISTORY_RESULT_CAP}
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = _build_change_page_response("change_statuses", page, limit)
+  result["next_page_token"] = _bind_change_page_token(
+      result.get("next_page_token"),
+      plan.start_date,
+      plan.end_date,
+  )
+  result["account_time_zone"] = plan.request.snapshot.time_zone
+  result["account_today"] = plan.request.snapshot.today.isoformat()
+  result["resolved_date_range"] = {
+      "start_date": plan.start_date,
+      "end_date": plan.end_date,
+  }
+  if result.get("api_result_cap"):
+    result.update(
+        {
+            "next_page_token": None,
+            "has_more": False,
+            "pagination_suppressed": True,
+            "pagination_suppressed_reason": (
+                "Google's 10,000-row result cap makes this snapshot "
+                "incomplete. Paging it could skip changes; use "
+                "bulk_export_call instead."
+            ),
+        }
+    )
+    result["bulk_export_call"] = {
+        "tool": "export_change_history_csv",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_types": resource_types,
+            "start_date": plan.start_date,
+            "end_date": plan.end_date,
+            "include_recent_events": False,
+            "login_customer_id": login_customer_id,
+        },
+    }
+    result["bulk_export_note"] = (
+        "The inline snapshot reached Google's 10,000-row query cap. Use the "
+        "change-history exporter above; it subdivides capped windows instead "
+        "of exporting the incomplete capped snapshot."
+    )
+  if result["next_page_token"]:
+    result["continuation"] = {
+        "tool": "list_change_statuses",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_types": resource_types,
+            "start_date": plan.start_date,
+            "end_date": plan.end_date,
+            "limit": limit,
+            "page_token": result["next_page_token"],
+            "login_customer_id": login_customer_id,
+        },
+    }
+  return result
+
+
+def _execute_change_event_page(
+    plan: _SourcePagePlan,
+    *,
+    customer_id: str,
+    resource_change_operations: list[str],
+    change_resource_types: list[str],
+    limit: int,
+    page_token: str | None,
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Executes one already-resolved change_event page plan."""
+  where_conditions = _datetime_range_conditions(
+      "change_event.change_date_time",
+      plan.start_date,
+      plan.end_date,
+  )
+  if resource_change_operations:
+    where_conditions.append(
+        "change_event.resource_change_operation IN "
+        f"({quote_enum_values(resource_change_operations)})"
+    )
+  if change_resource_types:
+    where_conditions.append(
+        "change_event.change_resource_type IN "
+        f"({quote_enum_values(change_resource_types)})"
+    )
+  query = f"""
+      SELECT
+        change_event.change_date_time,
+        change_event.change_resource_type,
+        change_event.resource_change_operation,
+        change_event.resource_name,
+        change_event.client_type,
+        change_event.user_email,
+        change_event.changed_fields
+      FROM change_event
+      {build_where_clause(where_conditions)}
+      ORDER BY change_event.change_date_time DESC
+      LIMIT {_CHANGE_HISTORY_RESULT_CAP}
+  """
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+  )
+  result = _build_change_page_response("change_events", page, limit)
+  result["next_page_token"] = _bind_change_page_token(
+      result.get("next_page_token"),
+      plan.start_date,
+      plan.end_date,
+  )
+  result["account_time_zone"] = plan.request.snapshot.time_zone
+  result["account_today"] = plan.request.snapshot.today.isoformat()
+  result["resolved_date_range"] = {
+      "start_date": plan.start_date,
+      "end_date": plan.end_date,
+  }
+  if result.get("api_result_cap"):
+    result.update(
+        {
+            "next_page_token": None,
+            "has_more": False,
+            "pagination_suppressed": True,
+            "pagination_suppressed_reason": (
+                "Google's 10,000-row result cap makes this snapshot "
+                "incomplete. Paging it could skip changes; use "
+                "bulk_export_call instead."
+            ),
+        }
+    )
+    result["bulk_export_call"] = {
+        "tool": "export_change_history_csv",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_types": change_resource_types,
+            "resource_change_operations": resource_change_operations,
+            "start_date": plan.start_date,
+            "end_date": plan.end_date,
+            "include_recent_events": True,
+            "login_customer_id": login_customer_id,
+        },
+    }
+    result["bulk_export_note"] = (
+        "The inline snapshot reached Google's 10,000-row query cap. Use the "
+        "change-history exporter above; it subdivides capped windows instead "
+        "of exporting the incomplete capped snapshot."
+    )
+  if result["next_page_token"]:
+    result["continuation"] = {
+        "tool": "list_change_events",
+        "arguments": {
+            "customer_id": customer_id,
+            "resource_change_operations": resource_change_operations,
+            "change_resource_types": change_resource_types,
+            "start_date": plan.start_date,
+            "end_date": plan.end_date,
+            "limit": limit,
+            "page_token": result["next_page_token"],
+            "login_customer_id": login_customer_id,
+        },
+    }
+  return result
+
+
 change_tool = ads_read_tool(mcp, tags={"changes", "audit"})
 change_export_tool = local_write_tool(
     mcp,
@@ -1338,6 +1900,20 @@ def list_change_statuses(
       A dict containing change status rows plus completeness metadata.
   """
   validate_limit(limit)
+  resource_types = normalize_list_arg(resource_types, "resource_types")
+  delegated_plan = _DELEGATED_SOURCE_PLAN.get()
+  if delegated_plan is not None:
+    if delegated_plan.source != _CHANGE_STATUS_SOURCE:
+      raise RuntimeError("Delegated change-history source plan mismatch.")
+    return _execute_change_status_page(
+        delegated_plan,
+        customer_id=customer_id,
+        resource_types=resource_types,
+        limit=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+    )
+
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
       page_token
   )
@@ -1347,82 +1923,43 @@ def list_change_statuses(
       bound_start_date,
       bound_end_date,
   )
-  account_today, account_time_zone = _account_today(
+  snapshot = _account_snapshot(
       customer_id,
       login_customer_id,
   )
-  if page_token:
-    # A continuation reads an already validated, short-lived snapshot and must
-    # retain its original query dates even if the account crosses midnight.
-    start_date, end_date = _resolve_date_range(
-        start_date,
-        end_date,
-        7,
-        account_today,
-    )
-  else:
-    start_date, end_date = _resolve_change_status_date_range(
-        start_date,
-        end_date,
-        7,
-        account_today,
-    )
-
-  where_conditions = _datetime_range_conditions(
-      "change_status.last_change_date_time",
-      start_date,
-      end_date,
+  request = _HistoryDateIntent(
+      start_date=start_date,
+      end_date=end_date,
+      default_days_back=7,
+  ).resolve(snapshot)
+  plan = _source_page_plan(
+      request,
+      _CHANGE_STATUS_SOURCE,
+      "continuation" if page_token else "strict",
   )
-  resource_types = normalize_list_arg(resource_types, "resource_types")
-  if resource_types:
-    where_conditions.append(
-        "change_status.resource_type IN "
-        f"({quote_enum_values(resource_types)})"
-    )
-
-  query = f"""
-      SELECT
-        change_status.resource_name,
-        change_status.resource_type,
-        change_status.resource_status,
-        change_status.last_change_date_time
-      FROM change_status
-      {build_where_clause(where_conditions)}
-      ORDER BY change_status.last_change_date_time DESC
-      LIMIT {_CHANGE_HISTORY_RESULT_CAP}
-  """
-  page = run_gaql_query_page(
-      query=query,
+  assert plan is not None
+  read = _run_source_page_plan(
+      plan,
       customer_id=customer_id,
-      page_size=limit,
-      page_token=page_token,
       login_customer_id=login_customer_id,
+      limit=limit,
+      operation_name="list_change_statuses",
+      execute=lambda source_plan: _execute_change_status_page(
+          source_plan,
+          customer_id=customer_id,
+          resource_types=resource_types,
+          limit=limit,
+          page_token=page_token,
+          login_customer_id=login_customer_id,
+      ),
   )
-  result = _build_change_page_response("change_statuses", page, limit)
-  result["next_page_token"] = _bind_change_page_token(
-      result.get("next_page_token"),
-      start_date,
-      end_date,
-  )
-  result["account_time_zone"] = account_time_zone
-  result["account_today"] = account_today.isoformat()
-  result["resolved_date_range"] = {
-      "start_date": start_date,
-      "end_date": end_date,
-  }
-  if result["next_page_token"]:
-    result["continuation"] = {
-        "tool": "list_change_statuses",
-        "arguments": {
-            "customer_id": customer_id,
-            "resource_types": resource_types,
-            "start_date": start_date,
-            "end_date": end_date,
-            "limit": limit,
-            "page_token": result["next_page_token"],
-            "login_customer_id": login_customer_id,
-        },
-    }
+  result = read.response
+  if read.retention_refreshed and read.plan is not None:
+    refreshed_today = read.plan.request.snapshot.today.isoformat()
+    result["retention_refresh_note"] = (
+        "change_status retention advanced during list_change_statuses; its "
+        f"window was recomputed for {refreshed_today}."
+    )
   return result
 
 
@@ -1456,6 +1993,28 @@ def list_change_events(
       A dict containing change event rows plus completeness metadata.
   """
   validate_limit(limit)
+  resource_change_operations = normalize_list_arg(
+      resource_change_operations,
+      "resource_change_operations",
+  )
+  change_resource_types = normalize_list_arg(
+      change_resource_types,
+      "change_resource_types",
+  )
+  delegated_plan = _DELEGATED_SOURCE_PLAN.get()
+  if delegated_plan is not None:
+    if delegated_plan.source != _CHANGE_EVENT_SOURCE:
+      raise RuntimeError("Delegated change-history source plan mismatch.")
+    return _execute_change_event_page(
+        delegated_plan,
+        customer_id=customer_id,
+        resource_change_operations=resource_change_operations,
+        change_resource_types=change_resource_types,
+        limit=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+    )
+
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
       page_token
   )
@@ -1465,98 +2024,43 @@ def list_change_events(
       bound_start_date,
       bound_end_date,
   )
-  account_today, account_time_zone = _account_today(
+  snapshot = _account_snapshot(
       customer_id,
       login_customer_id,
   )
-  if page_token:
-    # The page token can outlive the account's calendar day boundary while its
-    # cached snapshot remains valid.
-    start_date, end_date = _resolve_date_range(
-        start_date,
-        end_date,
-        7,
-        account_today,
-    )
-  else:
-    start_date, end_date = _resolve_change_event_date_range(
-        start_date,
-        end_date,
-        7,
-        account_today,
-    )
-
-  where_conditions = _datetime_range_conditions(
-      "change_event.change_date_time",
-      start_date,
-      end_date,
+  request = _HistoryDateIntent(
+      start_date=start_date,
+      end_date=end_date,
+      default_days_back=7,
+  ).resolve(snapshot)
+  plan = _source_page_plan(
+      request,
+      _CHANGE_EVENT_SOURCE,
+      "continuation" if page_token else "strict",
   )
-  resource_change_operations = normalize_list_arg(
-      resource_change_operations,
-      "resource_change_operations",
-  )
-  if resource_change_operations:
-    where_conditions.append(
-        "change_event.resource_change_operation IN "
-        f"({quote_enum_values(resource_change_operations)})"
-    )
-  change_resource_types = normalize_list_arg(
-      change_resource_types,
-      "change_resource_types",
-  )
-  if change_resource_types:
-    where_conditions.append(
-        "change_event.change_resource_type IN "
-        f"({quote_enum_values(change_resource_types)})"
-    )
-
-  query = f"""
-      SELECT
-        change_event.change_date_time,
-        change_event.change_resource_type,
-        change_event.resource_change_operation,
-        change_event.resource_name,
-        change_event.client_type,
-        change_event.user_email,
-        change_event.changed_fields
-      FROM change_event
-      {build_where_clause(where_conditions)}
-      ORDER BY change_event.change_date_time DESC
-      LIMIT {_CHANGE_HISTORY_RESULT_CAP}
-  """
-  page = run_gaql_query_page(
-      query=query,
+  assert plan is not None
+  read = _run_source_page_plan(
+      plan,
       customer_id=customer_id,
-      page_size=limit,
-      page_token=page_token,
       login_customer_id=login_customer_id,
+      limit=limit,
+      operation_name="list_change_events",
+      execute=lambda source_plan: _execute_change_event_page(
+          source_plan,
+          customer_id=customer_id,
+          resource_change_operations=resource_change_operations,
+          change_resource_types=change_resource_types,
+          limit=limit,
+          page_token=page_token,
+          login_customer_id=login_customer_id,
+      ),
   )
-  result = _build_change_page_response("change_events", page, limit)
-  result["next_page_token"] = _bind_change_page_token(
-      result.get("next_page_token"),
-      start_date,
-      end_date,
-  )
-  result["account_time_zone"] = account_time_zone
-  result["account_today"] = account_today.isoformat()
-  result["resolved_date_range"] = {
-      "start_date": start_date,
-      "end_date": end_date,
-  }
-  if result["next_page_token"]:
-    result["continuation"] = {
-        "tool": "list_change_events",
-        "arguments": {
-            "customer_id": customer_id,
-            "resource_change_operations": resource_change_operations,
-            "change_resource_types": change_resource_types,
-            "start_date": start_date,
-            "end_date": end_date,
-            "limit": limit,
-            "page_token": result["next_page_token"],
-            "login_customer_id": login_customer_id,
-        },
-    }
+  result = read.response
+  if read.retention_refreshed and read.plan is not None:
+    result["retention_refresh_note"] = (
+        "change_event retention advanced during list_change_events; its window "
+        f"was recomputed for {read.plan.request.snapshot.today.isoformat()}."
+    )
   return result
 
 
@@ -1569,6 +2073,7 @@ def export_change_history_csv(
     include_recent_events: bool = True,
     max_queries_per_resource: int = _DEFAULT_EXPORT_QUERY_BUDGET,
     login_customer_id: str | None = None,
+    resource_change_operations: list[str] | str | None = None,
 ) -> dict[str, Any]:
   """Exports maximum manageable history across available retention windows.
 
@@ -1596,6 +2101,9 @@ def export_change_history_csv(
           change_status and change_event. Increase or use a narrower range if
           unresolved windows are reported.
       login_customer_id: Optional manager account ID.
+      resource_change_operations: Optional CREATE, UPDATE, or REMOVE filter
+          for granular change_event rows. change_status has no operation field
+          and is unaffected by this filter.
 
   Returns:
       A compact dict with CSV paths, row counts, query counts, and explicit
@@ -1617,6 +2125,10 @@ def export_change_history_csv(
   retention_refresh_notes = []
   status_resource_types, event_resource_types, resource_type_coverage = (
       _partition_resource_types(resource_types)
+  )
+  resource_change_operations = normalize_list_arg(
+      resource_change_operations,
+      "resource_change_operations",
   )
   resource_filter_applied = resource_type_coverage["filter_applied"]
 
@@ -1701,7 +2213,7 @@ def export_change_history_csv(
           login_customer_id,
       )
       if retry_today <= status_today:
-        raise
+        raise _retention_refresh_unavailable_error("change_status") from exc
       start_date, end_date = _refresh_omitted_date_bounds(
           start_date,
           end_date,
@@ -1742,7 +2254,8 @@ def export_change_history_csv(
         )
         status_windows.reverse()
         status_partitioning["window_days"].reverse()
-        status_collection = _collect_complete_change_rows(
+        status_collection = _collect_after_retention_refresh(
+            "change_status",
             status_query_builder,
             customer_id,
             status_start,
@@ -1825,6 +2338,12 @@ def export_change_history_csv(
       )
 
       def _event_query(window_start: datetime, window_end: datetime) -> str:
+        event_conditions = []
+        if resource_change_operations:
+          event_conditions.append(
+              "change_event.resource_change_operation IN "
+              f"({quote_enum_values(resource_change_operations)})"
+          )
         return _build_export_query(
             _CHANGE_EVENT_EXPORT_FIELDS,
             "change_event",
@@ -1833,6 +2352,7 @@ def export_change_history_csv(
             event_resource_types,
             window_start,
             window_end,
+            event_conditions,
         )
 
       try:
@@ -1864,7 +2384,7 @@ def export_change_history_csv(
         )
         if retry_today <= event_today:
           _remove_collection_fragments(status_collection)
-          raise
+          raise _retention_refresh_unavailable_error("change_event") from exc
         start_date, end_date = _refresh_omitted_date_bounds(
             start_date,
             end_date,
@@ -1925,7 +2445,8 @@ def export_change_history_csv(
               event_window["end_date"],
           )
           try:
-            event_collection = _collect_complete_change_rows(
+            event_collection = _collect_after_retention_refresh(
+                "change_event",
                 _event_query,
                 customer_id,
                 event_start,
@@ -2023,6 +2544,7 @@ def export_change_history_csv(
       "change_status_coverage": status_coverage,
       "change_event_coverage": event_coverage,
       "resource_type_coverage": resource_type_coverage,
+      "resource_change_operations": resource_change_operations,
       "change_status_export": status_export,
       "change_event_export": event_export,
       "available_data_complete": available_data_complete,
@@ -2153,17 +2675,15 @@ def get_change_history_extended(
       explicit coverage/export guidance.
   """
   validate_limit(limit)
-  start_date_omitted = start_date is None
-  end_date_omitted = end_date is None
-  account_today, account_time_zone = _account_today(
-      customer_id,
-      login_customer_id,
-  )
-  start_date, end_date = _resolve_date_range(
-      start_date,
-      end_date,
-      89,
-      account_today,
+  request = _HistoryDateIntent(
+      start_date=start_date,
+      end_date=end_date,
+      default_days_back=89,
+  ).resolve(
+      _account_snapshot(
+          customer_id,
+          login_customer_id,
+      )
   )
   status_resource_types, event_resource_types, resource_type_coverage = (
       _partition_resource_types(resource_types)
@@ -2171,230 +2691,157 @@ def get_change_history_extended(
   resource_filter_applied = resource_type_coverage["filter_applied"]
   retention_refresh_notes = []
 
-  statuses = _empty_change_statuses_response(limit)
-  recent_events = _empty_change_events_response(limit)
+  def _window_from_plan(
+      plan: _SourcePagePlan | None,
+  ) -> dict[str, str] | None:
+    if plan is None:
+      return None
+    return {
+        "start_date": plan.start_date,
+        "end_date": plan.end_date,
+    }
 
-  def _read_status_preview(
-      window: dict[str, str],
-      snapshot_today: date,
-      snapshot_time_zone: str,
-  ) -> dict[str, Any]:
-    account_today_token = _ACCOUNT_TODAY_OVERRIDE.set(
-        (snapshot_today, snapshot_time_zone)
-    )
+  def _call_status_preview(plan: _SourcePagePlan) -> dict[str, Any]:
+    delegated_plan_token = _DELEGATED_SOURCE_PLAN.set(plan)
     try:
       return list_change_statuses(
           customer_id=customer_id,
           resource_types=status_resource_types,
-          start_date=window["start_date"],
-          end_date=window["end_date"],
+          start_date=plan.start_date,
+          end_date=plan.end_date,
           limit=limit,
           login_customer_id=login_customer_id,
       )
     finally:
-      _ACCOUNT_TODAY_OVERRIDE.reset(account_today_token)
+      _DELEGATED_SOURCE_PLAN.reset(delegated_plan_token)
 
-  def _read_event_preview(
-      window: dict[str, str],
-      snapshot_today: date,
-      snapshot_time_zone: str,
-  ) -> dict[str, Any]:
-    account_today_token = _ACCOUNT_TODAY_OVERRIDE.set(
-        (snapshot_today, snapshot_time_zone)
-    )
+  def _call_event_preview(plan: _SourcePagePlan) -> dict[str, Any]:
+    delegated_plan_token = _DELEGATED_SOURCE_PLAN.set(plan)
     try:
       return list_change_events(
           customer_id=customer_id,
           change_resource_types=event_resource_types,
-          start_date=window["start_date"],
-          end_date=window["end_date"],
+          start_date=plan.start_date,
+          end_date=plan.end_date,
           limit=limit,
           login_customer_id=login_customer_id,
       )
     finally:
-      _ACCOUNT_TODAY_OVERRIDE.reset(account_today_token)
+      _DELEGATED_SOURCE_PLAN.reset(delegated_plan_token)
 
-  def _refresh_status_preview(
-      snapshot_today: date,
-      snapshot_time_zone: str,
+  def _read_status_preview(
+      resolved_request: _ResolvedHistoryRequest,
+  ) -> _SourcePageRead:
+    plan = _source_page_plan(
+        resolved_request,
+        _CHANGE_STATUS_SOURCE,
+        "available",
+    )
+    if plan is None or (resource_filter_applied and not status_resource_types):
+      return _SourcePageRead(
+          response=_empty_change_statuses_response(limit),
+          plan=plan,
+          request=resolved_request,
+          retention_refreshed=False,
+      )
+    return _run_source_page_plan(
+        plan,
+        customer_id=customer_id,
+        login_customer_id=login_customer_id,
+        limit=limit,
+        operation_name="get_change_history_extended",
+        execute=_call_status_preview,
+    )
+
+  def _read_event_preview(
+      resolved_request: _ResolvedHistoryRequest,
+  ) -> _SourcePageRead:
+    plan = _source_page_plan(
+        resolved_request,
+        _CHANGE_EVENT_SOURCE,
+        "available",
+    )
+    if plan is None or (resource_filter_applied and not event_resource_types):
+      return _SourcePageRead(
+          response=_empty_change_events_response(limit),
+          plan=plan,
+          request=resolved_request,
+          retention_refreshed=False,
+      )
+    return _run_source_page_plan(
+        plan,
+        customer_id=customer_id,
+        login_customer_id=login_customer_id,
+        limit=limit,
+        operation_name="get_change_history_extended",
+        execute=_call_event_preview,
+    )
+
+  def _record_runner_refresh(
+      read: _SourcePageRead,
+      source: _HistorySourceSpec,
   ) -> None:
-    """Keeps an already-read status preview aligned to a newer day."""
-    nonlocal statuses
-    nonlocal status_window_used
-    refreshed_window = _available_date_window(
-        start_date,
-        end_date,
-        _oldest_change_status_start(snapshot_today),
-        snapshot_today,
-    )
-    if refreshed_window == status_window_used:
+    if not read.retention_refreshed:
       return
-    status_window_used = refreshed_window
-    statuses = _empty_change_statuses_response(limit)
-    if status_window_used and (
-        not resource_filter_applied or status_resource_types
-    ):
-      try:
-        statuses = _read_status_preview(
-            status_window_used,
-            snapshot_today,
-            snapshot_time_zone,
-        )
-      except ToolError as exc:
-        if _is_start_date_too_old_error(exc):
-          raise _preview_retention_retry_error("change_status") from exc
-        raise
-
-  status_today, account_time_zone = _account_today(
-      customer_id,
-      login_customer_id,
-  )
-  if status_today > account_today:
-    start_date, end_date = _refresh_omitted_date_bounds(
-        start_date,
-        end_date,
-        start_date_omitted=start_date_omitted,
-        end_date_omitted=end_date_omitted,
-        today=status_today,
-    )
     retention_refresh_notes.append(
-        "change_status retention advanced before its preview; its window was "
-        f"recomputed for {status_today.isoformat()}."
+        f"{source.name} retention advanced during the preview; its window was "
+        f"recomputed for {read.request.snapshot.today.isoformat()}."
     )
-  account_today = max(account_today, status_today)
-  status_window_used = _available_date_window(
-      start_date,
-      end_date,
-      _oldest_change_status_start(status_today),
-      status_today,
-  )
-  if status_window_used and (
-      not resource_filter_applied or status_resource_types
-  ):
-    try:
-      statuses = _read_status_preview(
-          status_window_used,
-          status_today,
-          account_time_zone,
-      )
-    except ToolError as exc:
-      if not _is_start_date_too_old_error(exc):
-        raise
-      retry_today, account_time_zone = _account_today(
-          customer_id,
-          login_customer_id,
-      )
-      if retry_today <= status_today:
-        raise _preview_retention_retry_error("change_status") from exc
-      start_date, end_date = _refresh_omitted_date_bounds(
-          start_date,
-          end_date,
-          start_date_omitted=start_date_omitted,
-          end_date_omitted=end_date_omitted,
-          today=retry_today,
-      )
-      account_today = max(account_today, retry_today)
-      retention_refresh_notes.append(
-          "change_status retention advanced during the preview; its window was "
-          f"recomputed for {retry_today.isoformat()}."
-      )
-      status_today = retry_today
-      status_window_used = _available_date_window(
-          start_date,
-          end_date,
-          _oldest_change_status_start(status_today),
-          status_today,
-      )
-      if status_window_used:
-        try:
-          statuses = _read_status_preview(
-              status_window_used,
-              status_today,
-              account_time_zone,
-          )
-        except ToolError as retry_exc:
-          if _is_start_date_too_old_error(retry_exc):
-            raise _preview_retention_retry_error(
-                "change_status"
-            ) from retry_exc
-          raise
 
   event_window_used = None
-  if include_recent_events:
-    event_today, account_time_zone = _account_today(
+  recent_events = _empty_change_events_response(limit)
+  for _ in range(_PREVIEW_CONVERGENCE_MAX_ATTEMPTS):
+    status_snapshot = _account_snapshot(
         customer_id,
         login_customer_id,
     )
-    if event_today > account_today:
-      start_date, end_date = _refresh_omitted_date_bounds(
-          start_date,
-          end_date,
-          start_date_omitted=start_date_omitted,
-          end_date_omitted=end_date_omitted,
-          today=event_today,
+    advanced_request = request.advance(status_snapshot)
+    if advanced_request != request:
+      retention_refresh_notes.append(
+          "change_status retention advanced before its preview; its window "
+          f"was recomputed for {status_snapshot.today.isoformat()}."
       )
+    request = advanced_request
+    status_read = _read_status_preview(request)
+    _record_runner_refresh(status_read, _CHANGE_STATUS_SOURCE)
+    request = status_read.request
+    statuses = status_read.response
+    status_window_used = _window_from_plan(status_read.plan)
+    if not include_recent_events:
+      break
+
+    event_snapshot = _account_snapshot(
+        customer_id,
+        login_customer_id,
+    )
+    advanced_request = request.advance(event_snapshot)
+    if advanced_request != request:
       retention_refresh_notes.append(
           "change_event retention advanced before its preview; its window was "
-          f"recomputed for {event_today.isoformat()}."
+          f"recomputed for {event_snapshot.today.isoformat()}."
       )
-      _refresh_status_preview(event_today, account_time_zone)
-    account_today = max(account_today, event_today)
-    event_window_used = _available_date_window(
-        start_date,
-        end_date,
-        _oldest_change_event_start(event_today),
-        event_today,
+      request = advanced_request
+      continue
+    event_read = _read_event_preview(request)
+    _record_runner_refresh(event_read, _CHANGE_EVENT_SOURCE)
+    if event_read.request != request:
+      request = event_read.request
+      continue
+    recent_events = event_read.response
+    event_window_used = _window_from_plan(event_read.plan)
+    break
+  else:
+    raise ToolError(
+        "Account-local change-history retention advanced repeatedly while "
+        "building a consistent status/event preview. Call "
+        "get_change_history_extended again; the next call starts from a new "
+        "account-date snapshot."
     )
-    if event_window_used and (
-        not resource_filter_applied or event_resource_types
-    ):
-      try:
-        recent_events = _read_event_preview(
-            event_window_used,
-            event_today,
-            account_time_zone,
-        )
-      except ToolError as exc:
-        if not _is_start_date_too_old_error(exc):
-          raise
-        retry_today, account_time_zone = _account_today(
-            customer_id,
-            login_customer_id,
-        )
-        if retry_today <= event_today:
-          raise _preview_retention_retry_error("change_event") from exc
-        start_date, end_date = _refresh_omitted_date_bounds(
-            start_date,
-            end_date,
-            start_date_omitted=start_date_omitted,
-            end_date_omitted=end_date_omitted,
-            today=retry_today,
-        )
-        account_today = max(account_today, retry_today)
-        retention_refresh_notes.append(
-            "change_event retention advanced during the preview; its window "
-            f"was recomputed for {retry_today.isoformat()}."
-        )
-        _refresh_status_preview(retry_today, account_time_zone)
-        event_window_used = _available_date_window(
-            start_date,
-            end_date,
-            _oldest_change_event_start(retry_today),
-            retry_today,
-        )
-        if event_window_used:
-          try:
-            recent_events = _read_event_preview(
-                event_window_used,
-                retry_today,
-                account_time_zone,
-            )
-          except ToolError as retry_exc:
-            if _is_start_date_too_old_error(retry_exc):
-              raise _preview_retention_retry_error(
-                  "change_event"
-              ) from retry_exc
-            raise
+
+  start_date = request.start_date
+  end_date = request.end_date
+  account_today = request.snapshot.today
+  account_time_zone = request.snapshot.time_zone
 
   coverage_note = (
       "change_status is available for the last "
@@ -2445,6 +2892,39 @@ def get_change_history_extended(
         resource_type_coverage,
         "change_event",
     )
+  shared_delivery = bound_inline_sections(
+      {
+          "change_statuses": statuses["change_statuses"],
+          "change_events": recent_events["change_events"],
+      }
+  )
+  bounded_history = shared_delivery.pop("sections")
+  statuses["change_statuses"] = bounded_history["change_statuses"]
+  recent_events["change_events"] = bounded_history["change_events"]
+  for response, item_key in (
+      (statuses, "change_statuses"),
+      (recent_events, "change_events"),
+  ):
+    response["source_page_returned_count"] = response["returned_count"]
+    response["returned_count"] = shared_delivery["returned_counts"][item_key]
+    response["represented_row_count"] = len(response[item_key])
+    omitted_count = shared_delivery["omitted_counts"][item_key]
+    if not omitted_count:
+      continue
+    response["shared_inline_omitted_count"] = omitted_count
+    response["truncated"] = True
+    response["complete_inline"] = False
+    response["has_more"] = False
+    response["next_page_token"] = None
+
+  bulk_export_calls_by_source = {}
+  if statuses.get("bulk_export_call"):
+    bulk_export_calls_by_source["change_status"] = statuses["bulk_export_call"]
+  if recent_events.get("bulk_export_call"):
+    bulk_export_calls_by_source["change_event"] = recent_events[
+        "bulk_export_call"
+    ]
+
   result = {
       "date_range": {"start_date": start_date, "end_date": end_date},
       "account_time_zone": account_time_zone,
@@ -2467,6 +2947,7 @@ def get_change_history_extended(
       "recent_change_event_next_page_token": recent_events.get(
           "next_page_token"
       ),
+      "shared_inline_delivery": shared_delivery,
       "continuation_guidance": _preview_continuation_guidance(
           statuses,
           recent_events,
@@ -2480,6 +2961,8 @@ def get_change_history_extended(
       ),
       "bulk_export_tool": "export_change_history_csv",
   }
+  if bulk_export_calls_by_source:
+    result["bulk_export_calls_by_source"] = bulk_export_calls_by_source
   if retention_refresh_notes:
     result["retention_refresh_note"] = " ".join(retention_refresh_notes)
   return result

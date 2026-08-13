@@ -27,8 +27,14 @@ from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import preprocess_gaql_query
 from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import require_unique_values
+from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import bound_inline_sections
+from ads_mcp.tools.api import build_paginated_list_response
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import project_inline_rows
+from ads_mcp.tools.api import run_gaql_query_page
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +182,21 @@ def _shared_set_in_use_response(
 ) -> dict[str, Any]:
   """Builds an actionable response for an attached shared set."""
   diagnostic_errors = diagnostic_errors or []
+  attached_campaign_total_count = len(attached_campaigns)
+  attachment_delivery = bound_inline_sections(
+      {"attached_campaigns": attached_campaigns},
+      max_rows=25,
+      max_bytes=20 * 1024,
+  )
+  attachment_preview = attachment_delivery.pop("sections")[
+      "attached_campaigns"
+  ]
+  attachment_preview_truncated = bool(
+      attachment_delivery["omitted_counts"]["attached_campaigns"]
+  )
   attachments_complete = (
       reference_count is not None
-      and reference_count == len(attached_campaigns)
+      and reference_count == attached_campaign_total_count
       and not (api_reported_in_use and not attached_campaigns)
       and not diagnostic_errors
   )
@@ -186,7 +204,11 @@ def _shared_set_in_use_response(
       "deleted": False,
       "shared_set_id": shared_set_id,
       "reference_count": reference_count,
-      "attached_campaigns": attached_campaigns,
+      "attached_campaigns": attachment_preview,
+      "attached_campaign_total_count": attached_campaign_total_count,
+      "attached_campaign_returned_count": len(attachment_preview),
+      "attachment_preview_truncated": attachment_preview_truncated,
+      "attachment_preview_delivery": attachment_delivery,
       "attachments_complete": attachments_complete,
   }
   known_detach_calls = [
@@ -199,23 +221,44 @@ def _shared_set_in_use_response(
               "login_customer_id": login_customer_id,
           },
       }
-      for campaign in attached_campaigns
+      for campaign in attachment_preview
   ]
   if known_detach_calls:
     response["known_detach_calls"] = known_detach_calls
+  if attachment_preview_truncated:
+    response["full_attachment_call"] = {
+        "tool": "list_campaign_shared_sets",
+        "arguments": {
+            "customer_id": customer_id,
+            "shared_set_id": shared_set_id,
+            "limit": 100,
+            "login_customer_id": login_customer_id,
+        },
+    }
   if diagnostic_errors:
     response["diagnostic_errors"] = diagnostic_errors
   if attachments_complete:
-    response["next_step"] = (
-        "Call each entry in known_detach_calls first, then retry "
-        "delete_shared_set."
-    )
+    if attachment_preview_truncated:
+      response["next_step"] = (
+          "Call full_attachment_call, follow its stable pages or exact export, "
+          "then call detach_shared_set_from_campaign for every attached "
+          "campaign before retrying delete_shared_set."
+      )
+    else:
+      response["next_step"] = (
+          "Call each entry in known_detach_calls first, then retry "
+          "delete_shared_set."
+      )
     return response
 
-  if reference_count is not None and reference_count > len(attached_campaigns):
+  if (
+      reference_count is not None
+      and reference_count > attached_campaign_total_count
+  ):
     response["warning"] = (
         f"Google reports {reference_count} campaign references, but only "
-        f"{len(attached_campaigns)} were found in customer {customer_id}. "
+        f"{attached_campaign_total_count} were found in customer "
+        f"{customer_id}. "
         "Missing attachments may be in managed client accounts."
     )
   elif api_reported_in_use:
@@ -251,13 +294,20 @@ def _shared_set_in_use_response(
       if known_detach_calls
       else ""
   )
+  full_local_step = (
+      "Call full_attachment_call and follow its stable pages or exact export "
+      "to detach every locally attached campaign. "
+      if attachment_preview_truncated
+      else ""
+  )
   login_step = (
       f"use login_customer_id={login_customer_id}"
       if login_customer_id is not None
       else "omit login_customer_id so the configured default is reused"
   )
   response["next_step"] = (
-      f"{known_detach_step}Run managed_customer_discovery next. For each "
+      f"{known_detach_step}{full_local_step}Run managed_customer_discovery "
+      "next. For each "
       "returned client ID, "
       "call list_campaign_shared_sets with that client as customer_id, "
       f"shared_set_id={shared_set_id}, and "
@@ -411,11 +461,29 @@ def delete_shared_set(
 def list_shared_set_keywords(
     customer_id: str,
     shared_set_id: str,
+    limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists all keywords in a shared negative keyword list."""
-  ads_client = get_ads_client(login_customer_id)
-  ads_service = ads_client.get_service("GoogleAdsService")
+  """Lists keywords in a shared negative keyword list.
+
+  The inline page is token-bounded without limiting data access. Follow
+  next_page_token for stable continuation, or use bulk_export_call to export
+  the exact complete result snapshot when the result spans multiple pages.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      shared_set_id: Shared negative keyword list ID.
+      limit: Requested inline page size. Values above the server's token-safe
+          presentation cap are clamped; all rows remain available.
+      page_token: Token for the next stable result page.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Keyword rows plus complete counts and continuation/export metadata.
+  """
+  validate_limit(limit)
+  shared_set_id = quote_int_value(shared_set_id, "shared_set_id")
 
   query = f"""
       SELECT
@@ -424,24 +492,32 @@ def list_shared_set_keywords(
         shared_criterion.keyword.match_type
       FROM shared_criterion
       WHERE shared_set.id = {shared_set_id}
+      ORDER BY shared_criterion.criterion_id
   """
-
-  try:
-    response = _search_stream(ads_service, query, customer_id)
-    results = []
-    for batch in response:
-      for row in batch.results:
-        results.append(
-            {
-                "criterion_id": str(row.shared_criterion.criterion_id),
-                "text": row.shared_criterion.keyword.text,
-                "match_type": row.shared_criterion.keyword.match_type.name,
-            }
-        )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-
-  return {"keywords": results}
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+      row_sort_fields=("shared_criterion.criterion_id",),
+  )
+  rows = project_inline_rows(
+      page["rows"],
+      lambda row: {
+          "criterion_id": str(row.get("shared_criterion.criterion_id") or ""),
+          "text": row.get("shared_criterion.keyword.text"),
+          "match_type": row.get("shared_criterion.keyword.match_type"),
+      },
+  )
+  return build_paginated_list_response(
+      "keywords",
+      rows,
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
+  )
 
 
 @negative_tool
@@ -482,9 +558,14 @@ def add_shared_set_keywords(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {
-      "resource_names": [r.resource_name for r in response.results],
-  }
+  return build_bounded_mutation_response(
+      {
+          "resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("resource_names",),
+  )
 
 
 @destructive_negative_tool
@@ -519,9 +600,14 @@ def remove_shared_set_keywords(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {
-      "resource_names": [r.resource_name for r in response.results],
-  }
+  return build_bounded_mutation_response(
+      {
+          "resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("resource_names",),
+  )
 
 
 # ---------------------------------------------------------------------------
@@ -534,11 +620,29 @@ def list_campaign_shared_sets(
     customer_id: str,
     campaign_id: str | None = None,
     shared_set_id: str | None = None,
+    limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists campaign-to-shared-set links for negative keyword lists."""
-  ads_client = get_ads_client(login_customer_id)
-  ads_service = ads_client.get_service("GoogleAdsService")
+  """Lists campaign-to-shared-set links for negative keyword lists.
+
+  The inline page is token-bounded without limiting data access. Follow
+  next_page_token for stable continuation, or use bulk_export_call to export
+  the exact complete result snapshot when the result spans multiple pages.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_id: Optional campaign ID filter.
+      shared_set_id: Optional shared negative keyword list ID filter.
+      limit: Requested inline page size. Values above the server's token-safe
+          presentation cap are clamped; all rows remain available.
+      page_token: Token for the next stable result page.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Campaign/shared-set rows plus counts and continuation/export metadata.
+  """
+  validate_limit(limit)
 
   query = """
       SELECT
@@ -551,27 +655,38 @@ def list_campaign_shared_sets(
         AND campaign_shared_set.status = 'ENABLED'
   """
   if campaign_id:
+    campaign_id = quote_int_value(campaign_id, "campaign_id")
     query += f"  AND campaign.id = {campaign_id}\n"
   if shared_set_id:
+    shared_set_id = quote_int_value(shared_set_id, "shared_set_id")
     query += f"  AND shared_set.id = {shared_set_id}\n"
+  query += "  ORDER BY campaign.id, shared_set.id\n"
 
-  try:
-    response = _search_stream(ads_service, query, customer_id)
-    results = []
-    for batch in response:
-      for row in batch.results:
-        results.append(
-            {
-                "campaign_id": str(row.campaign.id),
-                "campaign_name": row.campaign.name,
-                "shared_set_id": str(row.shared_set.id),
-                "shared_set_name": row.shared_set.name,
-            }
-        )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-
-  return {"campaign_shared_sets": results}
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+      row_sort_fields=("campaign.id", "shared_set.id"),
+  )
+  rows = project_inline_rows(
+      page["rows"],
+      lambda row: {
+          "campaign_id": str(row.get("campaign.id") or ""),
+          "campaign_name": row.get("campaign.name"),
+          "shared_set_id": str(row.get("shared_set.id") or ""),
+          "shared_set_name": row.get("shared_set.name"),
+      },
+  )
+  return build_paginated_list_response(
+      "campaign_shared_sets",
+      rows,
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
+  )
 
 
 @negative_tool
@@ -645,15 +760,30 @@ def detach_shared_set_from_campaign(
 def list_campaign_negative_keywords(
     customer_id: str,
     campaign_id: str,
+    limit: int = 25,
+    page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists negative keywords applied directly to a campaign.
 
   Does not include negatives inherited from shared keyword lists.
-  """
-  ads_client = get_ads_client(login_customer_id)
-  ads_service = ads_client.get_service("GoogleAdsService")
+  The inline page is token-bounded without limiting data access. Follow
+  next_page_token for stable continuation, or use bulk_export_call to export
+  the exact complete result snapshot when the result spans multiple pages.
 
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_id: Campaign ID.
+      limit: Requested inline page size. Values above the server's token-safe
+          presentation cap are clamped; all rows remain available.
+      page_token: Token for the next stable result page.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Negative keyword rows plus counts and continuation/export metadata.
+  """
+  validate_limit(limit)
+  campaign_id = quote_int_value(campaign_id, "campaign_id")
   query = f"""
       SELECT
         campaign_criterion.criterion_id,
@@ -663,24 +793,34 @@ def list_campaign_negative_keywords(
       WHERE campaign_criterion.type = 'KEYWORD'
         AND campaign_criterion.negative = TRUE
         AND campaign.id = {campaign_id}
+      ORDER BY campaign_criterion.criterion_id
   """
-
-  try:
-    response = _search_stream(ads_service, query, customer_id)
-    results = []
-    for batch in response:
-      for row in batch.results:
-        results.append(
-            {
-                "criterion_id": str(row.campaign_criterion.criterion_id),
-                "text": row.campaign_criterion.keyword.text,
-                "match_type": row.campaign_criterion.keyword.match_type.name,
-            }
-        )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-
-  return {"keywords": results}
+  page = run_gaql_query_page(
+      query=query,
+      customer_id=customer_id,
+      page_size=limit,
+      page_token=page_token,
+      login_customer_id=login_customer_id,
+      row_sort_fields=("campaign_criterion.criterion_id",),
+  )
+  rows = project_inline_rows(
+      page["rows"],
+      lambda row: {
+          "criterion_id": str(
+              row.get("campaign_criterion.criterion_id") or ""
+          ),
+          "text": row.get("campaign_criterion.keyword.text"),
+          "match_type": row.get("campaign_criterion.keyword.match_type"),
+      },
+  )
+  return build_paginated_list_response(
+      "keywords",
+      rows,
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
+  )
 
 
 @negative_tool
@@ -722,9 +862,14 @@ def add_campaign_negative_keywords(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {
-      "resource_names": [r.resource_name for r in response.results],
-  }
+  return build_bounded_mutation_response(
+      {
+          "resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("resource_names",),
+  )
 
 
 @destructive_negative_tool
@@ -761,6 +906,11 @@ def remove_campaign_negative_keywords(
   except GoogleAdsException as e:
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
-  return {
-      "resource_names": [r.resource_name for r in response.results],
-  }
+  return build_bounded_mutation_response(
+      {
+          "resource_names": [
+              result.resource_name for result in response.results
+          ],
+      },
+      ("resource_names",),
+  )

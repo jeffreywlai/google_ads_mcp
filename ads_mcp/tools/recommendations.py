@@ -32,6 +32,7 @@ from ads_mcp.tools._gaql import quote_int_values
 from ads_mcp.tools._gaql import quote_string_values
 from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools._gaql import validate_limit
+from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
@@ -199,6 +200,7 @@ def list_recommendations(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 
@@ -374,7 +376,7 @@ def apply_recommendations(
   partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
-  return result
+  return build_bounded_mutation_response(result, ("resource_names",))
 
 
 @recommendation_tool
@@ -424,7 +426,7 @@ def dismiss_recommendations(
   partial_failure_error = _extract_partial_failure(response)
   if partial_failure_error:
     result["partial_failure_error"] = partial_failure_error
-  return result
+  return build_bounded_mutation_response(result, ("resource_names",))
 
 
 @recommendation_read_tool
@@ -484,6 +486,7 @@ def list_recommendation_subscriptions(
       total_count=page["total_results_count"],
       page_size=limit,
       next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
   )
 
 

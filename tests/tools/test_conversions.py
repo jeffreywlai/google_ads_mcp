@@ -128,6 +128,7 @@ def test_list_offline_conversion_upload_client_summaries_passes_paging():
         ],
         "next_page_token": "next-page",
         "total_results_count": 101,
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
     }
 
     result = conversions.list_offline_conversion_upload_client_summaries(
@@ -153,12 +154,22 @@ def test_list_offline_conversion_upload_client_summaries_passes_paging():
       "total_count": 101,
       "total_page_count": 5,
       "truncated": True,
+      "has_more": True,
+      "complete_inline": False,
       "next_page_token": "next-page",
       "page_size": 25,
+      "requested_page_size": 25,
+      "page_size_clamped": False,
+      "bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {
+              "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+          },
+      },
   }
 
 
-def test_list_offline_conversion_upload_conversion_action_summaries_builds_query():
+def test_conversion_action_summaries_builds_query():
   with mock.patch("ads_mcp.tools.conversions.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
         "rows": [],
@@ -195,7 +206,7 @@ def test_list_offline_conversion_upload_conversion_action_summaries_builds_query
   assert result["returned_count"] == 0
 
 
-def test_list_offline_conversion_upload_conversion_action_summaries_ignores_empty_ids():
+def test_conversion_action_summaries_ignores_empty_ids():
   with mock.patch("ads_mcp.tools.conversions.run_gaql_query_page") as mock_run:
     mock_run.return_value = {
         "rows": [],
@@ -213,7 +224,7 @@ def test_list_offline_conversion_upload_conversion_action_summaries_ignores_empt
   assert "conversion_action_id IN" not in query
 
 
-def test_list_offline_conversion_upload_conversion_action_summaries_validates_limit():
+def test_conversion_action_summaries_validates_limit():
   with pytest.raises(ToolError, match="limit must be greater than 0"):
     conversions.list_offline_conversion_upload_conversion_action_summaries(
         CUSTOMER_ID,

@@ -14,6 +14,7 @@
 
 """Tests for the campaign and budget management tools."""
 
+import json
 from types import SimpleNamespace
 from unittest import mock
 
@@ -21,6 +22,7 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.v24.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
+from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
 import pytest
 
@@ -28,6 +30,14 @@ import pytest
 CUSTOMER_ID = "1234567890"
 CAMPAIGN_ID = "111"
 BUDGET_ID = "222"
+
+
+def _audience_snapshot(rows, marker="a"):
+  return {
+      "rows": rows,
+      "total_results_count": len(rows),
+      "snapshot_token": f"gaql-snapshot-v1:{marker * 32}",
+  }
 
 
 @pytest.fixture(autouse=True)
@@ -272,6 +282,48 @@ class TestAddCampaignAudiences:
 
     assert mock_query.call_args.kwargs["page_size"] == 25
     assert result["page_size"] == 25
+
+  def test_list_campaign_audiences_bounds_rows_and_copy_projection_together(
+      self,
+  ):
+    rows = [
+        {
+            "campaign.id": CAMPAIGN_ID,
+            "campaign_criterion.type": "USER_LIST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_list.user_list": (
+                f"customers/{CUSTOMER_ID}/userLists/{index}"
+            ),
+            "padding": "x" * 220,
+        }
+        for index in range(100)
+    ]
+    with mock.patch(
+        "ads_mcp.tools.campaigns.run_gaql_query_page",
+        return_value={
+            "rows": rows,
+            "next_page_token": None,
+            "total_results_count": len(rows),
+            "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+        },
+    ):
+      result = campaigns.list_campaign_audiences(
+          CUSTOMER_ID,
+          [CAMPAIGN_ID],
+          limit=100,
+      )
+
+    assert result["returned_count"] == 100
+    assert result["copy_ready_total_count"] == 100
+    assert result["copy_ready_returned_count"] == 0
+    assert result["derived_preview_truncated"] is True
+    assert (
+        len(json.dumps(result).encode("utf-8"))
+        <= api.INLINE_RESPONSE_BYTE_LIMIT
+    )
+    assert result["bulk_export_call"]["arguments"][
+        "snapshot_token"
+    ].startswith("gaql-snapshot-v1:")
 
   @pytest.mark.parametrize("campaign_ids", ["", [], "[]"])
   def test_list_campaign_audiences_rejects_empty_campaign_ids(
@@ -566,8 +618,8 @@ class TestAddCampaignAudiences:
         },
     ]
     with mock.patch(
-        "ads_mcp.tools.campaigns._read_campaign_audiences",
-        return_value=rows,
+        "ads_mcp.tools.campaigns._read_campaign_audience_snapshot",
+        return_value=_audience_snapshot(rows),
     ):
       result = campaigns.diff_campaign_audiences(
           CUSTOMER_ID,
@@ -604,8 +656,8 @@ class TestAddCampaignAudiences:
         },
     ]
     with mock.patch(
-        "ads_mcp.tools.campaigns._read_campaign_audiences",
-        return_value=rows,
+        "ads_mcp.tools.campaigns._read_campaign_audience_snapshot",
+        return_value=_audience_snapshot(rows),
     ):
       result = campaigns.diff_campaign_audiences(
           CUSTOMER_ID,
@@ -616,6 +668,128 @@ class TestAddCampaignAudiences:
     assert result["source_campaign_id"] == "111"
     assert result["target_campaign_id"] == "222"
     assert result["missing_count"] == 1
+
+  def test_diff_campaign_audiences_bounds_presentation_after_complete_diff(
+      self,
+  ):
+    rows = [
+        {
+            "campaign.id": "111",
+            "campaign_criterion.type": "USER_LIST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_list.user_list": (
+                f"customers/{CUSTOMER_ID}/userLists/{index}"
+            ),
+        }
+        for index in range(150)
+    ]
+    with mock.patch(
+        "ads_mcp.tools.campaigns._read_campaign_audience_snapshot",
+        return_value=_audience_snapshot(rows),
+    ):
+      result = campaigns.diff_campaign_audiences(
+          CUSTOMER_ID,
+          "111",
+          "222",
+          limit_per_section=5000,
+      )
+
+    assert result["missing_count"] == 150
+    assert len(result["missing_in_target"]) == 100
+    assert result["returned_counts"]["missing_in_target"] == 100
+    assert result["truncated"] is True
+    assert result["truncated_sections"] == ["missing_in_target"]
+    assert result["limit_per_section_clamped"] is True
+    assert result["full_source_call"] == {
+        "tool": "list_campaign_audiences",
+        "arguments": {
+            "customer_id": CUSTOMER_ID,
+            "campaign_ids": ["111", "222"],
+            "limit": 100,
+        },
+    }
+    assert result["bulk_export_call"]["arguments"] == {
+        "snapshot_token": "gaql-snapshot-v1:" + "a" * 32
+    }
+
+  def test_diff_export_keeps_exact_snapshot_after_current_state_changes(self):
+    original_rows = [
+        {
+            "campaign.id": "111",
+            "campaign_criterion.type": "USER_LIST",
+            "campaign_criterion.negative": False,
+            "campaign_criterion.user_list.user_list": (
+                f"customers/{CUSTOMER_ID}/userLists/99"
+            ),
+        }
+    ]
+    with mock.patch.object(
+        api,
+        "_page_cache_scope",
+        return_value="campaign-diff-test",
+    ):
+      with mock.patch.object(
+          api,
+          "_iter_gaql_query_attempt",
+          side_effect=[original_rows, []],
+      ):
+        diff = campaigns.diff_campaign_audiences(
+            CUSTOMER_ID,
+            "111",
+            "222",
+        )
+        current = campaigns.list_campaign_audiences(
+            CUSTOMER_ID,
+            ["111", "222"],
+        )
+        exact_rows = api._get_export_snapshot_rows(  # pylint: disable=protected-access
+            diff["bulk_export_call"]["arguments"]["snapshot_token"]
+        )
+
+    assert diff["missing_count"] == 1
+    assert current["total_count"] == 0
+    assert exact_rows == original_rows
+
+  def test_copy_dry_run_bounds_preview_but_keeps_complete_source_export(self):
+    missing = [
+        {
+            "type": "USER_LIST",
+            "resource_name": (
+                f"customers/{CUSTOMER_ID}/userLists/{index}-" + "x" * 5_000
+            ),
+            "negative": False,
+        }
+        for index in range(50)
+    ]
+    diff = {
+        "source_campaign_id": "111",
+        "target_campaign_id": "222",
+        "missing_in_target": missing,
+        "common_count": 0,
+        "target_only_count": 0,
+        "source_bulk_export_call": {
+            "tool": "export_gaql_csv",
+            "arguments": {"snapshot_token": "gaql-snapshot-v1:" + "a" * 32},
+        },
+    }
+    with mock.patch(
+        "ads_mcp.tools.campaigns._complete_campaign_audience_diff",
+        return_value=diff,
+    ):
+      result = campaigns.copy_audiences_between_campaigns(
+          CUSTOMER_ID,
+          "111",
+          "222",
+          dry_run=True,
+      )
+
+    assert result["create_count"] == 50
+    assert result["returned_create_count"] < 50
+    assert result["truncated"] is True
+    assert result["shared_inline_delivery"]["inline_bytes"] <= (
+        result["shared_inline_delivery"]["inline_byte_limit"]
+    )
+    assert result["bulk_export_call"] == diff["source_bulk_export_call"]
 
   def test_copy_audiences_uses_normalized_target_campaign_id(self):
     diff = {
@@ -630,9 +804,13 @@ class TestAddCampaignAudiences:
         ],
         "common_count": 0,
         "target_only_count": 0,
+        "source_bulk_export_call": {
+            "tool": "export_gaql_csv",
+            "arguments": {"snapshot_token": "gaql-snapshot-v1:" + "a" * 32},
+        },
     }
     with mock.patch(
-        "ads_mcp.tools.campaigns.diff_campaign_audiences",
+        "ads_mcp.tools.campaigns._complete_campaign_audience_diff",
         return_value=diff,
     ):
       with mock.patch(
@@ -731,6 +909,56 @@ class TestRemoveCampaignAudiences:
         f"customers/1234567890/campaignCriteria/111~{value}"
         for value in expected_ids
     ]
+
+  def test_remove_campaign_audiences_bounds_result_without_dropping_inputs(
+      self, mock_ads_client
+  ):
+    criterion_ids = [str(100_000 + index) for index in range(2_000)]
+    criterion_service = mock_ads_client.get_service.return_value
+    criterion_service.campaign_criterion_path.side_effect = (
+        lambda customer_id, campaign_id, criterion_id: (
+            f"customers/{customer_id}/campaignCriteria/"
+            f"{campaign_id}~{criterion_id}"
+        )
+    )
+    operations = []
+
+    def get_type(_):
+      operation = mock.Mock()
+      operations.append(operation)
+      return operation
+
+    mock_ads_client.get_type.side_effect = get_type
+    criterion_service.mutate_campaign_criteria.return_value.results = [
+        mock.Mock(
+            resource_name=(
+                f"customers/{CUSTOMER_ID}/campaignCriteria/"
+                f"{CAMPAIGN_ID}~{criterion_id}"
+            )
+        )
+        for criterion_id in criterion_ids
+    ]
+
+    result = campaigns.remove_campaign_audiences(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        criterion_ids,
+    )
+
+    assert len(operations) == len(criterion_ids)
+    assert result["complete_counts"]["removed_resource_names"] == len(
+        criterion_ids
+    )
+    assert result["returned_counts"]["removed_resource_names"] < len(
+        criterion_ids
+    )
+    assert result["full_mutation_result_artifact"]["row_count"] == len(
+        criterion_ids
+    )
+    assert (
+        len(json.dumps(result).encode("utf-8"))
+        <= api.INLINE_RESPONSE_BYTE_LIMIT
+    )
 
   @pytest.mark.parametrize(
       "criterion_ids",
