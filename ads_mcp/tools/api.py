@@ -2582,8 +2582,12 @@ def _build_spooled_gaql_snapshot(
   )
   os.close(descriptor)
   sort_fields = tuple(row_sort_fields or ())
+  # Leave sort columns without SQLite type affinity so typed GAQL values keep
+  # their native ordering. Declaring these columns as TEXT and stringifying
+  # values makes numeric identifiers sort lexicographically (for example,
+  # 10 before 2).
   sort_definitions = ", ".join(
-      f"sort_{index} TEXT" for index in range(len(sort_fields))
+      f"sort_{index}" for index in range(len(sort_fields))
   )
   source_columns = "seq INTEGER PRIMARY KEY, payload TEXT, row_bytes INTEGER"
   if sort_definitions:
@@ -2635,7 +2639,7 @@ def _build_spooled_gaql_snapshot(
                 default=str,
             )
             values = [payload, len(payload.encode("utf-8"))]
-            values.extend(str(row.get(field, "")) for field in sort_fields)
+            values.extend(row.get(field, "") for field in sort_fields)
             connection.execute(
                 f"INSERT INTO source_rows ({insert_columns}) "
                 f"VALUES ({value_placeholders})",
@@ -3059,6 +3063,7 @@ def export_materialized_response_csv(
   return {
       "file_path": file_path,
       "row_count": len(rows),
+      "total_row_count": len(rows),
       "columns": columns,
       "bytes_written": bytes_written,
       "truncated": False,

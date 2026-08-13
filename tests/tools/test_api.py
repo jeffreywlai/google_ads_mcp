@@ -1720,6 +1720,7 @@ def test_finalize_bounded_response_defers_exact_export_until_local_write(
     exported = api.export_materialized_response_csv(**export_call["arguments"])
 
   assert exported["row_count"] == 400
+  assert exported["total_row_count"] == 400
   with open(exported["file_path"], newline="", encoding="utf-8") as csv_file:
     exported_rows = list(csv.DictReader(csv_file))
   assert sum(row["result_type"] == "items" for row in exported_rows) == 200
@@ -2141,7 +2142,47 @@ def test_active_spooled_rows_survive_cache_eviction():
   assert list(snapshot["rows"]) == rows
 
 
-def test_spooled_local_sort_matches_previous_mixed_value_semantics():
+def test_spooled_local_sort_preserves_numeric_field_order():
+  rows = [
+      {"shared_criterion.criterion_id": 2},
+      {"shared_criterion.criterion_id": 10},
+  ]
+  with mock.patch.object(
+      api,
+      "_iter_gaql_query_attempt",
+      return_value=rows,
+  ):
+    snapshot = api.run_gaql_query_snapshot(
+        "SELECT shared_criterion.criterion_id FROM shared_criterion",
+        "123",
+        row_sort_fields=("shared_criterion.criterion_id",),
+    )
+
+  assert [
+      row["shared_criterion.criterion_id"] for row in snapshot["rows"]
+  ] == [2, 10]
+
+
+def test_spooled_local_sort_keeps_text_field_order_lexicographic():
+  rows = [
+      {"campaign.name": "2"},
+      {"campaign.name": "10"},
+  ]
+  with mock.patch.object(
+      api,
+      "_iter_gaql_query_attempt",
+      return_value=rows,
+  ):
+    snapshot = api.run_gaql_query_snapshot(
+        "SELECT campaign.name FROM campaign",
+        "123",
+        row_sort_fields=("campaign.name",),
+    )
+
+  assert [row["campaign.name"] for row in snapshot["rows"]] == ["10", "2"]
+
+
+def test_spooled_local_sort_is_deterministic_for_mixed_values():
   rows = [
       {"campaign.id": "none", "sort.value": None},
       {"campaign.id": "number", "sort.value": 10},
@@ -2160,10 +2201,10 @@ def test_spooled_local_sort_matches_previous_mixed_value_semantics():
     )
 
   assert [row["campaign.id"] for row in snapshot["rows"]] == [
-      "missing",
-      "number",
-      "text",
       "none",
+      "number",
+      "missing",
+      "text",
   ]
 
 
