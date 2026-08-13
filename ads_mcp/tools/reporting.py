@@ -440,6 +440,25 @@ _CAMPAIGN_PERFORMANCE_SEGMENTS = {
     "NETWORK": "segments.ad_network_type",
     "WEEK": "segments.week",
 }
+_CUSTOMER_ACQUISITION_GRANULARITIES = {
+    "DAY": "segments.date",
+    "MONTH": "segments.month",
+    "WEEK": "segments.week",
+}
+_CUSTOMER_ACQUISITION_METRICS = {
+    "conversions": "metrics.conversions",
+    "conversions_value": "metrics.conversions_value",
+    "all_conversions": "metrics.all_conversions",
+    "all_conversions_value": "metrics.all_conversions_value",
+    "new_customer_lifetime_value": "metrics.new_customer_lifetime_value",
+}
+_CUSTOMER_TYPE_ORDER = {
+    "NEW": 0,
+    "NEW_AND_HIGH_LTV": 1,
+    "RETURNING": 2,
+    "UNKNOWN": 3,
+    "UNSPECIFIED": 4,
+}
 _COMPETITIVE_PRESSURE_METRICS = [
     "metrics.search_impression_share",
     "metrics.search_top_impression_share",
@@ -495,6 +514,30 @@ def _cart_group_fields(group_by: object) -> tuple[str, list[str]]:
 def _numeric_delta(row: dict[str, Any], lhs: str, rhs: str) -> int | float:
   """Returns lhs - rhs while treating missing numeric metrics as zero."""
   return (row.get(lhs) or 0) - (row.get(rhs) or 0)
+
+
+def _numeric_metric(row: dict[str, Any], field_name: str) -> int | float:
+  """Returns a numeric metric while treating missing values as zero."""
+  value = row.get(field_name)
+  if isinstance(value, bool) or not isinstance(value, (int, float)):
+    return 0
+  return value
+
+
+def _empty_customer_acquisition_metrics() -> dict[str, int | float]:
+  return {metric_name: 0 for metric_name in _CUSTOMER_ACQUISITION_METRICS}
+
+
+def _add_customer_acquisition_metrics(
+    target: dict[str, int | float],
+    row: dict[str, Any],
+) -> None:
+  for metric_name, field_name in _CUSTOMER_ACQUISITION_METRICS.items():
+    target[metric_name] += _numeric_metric(row, field_name)
+
+
+def _customer_type_sort_key(customer_type: str) -> tuple[int, str]:
+  return (_CUSTOMER_TYPE_ORDER.get(customer_type, 5), customer_type)
 
 
 def _keyword_quality_score_query(
@@ -882,6 +925,220 @@ def get_campaign_performance(
   )
   result["segment_by"] = segment_names
   return result
+
+
+@reporting_tool
+def analyze_customer_acquisition_performance(
+    customer_id: str,
+    campaign_id: str,
+    date_range: str | dict[str, str] = "LAST_30_DAYS",
+    granularity: str = "WEEK",
+    include_conversion_action_breakdown: bool = False,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Analyzes new-versus-returning performance without invalid GAQL pairs.
+
+  Google Ads does not allow traffic or cost metrics to be selected with the
+  new-versus-returning customer segment. This tool runs a compatible conversion
+  query and a separate total-performance query, then joins them by period. The
+  resulting cost per new customer is blended total campaign cost divided by
+  biddable NEW plus NEW_AND_HIGH_LTV conversions; it is not attributed cost.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_id: Campaign ID to analyze.
+      date_range: GAQL date range or {start_date, end_date}.
+      granularity: DAY, WEEK, or MONTH.
+      include_conversion_action_breakdown: Whether to include conversion-action
+          rows within each customer type and period.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Joined period rows with total cost, customer-type conversion metrics,
+      new-customer summary metrics, and methodology metadata.
+  """
+  normalized_campaign_id = quote_int_value(campaign_id, "campaign_id")
+  normalized_granularity = _normalize_choice(
+      granularity,
+      "granularity",
+      set(_CUSTOMER_ACQUISITION_GRANULARITIES),
+  )
+  period_field = _CUSTOMER_ACQUISITION_GRANULARITIES[normalized_granularity]
+  where_conditions = [
+      f"campaign.id = {normalized_campaign_id}",
+      segments_date_condition(date_range),
+  ]
+
+  action_fields = []
+  if include_conversion_action_breakdown:
+    action_fields = [
+        "segments.conversion_action",
+        "segments.conversion_action_name",
+        "segments.conversion_action_category",
+    ]
+  cohort_select_fields = [
+      "campaign.id",
+      "campaign.name",
+      period_field,
+      "segments.new_versus_returning_customers",
+      *action_fields,
+      *_CUSTOMER_ACQUISITION_METRICS.values(),
+  ]
+  cohort_order_fields = [
+      period_field,
+      "segments.new_versus_returning_customers",
+      *action_fields,
+  ]
+  cohort_query = f"""
+      SELECT
+        {", ".join(cohort_select_fields)}
+      FROM campaign
+      {build_where_clause(where_conditions)}
+      ORDER BY {", ".join(cohort_order_fields)}
+  """
+
+  total_query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        {period_field},
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros
+      FROM campaign
+      {build_where_clause(where_conditions)}
+      ORDER BY {period_field}
+  """
+
+  cohort_rows = run_gaql_query(
+      cohort_query,
+      customer_id,
+      login_customer_id,
+  )
+  total_rows = run_gaql_query(
+      total_query,
+      customer_id,
+      login_customer_id,
+  )
+
+  periods: dict[str, dict[str, Any]] = {}
+
+  def period_result(row: dict[str, Any]) -> dict[str, Any]:
+    period = str(row.get(period_field) or "UNKNOWN")
+    if period not in periods:
+      periods[period] = {
+          "period": period,
+          "campaign_id": str(row.get("campaign.id") or normalized_campaign_id),
+          "campaign_name": row.get("campaign.name"),
+          "total_performance": {
+              "impressions": 0,
+              "clicks": 0,
+              "cost_micros": 0,
+          },
+          "_customer_type_metrics": {},
+          "_conversion_action_breakdown": [],
+      }
+    return periods[period]
+
+  for row in total_rows:
+    period_data = period_result(row)
+    total_performance = period_data["total_performance"]
+    total_performance["impressions"] += _numeric_metric(
+        row, "metrics.impressions"
+    )
+    total_performance["clicks"] += _numeric_metric(row, "metrics.clicks")
+    total_performance["cost_micros"] += _numeric_metric(
+        row, "metrics.cost_micros"
+    )
+
+  for row in cohort_rows:
+    period_data = period_result(row)
+    raw_customer_type = row.get("segments.new_versus_returning_customers")
+    customer_type = str(raw_customer_type or "UNSPECIFIED").upper()
+    customer_type_metrics = period_data["_customer_type_metrics"].setdefault(
+        customer_type,
+        _empty_customer_acquisition_metrics(),
+    )
+    _add_customer_acquisition_metrics(customer_type_metrics, row)
+
+    if include_conversion_action_breakdown:
+      action_metrics = _empty_customer_acquisition_metrics()
+      _add_customer_acquisition_metrics(action_metrics, row)
+      period_data["_conversion_action_breakdown"].append(
+          {
+              "customer_type": customer_type,
+              "conversion_action": row.get("segments.conversion_action"),
+              "conversion_action_name": row.get(
+                  "segments.conversion_action_name"
+              ),
+              "conversion_action_category": row.get(
+                  "segments.conversion_action_category"
+              ),
+              **action_metrics,
+          }
+      )
+
+  period_rows = []
+  for period in sorted(periods):
+    period_data = periods[period]
+    customer_type_metrics = period_data.pop("_customer_type_metrics")
+    action_breakdown = period_data.pop("_conversion_action_breakdown")
+    customer_type_performance = [
+        {
+            "customer_type": customer_type,
+            **customer_type_metrics[customer_type],
+        }
+        for customer_type in sorted(
+            customer_type_metrics,
+            key=_customer_type_sort_key,
+        )
+    ]
+    period_data["customer_type_performance"] = customer_type_performance
+
+    new_customer_summary = _empty_customer_acquisition_metrics()
+    for customer_type in ("NEW", "NEW_AND_HIGH_LTV"):
+      for metric_name, value in customer_type_metrics.get(
+          customer_type,
+          {},
+      ).items():
+        new_customer_summary[metric_name] += value
+    new_customer_conversions = new_customer_summary["conversions"]
+    total_cost_micros = period_data["total_performance"]["cost_micros"]
+    new_customer_summary["blended_cost_per_new_customer_micros"] = (
+        total_cost_micros / new_customer_conversions
+        if new_customer_conversions
+        else None
+    )
+    period_data["new_customer_summary"] = new_customer_summary
+
+    if include_conversion_action_breakdown:
+      action_breakdown.sort(
+          key=lambda row: (
+              _customer_type_sort_key(row["customer_type"]),
+              str(row.get("conversion_action_name") or ""),
+              str(row.get("conversion_action") or ""),
+          )
+      )
+      period_data["conversion_action_breakdown"] = action_breakdown
+    period_rows.append(period_data)
+
+  result = {
+      "campaign_id": normalized_campaign_id,
+      "date_range": date_range_label(date_range),
+      "granularity": normalized_granularity,
+      "period_count": len(period_rows),
+      "periods": period_rows,
+      "methodology": {
+          "query_count": 2,
+          "cost_is_customer_type_segmented": False,
+          "new_customer_definition": "NEW plus NEW_AND_HIGH_LTV",
+          "blended_cost_per_new_customer_micros": (
+              "total campaign cost in the period divided by biddable new "
+              "customer conversions; cost is not attributed by customer type"
+          ),
+      },
+  }
+  return finalize_bounded_response(result, ("periods",))
 
 
 @reporting_tool

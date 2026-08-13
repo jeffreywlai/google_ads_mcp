@@ -26,6 +26,7 @@ import yaml
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 ADS_API_VERSION = "v24"
+CONTEXT_SCHEMA_VERSION = "2"
 try:
   MCP_SERVER_VERSION = f"v{metadata.version("google-ads-mcp")}"
 except metadata.PackageNotFoundError:
@@ -79,6 +80,13 @@ def get_fields_obj(
     else:
       del info["enum_values"]
 
+    if category == "segments" and field.startswith("segments."):
+      info["compatible_metrics"] = sorted(
+          selectable_field
+          for selectable_field in raw_data.get("selectable_with", [])
+          if selectable_field.startswith("metrics.")
+      )
+
     return info
 
   return {field: details(field) for field in view_json[category]}
@@ -130,6 +138,11 @@ def check_context_version() -> bool:
   Returns:
       bool: True if context files exist and versions match, False otherwise.
   """
+  if not os.path.isfile(f"{CONTEXT_PATH}/fields.yaml") or not os.path.isfile(
+      f"{CONTEXT_PATH}/segment_metric_compatibility.yaml"
+  ):
+    return False
+
   if os.path.isfile(f"{CONTEXT_PATH}/.api-version"):
     with open(f"{CONTEXT_PATH}/.api-version", "r", encoding="utf-8") as f:
       if f.read().strip() != ADS_API_VERSION:
@@ -142,6 +155,15 @@ def check_context_version() -> bool:
         f"{CONTEXT_PATH}/.mcp-server-version", "r", encoding="utf-8"
     ) as f:
       if f.read().strip() != MCP_SERVER_VERSION:
+        return False
+  else:
+    return False
+
+  if os.path.isfile(f"{CONTEXT_PATH}/.context-schema-version"):
+    with open(
+        f"{CONTEXT_PATH}/.context-schema-version", "r", encoding="utf-8"
+    ) as f:
+      if f.read().strip() != CONTEXT_SCHEMA_VERSION:
         return False
   else:
     return False
@@ -213,18 +235,35 @@ async def update_views_yaml():
     return
 
   all_fields = {}
+  segment_metric_compatibility = {}
   for view in results:
-    all_fields.update(view["attributes"])
-    all_fields.update(view["segments"])
-    all_fields.update(view["metrics"])
+    for category in ("attributes", "segments", "metrics"):
+      for field_name, field_details in view[category].items():
+        field_metadata = dict(field_details)
+        compatible_metrics = field_metadata.pop("compatible_metrics", None)
+        if field_name.startswith("segments.") and isinstance(
+            compatible_metrics, list
+        ):
+          segment_metric_compatibility[field_name] = compatible_metrics
+        all_fields[field_name] = field_metadata
 
   with open(f"{CONTEXT_PATH}/fields.yaml", "w", encoding="utf-8") as f:
     yaml.safe_dump(all_fields, f, sort_keys=True)
+  with open(
+      f"{CONTEXT_PATH}/segment_metric_compatibility.yaml",
+      "w",
+      encoding="utf-8",
+  ) as f:
+    yaml.safe_dump(segment_metric_compatibility, f, sort_keys=True)
 
   with open(f"{CONTEXT_PATH}/.api-version", "w", encoding="utf-8") as f:
     f.write(ADS_API_VERSION)
   with open(f"{CONTEXT_PATH}/.mcp-server-version", "w", encoding="utf-8") as f:
     f.write(MCP_SERVER_VERSION)
+  with open(
+      f"{CONTEXT_PATH}/.context-schema-version", "w", encoding="utf-8"
+  ) as f:
+    f.write(CONTEXT_SCHEMA_VERSION)
   _write_views_manifest(views)
 
 

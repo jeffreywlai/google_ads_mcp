@@ -5,7 +5,7 @@
 [![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 110 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 111 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **110 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **111 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -40,7 +40,7 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (110)
+## 📋 Available Tools (111)
 
 ### 🔍 Query & Discovery
 
@@ -128,6 +128,7 @@ accessible account available without an unbounded model response.
 | Tool | Description |
 |------|-------------|
 | `get_campaign_performance` | Core campaign performance with optional DATE/WEEK/MONTH/DEVICE/NETWORK segments |
+| `analyze_customer_acquisition_performance` | New-versus-returning conversion performance joined to total campaign traffic and cost through compatible split queries |
 | `get_demographic_performance` | Age, gender, and income performance bundled into a single response |
 | `get_landing_page_performance` | Top landing pages with compact cost and conversion metrics |
 | `get_ad_inventory` | Ad creative inventory with optional recent performance |

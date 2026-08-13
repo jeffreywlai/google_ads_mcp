@@ -60,6 +60,7 @@ categories:
       list_geographic_performance: Campaign performance segmented by user or geographic location.
       list_impression_share: Campaign impression share metrics.
       get_campaign_performance: Core campaign performance with optional date, week, month, device, or network segmenting.
+      analyze_customer_acquisition_performance: New-versus-returning conversion performance joined to total campaign traffic and cost using compatible split queries.
       get_competitive_pressure_report: Impression-share pressure, auction insights, and change history in one compact report.
       get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
       list_keyword_quality_scores: Keyword quality score diagnostics.

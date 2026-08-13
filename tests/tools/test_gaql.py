@@ -343,6 +343,23 @@ def test_validate_gaql_field_compatibility_rejects_unique_user_pairing():
     )
 
 
+def test_gaql_compatibility_rejects_generated_segment_metric_pair():
+  with pytest.raises(
+      ToolError,
+      match=(
+          "metrics.all_conversions_from_interactions_rate is not selectable "
+          "with segments.new_versus_returning_customers"
+      ),
+  ):
+    validate_gaql_field_compatibility(
+        "SELECT campaign.id, "
+        "segments.new_versus_returning_customers, "
+        "metrics.conversions, "
+        "metrics.all_conversions_from_interactions_rate "
+        "FROM campaign WHERE segments.date DURING LAST_30_DAYS"
+    )
+
+
 def test_preprocess_gaql_query_rejects_incompatible_fields_before_api():
   with pytest.raises(
       ToolError,
