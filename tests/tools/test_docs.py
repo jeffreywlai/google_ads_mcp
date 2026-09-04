@@ -494,6 +494,77 @@ def test_search_google_ads_fields_returns_api_continuation(
 
 @mock.patch("ads_mcp.tools.docs.format_value")
 @mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_search_google_ads_fields_supports_multiple_patterns(
+    mock_get_ads_client,
+    mock_format_value,
+):
+  """Pattern mode fans out without unsupported GoogleAdsField OR clauses."""
+  mock_service = mock_get_ads_client.return_value.get_service.return_value
+  first_field = mock.Mock()
+  second_field = mock.Mock()
+  mock_service.search_google_ads_fields.side_effect = [
+      _FieldPager([first_field], total_count=1),
+      _FieldPager(
+          [second_field],
+          total_count=3,
+          next_page_token="second-page",
+      ),
+  ]
+  mock_format_value.side_effect = [
+      {"name": "campaign.keyword_match_type"},
+      {"name": "segments.search_term_match_type"},
+  ]
+
+  result = docs.search_google_ads_fields(
+      patterns=["campaign.keyword%", "%search_term_matching%"],
+      limit=10,
+  )
+
+  assert result["search_mode"] == "patterns"
+  assert result["pattern_count"] == 2
+  assert result["returned_count"] == 2
+  assert result["complete"] is False
+  pattern_results = result["pattern_results"]
+  assert [item["pattern"] for item in pattern_results] == [
+      "campaign.keyword%",
+      "%search_term_matching%",
+  ]
+  assert pattern_results[0]["fields"] == [
+      {"name": "campaign.keyword_match_type"}
+  ]
+  continuation = pattern_results[1]["continuation"]
+  assert continuation["tool"] == "search_google_ads_fields"
+  assert continuation["arguments"]["query"] == pattern_results[1]["query"]
+  assert continuation["arguments"]["page_token"] == "second-page"
+
+  requests = [
+      call.kwargs["request"]
+      for call in mock_service.search_google_ads_fields.call_args_list
+  ]
+  assert all(" OR " not in request["query"] for request in requests)
+  assert requests[0]["query"].endswith("WHERE name LIKE 'campaign.keyword%'")
+  assert requests[1]["query"].endswith(
+      "WHERE name LIKE '%search_term_matching%'"
+  )
+  assert [request["page_size"] for request in requests] == [5, 5]
+
+
+def test_search_google_ads_fields_rejects_query_and_patterns_together():
+  with pytest.raises(ToolError, match="query or patterns, not both"):
+    docs.search_google_ads_fields(
+        "SELECT name WHERE name LIKE 'campaign.%'",
+        patterns=["campaign.%"],
+    )
+
+
+@pytest.mark.parametrize("pattern", ["", "campaign.%' OR name LIKE '%"])
+def test_search_google_ads_fields_rejects_invalid_pattern(pattern):
+  with pytest.raises(ToolError, match="patterns"):
+    docs.search_google_ads_fields(patterns=[pattern])
+
+
+@mock.patch("ads_mcp.tools.docs.format_value")
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
 def test_search_google_ads_fields_spills_large_metadata_without_skip_token(
     mock_get_ads_client,
     mock_format_value,

@@ -39,7 +39,9 @@ principles:
     LAST_180_DAYS, LAST_365_DAYS, LAST_12_MONTHS, LAST_QUARTER, YTD,
     ALL_TIME, or {start_date, end_date}.
   - Use get_resource_metadata, get_reporting_view_doc, or
-    search_google_ads_fields only when query construction is blocked.
+    search_google_ads_fields only when query construction is blocked. Pass
+    patterns for multiple field-name searches; the server fans them out
+    because GoogleAdsField queries do not support OR.
   - Mutation tools are hidden by default. Use unlock_mutation_tools only when
     you intend to change account state.
 
@@ -107,7 +109,7 @@ categories:
       export_google_ads_fields_csv: Export every matching live GoogleAdsField metadata row and requested column to CSV.
       get_reporting_view_doc: View names or detailed view metadata.
       get_reporting_fields_doc: Cached field metadata for known fields.
-      search_google_ads_fields: Live field metadata search for GAQL building.
+      search_google_ads_fields: Live field metadata search by raw query or multiple safe name patterns.
       get_tool_visibility_profile: Check whether mutation tools are unlocked for the session.
       unlock_mutation_tools: Reveal mutation tools for the current session.
       lock_mutation_tools: Hide mutation tools again for the current session.
@@ -216,7 +218,7 @@ categories:
     summary: Audit requested dates or the maximum retrievable change data.
     tools:
       list_change_statuses: Changed resources and last change timestamps.
-      list_change_events: Granular change events for the last 30 days without full old/new resource blobs.
+      list_change_events: Granular change events with typed resource filters; use lookback_days for an inclusive relative window automatically clamped to 30 days.
       export_change_history_csv: Use for full, all, maximum, or downloadable history; exports daily latest-status slices across 90 days plus the 30-day granular event overlay with automatic cap subdivision.
       get_change_history_extended: Use for a contextual bounded preview; explicit dates are preserved, while omitted dates preview 90-day latest-status data plus the 30-day event overlay.
 

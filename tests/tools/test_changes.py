@@ -554,6 +554,75 @@ def test_list_change_events_rejects_dates_older_than_30_days():
     )
 
 
+def test_list_change_events_clamps_relative_lookback_to_30_inclusive_days():
+  account_today = date(2026, 8, 13)
+  with (
+      mock.patch(
+          "ads_mcp.tools.changes._account_today",
+          return_value=(account_today, "America/New_York"),
+      ),
+      mock.patch(
+          "ads_mcp.tools.changes.run_gaql_query_page",
+          return_value={
+              "rows": [],
+              "next_page_token": None,
+              "total_results_count": 0,
+          },
+      ) as mock_query,
+  ):
+    result = changes.list_change_events(
+        CUSTOMER_ID,
+        lookback_days=45,
+    )
+
+  query = mock_query.call_args.kwargs["query"]
+  assert "'2026-07-15 00:00:00'" in query
+  assert "'2026-08-14 00:00:00'" in query
+  assert result["resolved_date_range"] == {
+      "start_date": "2026-07-15",
+      "end_date": "2026-08-13",
+  }
+  assert result["requested_lookback_days"] == 45
+  assert result["applied_lookback_days"] == 30
+  assert result["lookback_days_clamped"] is True
+  assert result["account_time_zone"] == "America/New_York"
+
+
+@pytest.mark.parametrize("lookback_days", [True, 0, -1])
+def test_list_change_events_rejects_invalid_lookback_days(lookback_days):
+  with mock.patch("ads_mcp.tools.changes.run_gaql_query_page") as mock_query:
+    with pytest.raises(ToolError, match="lookback_days"):
+      changes.list_change_events(
+          CUSTOMER_ID,
+          lookback_days=lookback_days,
+      )
+
+  mock_query.assert_not_called()
+
+
+def test_list_change_events_rejects_lookback_with_explicit_dates():
+  with pytest.raises(ToolError, match="lookback_days cannot be combined"):
+    changes.list_change_events(
+        CUSTOMER_ID,
+        lookback_days=7,
+        start_date="2026-08-01",
+    )
+
+
+def test_list_change_events_rejects_unknown_resource_type_locally():
+  with mock.patch("ads_mcp.tools.changes.run_gaql_query_page") as mock_query:
+    with pytest.raises(
+        ToolError,
+        match="Unsupported change_resource_types: BIDDING_STRATEGY",
+    ):
+      changes.list_change_events(
+          CUSTOMER_ID,
+          change_resource_types=["BIDDING_STRATEGY"],
+      )
+
+  mock_query.assert_not_called()
+
+
 def test_list_change_statuses_rejects_dates_older_than_90_days():
   too_old_start = (date.today() - timedelta(days=90)).isoformat()
 
