@@ -588,6 +588,83 @@ def test_list_change_events_clamps_relative_lookback_to_30_inclusive_days():
   assert result["account_time_zone"] == "America/New_York"
 
 
+def test_list_change_events_pages_with_matching_lookback_and_bound_token():
+  account_today = date(2026, 8, 13)
+  with (
+      mock.patch(
+          "ads_mcp.tools.changes._account_today",
+          return_value=(account_today, "America/New_York"),
+      ),
+      mock.patch(
+          "ads_mcp.tools.changes.run_gaql_query_page",
+          side_effect=[
+              {
+                  "rows": [{"row": "first"}],
+                  "next_page_token": "raw-next",
+                  "total_results_count": 2,
+              },
+              {
+                  "rows": [{"row": "second"}],
+                  "next_page_token": None,
+                  "total_results_count": 2,
+              },
+          ],
+      ) as mock_query,
+  ):
+    first_page = changes.list_change_events(
+        CUSTOMER_ID,
+        lookback_days=45,
+        limit=1,
+    )
+    second_page = changes.list_change_events(
+        CUSTOMER_ID,
+        lookback_days=45,
+        limit=1,
+        page_token=first_page["next_page_token"],
+    )
+
+  assert second_page["change_events"] == [{"row": "second"}]
+  assert (
+      second_page["resolved_date_range"] == first_page["resolved_date_range"]
+  )
+  assert second_page["requested_lookback_days"] == 45
+  assert second_page["applied_lookback_days"] == 30
+  assert second_page["lookback_days_clamped"] is True
+  assert mock_query.call_args_list[1].kwargs["page_token"] == "raw-next"
+
+
+def test_list_change_events_rejects_lookback_mismatched_with_bound_token():
+  account_today = date(2026, 8, 13)
+  bound_token = "raw-next|2026-07-15|2026-08-13"
+  with (
+      mock.patch(
+          "ads_mcp.tools.changes._account_today",
+          return_value=(account_today, "America/New_York"),
+      ),
+      mock.patch("ads_mcp.tools.changes.run_gaql_query_page") as mock_query,
+  ):
+    with pytest.raises(ToolError, match="does not match.*lookback_days"):
+      changes.list_change_events(
+          CUSTOMER_ID,
+          lookback_days=7,
+          page_token=bound_token,
+      )
+
+  mock_query.assert_not_called()
+
+
+def test_list_change_events_rejects_lookback_with_unbound_page_token():
+  with mock.patch("ads_mcp.tools.changes.run_gaql_query_page") as mock_query:
+    with pytest.raises(ToolError, match="server-issued bound page_token"):
+      changes.list_change_events(
+          CUSTOMER_ID,
+          lookback_days=7,
+          page_token="raw-next",
+      )
+
+  mock_query.assert_not_called()
+
+
 @pytest.mark.parametrize("lookback_days", [True, 0, -1])
 def test_list_change_events_rejects_invalid_lookback_days(lookback_days):
   with mock.patch("ads_mcp.tools.changes.run_gaql_query_page") as mock_query:

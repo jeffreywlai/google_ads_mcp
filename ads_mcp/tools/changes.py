@@ -699,7 +699,6 @@ def _applied_change_event_lookback_days(
     *,
     start_date: str | None,
     end_date: str | None,
-    page_token: str | None,
 ) -> int | None:
   """Validates and clamps a relative inclusive change_event window."""
   if lookback_days is None:
@@ -708,12 +707,38 @@ def _applied_change_event_lookback_days(
     raise ToolError("lookback_days must be an integer.")
   if lookback_days <= 0:
     raise ToolError("lookback_days must be greater than 0.")
-  if start_date is not None or end_date is not None or page_token is not None:
+  if start_date is not None or end_date is not None:
     raise ToolError(
-        "lookback_days cannot be combined with start_date, end_date, or "
-        "page_token."
+        "lookback_days cannot be combined with start_date or end_date."
     )
   return min(lookback_days, _CHANGE_EVENT_MAX_LOOKBACK_DAYS)
+
+
+def _validate_change_event_lookback_page_token(
+    applied_lookback_days: int | None,
+    page_token: str | None,
+    bound_start_date: str | None,
+    bound_end_date: str | None,
+) -> None:
+  """Ensures a repeated lookback matches its bound pagination snapshot."""
+  if applied_lookback_days is None or page_token is None:
+    return
+  if bound_start_date is None or bound_end_date is None:
+    raise ToolError(
+        "lookback_days with page_token requires a server-issued bound "
+        "page_token. Use the next_page_token returned by list_change_events."
+    )
+  bound_lookback_days = (
+      date.fromisoformat(bound_end_date) - date.fromisoformat(bound_start_date)
+  ).days + 1
+  if bound_lookback_days != applied_lookback_days:
+    raise ToolError(
+        f"page_token is bound to a {bound_lookback_days}-day window, which "
+        "does not match applied "
+        f"lookback_days={applied_lookback_days}. Reuse the original "
+        "lookback_days or the continuation arguments from the previous "
+        "response."
+    )
 
 
 def _available_date_window(
@@ -2067,7 +2092,8 @@ def list_change_events(
       login_customer_id: Optional manager account ID.
       lookback_days: Optional inclusive relative window ending today in the
           Google Ads customer's timezone. Values above 30 are clamped to 30.
-          Cannot be combined with explicit dates or page_token.
+          Cannot be combined with explicit dates. Repeat it with the
+          server-issued page_token when requesting the next page.
 
   Returns:
       A dict containing change event rows plus completeness metadata.
@@ -2084,7 +2110,6 @@ def list_change_events(
       lookback_days,
       start_date=start_date,
       end_date=end_date,
-      page_token=page_token,
   )
   delegated_plan = _DELEGATED_SOURCE_PLAN.get()
   if delegated_plan is not None:
@@ -2102,6 +2127,12 @@ def list_change_events(
 
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
       page_token
+  )
+  _validate_change_event_lookback_page_token(
+      applied_lookback_days,
+      page_token,
+      bound_start_date,
+      bound_end_date,
   )
   start_date, end_date = _resolve_bound_page_dates(
       start_date,
