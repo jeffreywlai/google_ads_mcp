@@ -11,7 +11,11 @@ principles:
     tool.
   - For execute_gaql, pass max_rows for exploratory reads. If an unbounded raw
     query returns many rows, the tool includes a token-efficiency warning
-    without truncating the data.
+    and bounds oversized inline responses with an exact deferred export.
+  - GAQL preflight adds only required SELECT segments and reports
+    query_adjustments. Field alternatives are suggestions, not automatic
+    replacements. Empty resource-name predicates require an explicit fix;
+    ordinary empty-string text filters remain valid.
   - Use export_gaql_csv for bulk extracts that would be too large or noisy as
     JSON tool output.
   - For change history, preserve explicit requested dates. If the user asks
@@ -19,6 +23,13 @@ principles:
     export_change_history_csv for daily change_status slices across 90 days
     plus the 30-day granular change_event overlay; do not limit all history to
     30 days or imply that status rows are field-level events.
+  - execute_gaql, export_gaql_csv, and list_change_events default to
+    retention_policy=error for unavailable granular-history dates. Use
+    retention_policy=clamp only when explicitly accepting the available
+    intersection; inspect retention.unavailable_ranges. No overlap returns
+    no events, not a recent replacement period. LAST_30_DAYS excludes today,
+    unlike the inclusive-today lookback_days=30. Snapshot exports and
+    continuations preserve their original resolved calendar and coverage.
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.

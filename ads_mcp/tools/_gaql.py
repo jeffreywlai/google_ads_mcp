@@ -16,6 +16,7 @@
 
 from datetime import date
 from datetime import timedelta
+import difflib
 import functools
 import json
 import math
@@ -144,6 +145,15 @@ _ALLOWED_UNIQUE_USER_SEGMENTS = {
     "segments.adjusted_gender",
     "segments.date",
     "segments.device",
+}
+_REMOVED_FIELD_ALTERNATIVES = {
+    "campaign.start_date": ("campaign.start_date_time",),
+    "campaign.end_date": ("campaign.end_date_time",),
+    "campaign.url_expansion_opt_out": ("campaign.asset_automation_settings",),
+    "asset_group_asset.performance_label": (
+        "asset_group_asset.primary_status",
+        "asset_group_asset.primary_status_reasons",
+    ),
 }
 
 
@@ -812,6 +822,116 @@ def _compatible_fields_text(
   )
 
 
+@functools.lru_cache(maxsize=1)
+def _load_field_metadata() -> dict[str, dict[str, Any]]:
+  """Loads canonical field names and types; absence is not invalidity."""
+  try:
+    with open(_FIELDS_METADATA_PATH, encoding="utf-8") as stream:
+      return yaml.safe_load(stream) or {}
+  except FileNotFoundError:
+    return {}
+
+
+def _field_recovery_hint(
+    field_name: str, compatible_fields: frozenset[str]
+) -> str:
+  """Suggests only verified alternatives, never an automatic substitution."""
+  alternatives = [
+      field
+      for field in _REMOVED_FIELD_ALTERNATIVES.get(field_name, ())
+      if field in compatible_fields
+  ]
+  if not alternatives:
+    prefix, _, leaf = field_name.rpartition(".")
+    candidates = sorted(
+        field
+        for field in compatible_fields
+        if field.rpartition(".")[0] == prefix
+        and set(leaf.split("_")) & set(field.rpartition(".")[2].split("_"))
+    )
+    alternatives = difflib.get_close_matches(
+        field_name, candidates, n=3, cutoff=0.72
+    )
+  hint = ""
+  if field_name in _REMOVED_FIELD_ALTERNATIVES:
+    hint += " This field is unavailable in v24."
+  if alternatives:
+    hint += (
+        " Selectable alternatives (not equivalent replacements): "
+        + ", ".join(alternatives[:3])
+        + "."
+    )
+  if field_name not in _REMOVED_FIELD_ALTERNATIVES:
+    # The field's own resource is the smallest useful verified alternative.
+    resource = field_name.split(".", 1)[0]
+    field_sets = _load_resource_field_sets(resource)
+    if field_sets and field_name in frozenset().union(*field_sets.values()):
+      hint += f" This exact field is selectable FROM {resource}."
+  return hint + " "
+
+
+def _validate_empty_resource_references(query: str) -> None:
+  """Rejects empty resource predicates without silently broadening queries."""
+  span = _where_body_span(query)
+  if span is None:
+    return
+  start, end = span
+  body = query[start:end]
+  masked_body = _blank_string_literals(body)
+  metadata = _load_field_metadata()
+  for match in _ENUM_FILTER_PATTERN.finditer(body):
+    field_name = match.group("field").lower()
+    if not masked_body[match.start() : match.end()].strip():
+      continue
+    if metadata.get(field_name, {}).get("data_type") != "RESOURCE_NAME":
+      continue
+    if match.group("operator") not in ("=", "!=", "<>"):
+      continue
+    if match.group("value") not in ("''", '""'):
+      continue
+    before, after = body[: match.start()], body[match.end() :]
+    # Only construct a candidate for a complete top-level AND predicate.
+    trailing_and = re.search(
+        r"\bAND\s*$", _blank_string_literals(before), re.I
+    )
+    leading_and = re.match(r"\s*AND\b", after, re.I)
+    if trailing_and:
+      candidate_body = before[: trailing_and.start()] + after
+    elif leading_and:
+      candidate_body = before + after[leading_and.end() :]
+    elif not before.strip() and not after.strip():
+      candidate_body = ""
+    else:
+      candidate_body = None
+    hint = " Remove that complete predicate explicitly and filter client-side."
+    if candidate_body is not None:
+      where_keyword_start = start - len("WHERE")
+      candidate = (
+          query[:where_keyword_start]
+          + (
+              "WHERE " + candidate_body.strip() + " "
+              if candidate_body.strip()
+              else ""
+          )
+          + query[end:]
+      ).strip()
+      if len(candidate) <= 2000:
+        hint += (
+            " Candidate query (broader results requiring client-side "
+            f"filtering): {candidate}"
+        )
+      else:
+        hint += (
+            " Removing it produces broader results; the candidate query "
+            "is too large to inline."
+        )
+    empty_literal = match.group("value")
+    raise ToolError(
+        f"{field_name} cannot be compared to an empty resource name "
+        f"({empty_literal})." + hint
+    )
+
+
 def validate_gaql_field_compatibility(query: str) -> None:
   """Validates selected, filtered, and sorted fields against FROM metadata.
 
@@ -835,8 +955,14 @@ def validate_gaql_field_compatibility(query: str) -> None:
   for field_name in referenced_fields:
     if field_name in compatible_fields:
       continue
+    if (
+        field_name not in _load_field_metadata()
+        and field_name not in _REMOVED_FIELD_ALTERNATIVES
+    ):
+      continue
     raise ToolError(
         f"{field_name} is not compatible with FROM {resource_name}. "
+        + _field_recovery_hint(field_name, compatible_fields)
         + _compatible_fields_text(resource_name, field_sets)
     )
   _validate_pairwise_field_compatibility(resource_name, referenced_fields)
@@ -959,10 +1085,15 @@ def _add_missing_referenced_select_fields(query: str) -> str:
     return query
 
   selected_fields = set(_split_select_fields(select_match.group("select")))
+  field_sets = _load_resource_field_sets(_query_from_resource(query) or "")
+  segments = field_sets["segments"] if field_sets is not None else frozenset()
   missing_fields = [
       field
       for field in _referenced_filter_and_order_fields(query)
-      if field.startswith("segments.")
+      if (
+          field in segments
+          or (field_sets is None and field.startswith("segments."))
+      )
       and field not in selected_fields
       and field not in _CORE_DATE_SEGMENTS
   ]
@@ -992,8 +1123,10 @@ def _preflight_gaql(query: str) -> str:
 
   query = rewrite_gaql_date_ranges(query)
   query = normalize_gaql_enum_literals(query)
+  _validate_empty_resource_references(query)
+  query = _add_missing_referenced_select_fields(query)
   validate_gaql_field_compatibility(query)
-  return _add_missing_referenced_select_fields(query)
+  return query
 
 
 def _append_omit_unselected_resource_names_parameter(query: str) -> str:
@@ -1014,6 +1147,34 @@ def preprocess_gaql_query(query: str) -> str:
   """Preprocesses GAQL for safer, lower-retry execution."""
   query = _preflight_gaql(query)
   return _append_omit_unselected_resource_names_parameter(query)
+
+
+def prepare_gaql_query(query: str) -> tuple[str, dict[str, Any]]:
+  """Preserves the string preprocessor contract while exposing SELECT fixes."""
+  executed_query = preprocess_gaql_query(query)
+  original_fields = set(_selected_fields(query))
+  additions = [
+      field
+      for field in _selected_fields(executed_query)
+      if field not in original_fields
+  ]
+  if not additions:
+    return executed_query, {}
+  return executed_query, {
+      "original_query": query,
+      "executed_query": executed_query,
+      "query_adjustments": [
+          {
+              "rule": "required_select_field",
+              "field": field,
+              "reason": (
+                  "Referenced segment required in SELECT by "
+                  "FROM-specific v24 metadata."
+              ),
+          }
+          for field in additions
+      ],
+  }
 
 
 def quote_int_values(values: list[str], field_name: str = "values") -> str:

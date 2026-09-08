@@ -21,13 +21,10 @@ from dataclasses import dataclass
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
-import functools
 from typing import Annotated
 from typing import Any
 from typing import get_args
 from typing import Literal
-from zoneinfo import ZoneInfo
-from zoneinfo import ZoneInfoNotFoundError
 
 from fastmcp.exceptions import ToolError
 from pydantic import BeforeValidator
@@ -37,6 +34,7 @@ from pydantic.json_schema import SkipJsonSchema
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_write_tool
+from ads_mcp.tools import _history
 from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import gaql_quote_string
 from ads_mcp.tools._gaql import normalize_list_arg
@@ -44,7 +42,9 @@ from ads_mcp.tools._gaql import quote_enum_values
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
-from ads_mcp.tools.api import get_ads_credential_cache_scope
+from ads_mcp.tools.api import get_account_calendar
+from ads_mcp.tools.api import get_gaql_page_metadata
+from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import merge_temp_csv_files
 from ads_mcp.tools.api import remove_temp_csv_file
 from ads_mcp.tools.api import run_gaql_query
@@ -55,7 +55,7 @@ from ads_mcp.tools.api import (
 
 
 _CHANGE_STATUS_MAX_LOOKBACK_DAYS = 90
-_CHANGE_EVENT_MAX_LOOKBACK_DAYS = 30
+_CHANGE_EVENT_MAX_LOOKBACK_DAYS = _history.CHANGE_EVENT_LOOKBACK_DAYS
 _CHANGE_HISTORY_RESULT_CAP = 10_000
 _DEFAULT_EXPORT_QUERY_BUDGET = 200
 _PREVIEW_CONVERGENCE_MAX_ATTEMPTS = 4
@@ -290,49 +290,6 @@ _CHANGE_EVENT_EXPORT_FIELDS = [
 ]
 
 
-@functools.lru_cache(maxsize=128)
-def _customer_time_zone_for_credential(
-    credential_scope: str,
-    customer_id: str,
-    login_customer_id: str | None,
-) -> ZoneInfo:
-  """Returns the Google Ads customer's reporting timezone."""
-  del credential_scope
-  rows = run_gaql_query(
-      """
-      SELECT
-        customer.time_zone
-      FROM customer
-      LIMIT 1
-      """,
-      customer_id,
-      login_customer_id,
-  )
-  time_zone_name = rows[0].get("customer.time_zone") if rows else None
-  if not isinstance(time_zone_name, str) or not time_zone_name:
-    raise ToolError(
-        "Unable to resolve customer.time_zone for change-history dates."
-    )
-  try:
-    return ZoneInfo(time_zone_name)
-  except ZoneInfoNotFoundError as exc:
-    raise ToolError(
-        f"Unsupported customer.time_zone: {time_zone_name}."
-    ) from exc
-
-
-def _customer_time_zone(
-    customer_id: str,
-    login_customer_id: str | None,
-) -> ZoneInfo:
-  """Returns a principal-scoped cached customer reporting timezone."""
-  return _customer_time_zone_for_credential(
-      get_ads_credential_cache_scope(),
-      customer_id,
-      login_customer_id,
-  )
-
-
 def _account_today(
     customer_id: str,
     login_customer_id: str | None,
@@ -341,8 +298,7 @@ def _account_today(
   account_today_override = _ACCOUNT_TODAY_OVERRIDE.get()
   if account_today_override is not None:
     return account_today_override
-  customer_zone = _customer_time_zone(customer_id, login_customer_id)
-  return datetime.now(customer_zone).date(), customer_zone.key
+  return get_account_calendar(customer_id, login_customer_id)
 
 
 def _account_snapshot(
@@ -377,7 +333,7 @@ def _parse_date(value: str, field_name: str) -> date:
 
 def _oldest_supported_start(lookback_days: int, today: date) -> str:
   """Returns the first date in an inclusive lookback window."""
-  return (today - timedelta(days=lookback_days - 1)).isoformat()
+  return _history.oldest_supported_start(lookback_days, today)
 
 
 def _oldest_change_status_start(today: date) -> str:
@@ -1869,6 +1825,7 @@ def _execute_change_event_page(
     limit: int,
     page_token: str | None,
     login_customer_id: str | None,
+    query_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   """Executes one already-resolved change_event page plan."""
   where_conditions = _datetime_range_conditions(
@@ -1906,8 +1863,11 @@ def _execute_change_event_page(
       page_size=limit,
       page_token=page_token,
       login_customer_id=login_customer_id,
+      **({"query_metadata": query_metadata} if query_metadata else {}),
   )
   result = _build_change_page_response("change_events", page, limit)
+  if query_metadata:
+    result.update(query_metadata)
   result["next_page_token"] = _bind_change_page_token(
       result.get("next_page_token"),
       plan.start_date,
@@ -1961,6 +1921,11 @@ def _execute_change_event_page(
             "limit": limit,
             "page_token": result["next_page_token"],
             "login_customer_id": login_customer_id,
+            **(
+                {"retention_policy": query_metadata["retention"]["policy"]}
+                if query_metadata
+                else {}
+            ),
         },
     }
   return result
@@ -2075,6 +2040,7 @@ def list_change_events(
     page_token: str | None = None,
     login_customer_id: str | None = None,
     lookback_days: StrictInt | None = None,
+    retention_policy: _history.RetentionPolicy = "error",
 ) -> dict[str, Any]:
   """Lists granular changes from change_event.
 
@@ -2094,11 +2060,17 @@ def list_change_events(
           Google Ads customer's timezone. Values above 30 are clamped to 30.
           Cannot be combined with explicit dates. Repeat it with the
           server-issued page_token when requesting the next page.
+      retention_policy: error rejects explicit dates outside retained history.
+          clamp intersects them with the last 30 account-local days and returns
+          requested/applied/unavailable ranges. An empty intersection returns
+          no events, never a different period. Repeat this policy on subsequent
+          pages; their original account calendar and coverage stay frozen.
 
   Returns:
       A dict containing change event rows plus completeness metadata.
   """
   validate_limit(limit)
+  _history.validate_retention_policy(retention_policy)
   resource_change_operations = normalize_list_arg(
       resource_change_operations,
       "resource_change_operations",
@@ -2128,6 +2100,25 @@ def list_change_events(
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
       page_token
   )
+  captured_metadata = get_gaql_page_metadata(page_token) if page_token else {}
+  if "retention" in captured_metadata:
+    if retention_policy != captured_metadata["retention"]["policy"]:
+      raise ToolError(
+          "page_token is bound to a different retention_policy. "
+          "Reuse the original policy."
+      )
+    requested = captured_metadata["retention"]["requested_range"]
+    # A caller may repeat original inputs or use the explicit continuation.
+    original_start = requested["start"][:10]
+    original_end = (
+        (datetime.fromisoformat(requested["end"]) - timedelta(days=1))
+        .date()
+        .isoformat()
+    )
+    if start_date == original_start:
+      start_date = bound_start_date
+    if end_date == original_end:
+      end_date = bound_end_date
   _validate_change_event_lookback_page_token(
       applied_lookback_days,
       page_token,
@@ -2140,9 +2131,13 @@ def list_change_events(
       bound_start_date,
       bound_end_date,
   )
-  snapshot = _account_snapshot(
-      customer_id,
-      login_customer_id,
+  snapshot = (
+      _AccountSnapshot(
+          date.fromisoformat(captured_metadata["account_today"]),
+          captured_metadata["account_time_zone"],
+      )
+      if "retention" in captured_metadata
+      else _account_snapshot(customer_id, login_customer_id)
   )
   request = _HistoryDateIntent(
       start_date=start_date,
@@ -2151,39 +2146,87 @@ def list_change_events(
           applied_lookback_days - 1 if applied_lookback_days is not None else 7
       ),
   ).resolve(snapshot)
+  if not page_token:
+    applied, metadata = _history.plan_retention(
+        _history.date_interval(request.start_date, request.end_date),
+        snapshot.today,
+        snapshot.time_zone,
+        retention_policy,
+    )
+    if applied is None:
+      return {
+          **_empty_change_events_response(limit),
+          **metadata,
+          "resolved_date_range": None,
+      }
   plan = _source_page_plan(
       request,
       _CHANGE_EVENT_SOURCE,
-      "continuation" if page_token else "strict",
+      "continuation"
+      if page_token
+      else "available"
+      if retention_policy == "clamp"
+      else "strict",
   )
   assert plan is not None
+
+  def execute(source_plan: _SourcePagePlan) -> dict[str, Any]:
+    metadata = captured_metadata
+    if "retention" not in metadata:
+      _, metadata = (
+          _history.plan_retention(
+              _history.date_interval(
+                  source_plan.request.start_date, source_plan.request.end_date
+              ),
+              source_plan.request.snapshot.today,
+              source_plan.request.snapshot.time_zone,
+              retention_policy,
+          )
+          if not page_token
+          else (None, {})
+      )
+    return _execute_change_event_page(
+        source_plan,
+        customer_id=customer_id,
+        resource_change_operations=resource_change_operations,
+        change_resource_types=change_resource_types,
+        limit=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+        query_metadata=metadata,
+    )
+
   read = _run_source_page_plan(
       plan,
       customer_id=customer_id,
       login_customer_id=login_customer_id,
       limit=limit,
       operation_name="list_change_events",
-      execute=lambda source_plan: _execute_change_event_page(
-          source_plan,
-          customer_id=customer_id,
-          resource_change_operations=resource_change_operations,
-          change_resource_types=change_resource_types,
-          limit=limit,
-          page_token=page_token,
-          login_customer_id=login_customer_id,
-      ),
+      execute=execute,
   )
   result = read.response
-  if read.retention_refreshed and read.plan is not None:
+  if read.retention_refreshed:
+    if read.plan is None:
+      _, metadata = _history.plan_retention(
+          _history.date_interval(
+              read.request.start_date, read.request.end_date
+          ),
+          read.request.snapshot.today,
+          read.request.snapshot.time_zone,
+          retention_policy,
+      )
+      result.update(metadata)
+      result["resolved_date_range"] = None
+    result["retention_refreshed"] = True
     result["retention_refresh_note"] = (
         "change_event retention advanced during list_change_events; its window "
-        f"was recomputed for {read.plan.request.snapshot.today.isoformat()}."
+        f"was recomputed for {read.request.snapshot.today.isoformat()}."
     )
   if applied_lookback_days is not None:
     result["requested_lookback_days"] = lookback_days
     result["applied_lookback_days"] = applied_lookback_days
     result["lookback_days_clamped"] = lookback_days != applied_lookback_days
-  return result
+  return finalize_bounded_response(result, ("change_events",))
 
 
 @change_export_tool

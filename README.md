@@ -46,8 +46,8 @@
 
 | Tool | Description |
 |------|-------------|
-| `execute_gaql` | Run any GAQL query with formatted results |
-| `export_gaql_csv` | Export GAQL query results to a CSV file for bulk extraction |
+| `execute_gaql` | Run GAQL with required-SELECT repairs, actionable errors, and explicit change-event retention policy |
+| `export_gaql_csv` | Export GAQL or an exact snapshot to CSV, preserving query adjustments and history coverage |
 | `export_materialized_response_csv` | Explicitly write an exact deferred oversized read response returned by another tool |
 | `list_accessible_accounts` | Page through a short-lived, exact in-memory snapshot of accessible accounts without writing files |
 | `export_accessible_accounts_csv` | Explicitly export the exact accessible-account snapshot to CSV |
@@ -111,7 +111,7 @@ accessible account available without an unbounded model response.
 | Tool | Description |
 |------|-------------|
 | `list_change_statuses` | Changed resources and last change timestamps |
-| `list_change_events` | Granular change events with typed resource filters and an optional auto-clamped relative lookback |
+| `list_change_events` | Granular changes with typed filters, inclusive relative lookback, and opt-in clamping for explicit dates |
 | `export_change_history_csv` | Export maximum retrievable change data: daily status slices across 90 days plus a 30-day granular event overlay |
 | `get_change_history_extended` | Preview explicit dates, or 90-day latest-status data plus the 30-day event overlay when dates are omitted |
 

@@ -57,6 +57,26 @@ from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
 
 
+def _expected_history_retention(today):
+  requested = {
+      "start": f"{today - timedelta(days=7)} 00:00:00",
+      "end": f"{today + timedelta(days=1)} 00:00:00",
+      "start_inclusive": True,
+      "end_inclusive": False,
+  }
+  return {
+      "policy": "error",
+      "requested_range": requested,
+      "available_range": {
+          **requested,
+          "start": f"{today - timedelta(days=29)} 00:00:00",
+      },
+      "applied_range": requested,
+      "unavailable_ranges": [],
+      "clamped": False,
+  }
+
+
 def test_context_schema_marker_is_packaged():
   """Installed distributions include the context schema marker."""
   project_root = Path(__file__).resolve().parents[1]
@@ -1136,6 +1156,7 @@ class TestFastMcpConfiguration:
 
           expected = {
               "change_events": rows,
+              "retention": _expected_history_retention(account_today),
               "returned_count": 1,
               "total_count": 1,
               "total_page_count": 1,
@@ -1195,6 +1216,7 @@ class TestFastMcpConfiguration:
 
           expected = {
               "change_events": [],
+              "retention": _expected_history_retention(account_today),
               "returned_count": 0,
               "total_count": 0,
               "total_page_count": 0,
@@ -2531,6 +2553,7 @@ class TestFastMcpConfiguration:
                 "max_rows",
                 "max_results",
                 "warning_row_threshold",
+                "retention_policy",
             ],
         },
         {
