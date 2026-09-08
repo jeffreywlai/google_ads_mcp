@@ -15,12 +15,19 @@
 """Tests for docs.py."""
 
 import asyncio
+import csv
+import json
 import os
+from pathlib import Path
+import re
 from unittest import mock
 
+from ads_mcp.tools import api
 from ads_mcp.tools import docs
 from fastmcp.exceptions import ToolError
+from google.ads.googleads.v24.resources.types.google_ads_field import GoogleAdsField
 import pytest
+import yaml
 
 
 class _FieldPager:
@@ -490,6 +497,253 @@ def test_search_google_ads_fields_returns_api_continuation(
   assert result["next_page_token"] == "next-fields-page"
   assert result["page_size"] == 100
   assert result["page_size_clamped"] is True
+
+
+@mock.patch("ads_mcp.tools.docs.format_value")
+@mock.patch("ads_mcp.tools.docs.get_ads_client")
+def test_search_google_ads_fields_supports_multiple_patterns(
+    mock_get_ads_client,
+    mock_format_value,
+):
+  """Pattern mode fans out without unsupported GoogleAdsField OR clauses."""
+  mock_service = mock_get_ads_client.return_value.get_service.return_value
+  first_field = mock.Mock()
+  second_field = mock.Mock()
+  mock_service.search_google_ads_fields.side_effect = [
+      _FieldPager([first_field], total_count=1),
+      _FieldPager(
+          [second_field],
+          total_count=3,
+          next_page_token="second-page",
+      ),
+  ]
+  mock_format_value.side_effect = [
+      {"name": "campaign.keyword_match_type"},
+      {"name": "segments.search_term_match_type"},
+  ]
+
+  result = docs.search_google_ads_fields(
+      patterns=["campaign.keyword%", "%search_term_matching%"],
+      limit=10,
+  )
+
+  assert result["search_mode"] == "patterns"
+  assert result["pattern_count"] == 2
+  assert result["returned_count"] == 2
+  assert result["complete"] is False
+  pattern_results = result["pattern_results"]
+  assert [item["pattern"] for item in pattern_results] == [
+      "campaign.keyword%",
+      "%search_term_matching%",
+  ]
+  assert pattern_results[0]["fields"] == [
+      {"name": "campaign.keyword_match_type"}
+  ]
+  continuation = pattern_results[1]["continuation"]
+  assert continuation["tool"] == "search_google_ads_fields"
+  assert continuation["arguments"]["query"] == pattern_results[1]["query"]
+  assert continuation["arguments"]["page_token"] == "second-page"
+
+  requests = [
+      call.kwargs["request"]
+      for call in mock_service.search_google_ads_fields.call_args_list
+  ]
+  assert all(" OR " not in request["query"] for request in requests)
+  assert requests[0]["query"].endswith("WHERE name LIKE 'campaign.keyword%'")
+  assert requests[1]["query"].endswith(
+      "WHERE name LIKE '%search_term_matching%'"
+  )
+  assert [request["page_size"] for request in requests] == [5, 5]
+
+
+@pytest.mark.parametrize("has_more", [False, True])
+def test_field_patterns_bound_whole_response_and_export_exact_pages(
+    has_more, tmp_path, monkeypatch
+):
+  """Individually bounded v24 pages must also fit as a complete response."""
+  patterns = [
+      "local_services_verification_artifact.%",
+      "campaign.video_campaign_settings.%",
+      "asset_set.%",
+      "asset_group_listing_group_filter.case_value.%",
+      "conversion_value_rule.itinerary_condition.%",
+      "ad_group_criterion.listing_group.case_value.%",
+      "ad_group_criterion.listing_group.%",
+      "offline_conversion_upload_conversion_action_summary.%",
+      "asset_group_listing_group_filter.%",
+      "ad_group_ad.ad.demand_gen_video_responsive_ad.%",
+  ]
+  metadata_path = Path(docs.MODULE_DIR) / "context" / "fields.yaml"
+  with metadata_path.open(encoding="utf-8") as stream:
+    metadata = yaml.safe_load(stream)
+  expected_fields = []
+  pages = []
+  for index, pattern in enumerate(patterns):
+    regex = re.escape(pattern).replace("%", ".*").replace("_", ".")
+    names = sorted(name for name in metadata if re.fullmatch(regex, name))
+    fields = [
+        GoogleAdsField(
+            name=name,
+            resource_name="googleAdsFields/" + name,
+            category="ATTRIBUTE",
+            data_type=metadata[name]["data_type"],
+            selectable=True,
+            filterable=metadata[name]["filterable"],
+            sortable=metadata[name]["sortable"],
+        )
+        for name in names[:10]
+    ]
+    assert len(fields) == 10
+    expected_fields.append([docs.format_value(field) for field in fields])
+    pages.append(
+        _FieldPager(
+            fields,
+            total_count=len(names) if has_more else len(fields),
+            next_page_token=str(index) * 64 if has_more else "",
+        )
+    )
+
+  monkeypatch.setenv("GOOGLE_ADS_MCP_EXPORT_DIR", str(tmp_path))
+  with (
+      mock.patch.object(docs, "get_ads_client") as get_client,
+      mock.patch.object(
+          api, "get_ads_credential_cache_scope", return_value="field-budget"
+      ),
+      mock.patch.object(api, "write_rows_to_temp_csv") as implicit_write,
+  ):
+    search = (
+        get_client.return_value.get_service.return_value.search_google_ads_fields
+    )
+    search.side_effect = pages
+    result = docs.search_google_ads_fields(patterns=patterns, limit=100)
+
+    assert (
+        len(
+            json.dumps(
+                result, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        )
+        <= api.INLINE_RESPONSE_BYTE_LIMIT
+    )
+    assert result["truncated"] is True
+    assert result["complete"] is False
+    assert result["pattern_count"] == 10
+    assert 0 < result["returned_count"] < 100
+    assert result["returned_count"] == sum(
+        part["returned_count"] for part in result["pattern_results"]
+    )
+    assert all(
+        not part["shared_inline_delivery"]["limited"]
+        for part in result["pattern_results"]
+    )
+    implicit_write.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+    export_call = result["full_materialized_response_export"]["export_call"]
+    assert export_call["tool"] == "export_materialized_response_csv"
+    exported = api.export_materialized_response_csv(
+        **export_call["arguments"], output_path=str(tmp_path / "fields.csv")
+    )
+    assert search.call_count == 10
+
+  with open(exported["file_path"], newline="", encoding="utf-8") as stream:
+    exported_rows = list(csv.DictReader(stream))
+  assert exported["row_count"] == 10
+  assert all(row["result_type"] == "pattern_results" for row in exported_rows)
+  exported_parts = [json.loads(row["result"]) for row in exported_rows]
+  assert [part["pattern"] for part in exported_parts] == patterns
+  for index, part in enumerate(exported_parts):
+    assert part["fields"] == expected_fields[index]
+    assert part["returned_count"] == 10
+    assert part["bulk_export_call"]["arguments"]["query"] == part["query"]
+    if has_more:
+      assert part["continuation"] == {
+          "tool": "search_google_ads_fields",
+          "arguments": {
+              "query": part["query"],
+              "limit": 10,
+              "page_token": str(index) * 64,
+          },
+      }
+    else:
+      assert part["complete_inline"] is True
+      assert part["has_more"] is False
+  for part in result["pattern_results"]:
+    assert part == exported_parts[patterns.index(part["pattern"])]
+
+
+@pytest.mark.parametrize("large_metadata", ["pattern", "cursor"])
+@pytest.mark.parametrize("oversized_first", [False, True])
+def test_field_patterns_bound_metadata_and_preserve_omitted_continuation(
+    large_metadata, oversized_first
+):
+  """Metadata alone can overflow even when every field row fits inline."""
+  pattern = (
+      "campaign." + ("x" * 20_000 if large_metadata == "pattern" else "") + "%"
+  )
+  token = "x" * (30_000 if large_metadata == "cursor" else 64)
+  with (
+      mock.patch.object(docs, "get_ads_client") as get_client,
+      mock.patch.object(
+          docs, "format_value", return_value={"name": "campaign.id"}
+      ),
+      mock.patch.object(
+          api, "get_ads_credential_cache_scope", return_value="field-metadata"
+      ),
+  ):
+    search = (
+        get_client.return_value.get_service.return_value.search_google_ads_fields
+    )
+    patterns = [pattern, "ad_group.%"]
+    pages = [
+        _FieldPager([mock.Mock()], total_count=2, next_page_token=token),
+        _FieldPager([mock.Mock()], total_count=1),
+    ]
+    if not oversized_first:
+      patterns.reverse()
+      pages.reverse()
+    search.side_effect = pages
+    result = docs.search_google_ads_fields(patterns=patterns)
+
+    assert (
+        len(
+            json.dumps(
+                result, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        )
+        <= api.INLINE_RESPONSE_BYTE_LIMIT
+    )
+    expected_inline_patterns = [] if oversized_first else ["ad_group.%"]
+    assert result["returned_count"] == len(expected_inline_patterns)
+    assert result["complete"] is False
+    assert [
+        part["pattern"] for part in result["pattern_results"]
+    ] == expected_inline_patterns
+    export_call = result["full_materialized_response_export"]["export_call"]
+    # Inspect the exact snapshot without performing the explicit file write.
+    rows = api._get_materialized_snapshot_rows(  # pylint: disable=protected-access
+        export_call["arguments"]["snapshot_token"]
+    )
+    assert len(rows) == 2
+    omitted = json.loads(rows[patterns.index(pattern)]["result"])
+    assert omitted["pattern"] == pattern
+    assert omitted["fields"] == [{"name": "campaign.id"}]
+    assert omitted["next_page_token"] == token
+    assert omitted["continuation"]["arguments"]["page_token"] == token
+    assert omitted["continuation"]["arguments"]["query"] == omitted["query"]
+
+
+def test_search_google_ads_fields_rejects_query_and_patterns_together():
+  with pytest.raises(ToolError, match="query or patterns, not both"):
+    docs.search_google_ads_fields(
+        "SELECT name WHERE name LIKE 'campaign.%'",
+        patterns=["campaign.%"],
+    )
+
+
+@pytest.mark.parametrize("pattern", ["", "campaign.%' OR name LIKE '%"])
+def test_search_google_ads_fields_rejects_invalid_pattern(pattern):
+  with pytest.raises(ToolError, match="patterns"):
+    docs.search_google_ads_fields(patterns=[pattern])
 
 
 @mock.patch("ads_mcp.tools.docs.format_value")

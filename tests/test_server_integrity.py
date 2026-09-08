@@ -805,6 +805,110 @@ class TestFastMcpConfiguration:
 
     asyncio.run(_run())
 
+  def test_change_event_resource_types_are_enumerated_in_tool_schema(self):
+    tools = {
+        tool.name: tool
+        for tool in asyncio.run(mcp_server._local_provider.list_tools())
+    }
+    properties = tools["list_change_events"].parameters["properties"]
+    resource_type_schema = properties["change_resource_types"]
+
+    array_schema = next(
+        schema
+        for schema in resource_type_schema["anyOf"]
+        if schema.get("type") == "array"
+    )
+    assert all(
+        schema.get("type") != "string"
+        for schema in resource_type_schema["anyOf"]
+    )
+    enum_values = set(array_schema["items"]["enum"])
+    assert enum_values == {
+        "AD",
+        "AD_GROUP",
+        "AD_GROUP_AD",
+        "AD_GROUP_ASSET",
+        "AD_GROUP_BID_MODIFIER",
+        "AD_GROUP_CRITERION",
+        "AD_GROUP_FEED",
+        "ASSET",
+        "ASSET_SET",
+        "ASSET_SET_ASSET",
+        "CAMPAIGN",
+        "CAMPAIGN_ASSET",
+        "CAMPAIGN_ASSET_SET",
+        "CAMPAIGN_BUDGET",
+        "CAMPAIGN_CRITERION",
+        "CAMPAIGN_FEED",
+        "CUSTOMER_ASSET",
+        "FEED",
+        "FEED_ITEM",
+        "UNKNOWN",
+        "UNSPECIFIED",
+    }
+    assert properties["lookback_days"]["anyOf"] == [
+        {"type": "integer"},
+        {"type": "null"},
+    ]
+
+  def test_change_event_schema_preserves_legacy_resource_type_inputs(self):
+    async def _run():
+      account_today = date(2026, 8, 13)
+      with (
+          mock.patch(
+              "ads_mcp.tools.changes._account_today",
+              return_value=(account_today, "Etc/UTC"),
+          ),
+          mock.patch(
+              "ads_mcp.tools.changes.run_gaql_query_page",
+              return_value={
+                  "rows": [],
+                  "next_page_token": None,
+                  "total_results_count": 0,
+              },
+          ) as mock_query,
+      ):
+        async with Client(mcp_server) as client:
+          results = []
+          for resource_types in (
+              ["campaign"],
+              "campaign",
+              '["campaign"]',
+          ):
+            results.append(
+                await client.call_tool(
+                    "list_change_events",
+                    {
+                        "customer_id": "123",
+                        "change_resource_types": resource_types,
+                        "lookback_days": 45,
+                    },
+                )
+            )
+
+      assert all(
+          result.structured_content["applied_lookback_days"] == 30
+          for result in results
+      )
+      assert all(
+          "change_resource_type IN (CAMPAIGN)" in call.kwargs["query"]
+          for call in mock_query.call_args_list
+      )
+
+    asyncio.run(_run())
+
+  def test_field_search_patterns_are_exposed_in_tool_schema(self):
+    tools = {
+        tool.name: tool
+        for tool in asyncio.run(mcp_server._local_provider.list_tools())
+    }
+    properties = tools["search_google_ads_fields"].parameters["properties"]
+
+    assert "patterns" in properties
+    assert "query" not in tools["search_google_ads_fields"].parameters.get(
+        "required", []
+    )
+
   def test_bm25_search_and_default_visibility_transforms_configured(self):
     transforms = mcp_server._transforms
 

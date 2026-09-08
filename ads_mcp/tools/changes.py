@@ -22,11 +22,17 @@ from datetime import date
 from datetime import datetime
 from datetime import timedelta
 import functools
+from typing import Annotated
 from typing import Any
+from typing import get_args
+from typing import Literal
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
 
 from fastmcp.exceptions import ToolError
+from pydantic import BeforeValidator
+from pydantic import StrictInt
+from pydantic.json_schema import SkipJsonSchema
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
@@ -57,6 +63,41 @@ _ACCOUNT_TODAY_OVERRIDE: ContextVar[tuple[date, str] | None] = ContextVar(
     "change_history_account_today",
     default=None,
 )
+
+
+def _uppercase_resource_type(value: Any) -> Any:
+  if isinstance(value, str):
+    return value.upper()
+  return value
+
+
+_ChangeEventResourceTypeLiteral = Literal[
+    "AD",
+    "AD_GROUP",
+    "AD_GROUP_AD",
+    "AD_GROUP_ASSET",
+    "AD_GROUP_BID_MODIFIER",
+    "AD_GROUP_CRITERION",
+    "AD_GROUP_FEED",
+    "ASSET",
+    "ASSET_SET",
+    "ASSET_SET_ASSET",
+    "CAMPAIGN",
+    "CAMPAIGN_ASSET",
+    "CAMPAIGN_ASSET_SET",
+    "CAMPAIGN_BUDGET",
+    "CAMPAIGN_CRITERION",
+    "CAMPAIGN_FEED",
+    "CUSTOMER_ASSET",
+    "FEED",
+    "FEED_ITEM",
+    "UNKNOWN",
+    "UNSPECIFIED",
+]
+ChangeEventResourceType = Annotated[
+    _ChangeEventResourceTypeLiteral,
+    BeforeValidator(_uppercase_resource_type),
+]
 
 
 class _ChangeHistoryQueryError(ToolError):
@@ -191,29 +232,7 @@ _CHANGE_STATUS_RESOURCE_TYPES = frozenset(
     }
 )
 _CHANGE_EVENT_RESOURCE_TYPES = frozenset(
-    {
-        "AD",
-        "AD_GROUP",
-        "AD_GROUP_AD",
-        "AD_GROUP_ASSET",
-        "AD_GROUP_BID_MODIFIER",
-        "AD_GROUP_CRITERION",
-        "AD_GROUP_FEED",
-        "ASSET",
-        "ASSET_SET",
-        "ASSET_SET_ASSET",
-        "CAMPAIGN",
-        "CAMPAIGN_ASSET",
-        "CAMPAIGN_ASSET_SET",
-        "CAMPAIGN_BUDGET",
-        "CAMPAIGN_CRITERION",
-        "CAMPAIGN_FEED",
-        "CUSTOMER_ASSET",
-        "FEED",
-        "FEED_ITEM",
-        "UNKNOWN",
-        "UNSPECIFIED",
-    }
+    get_args(_ChangeEventResourceTypeLiteral)
 )
 _CHANGE_STATUS_SOURCE = _HistorySourceSpec(
     name="change_status",
@@ -640,6 +659,86 @@ def _partition_resource_types(
           },
       },
   )
+
+
+def _normalize_change_event_resource_types(
+    resource_types: list[ChangeEventResourceType] | str | None,
+) -> list[str]:
+  """Normalizes and validates direct change_event resource filters."""
+  requested_values = normalize_list_arg(
+      resource_types,
+      "change_resource_types",
+  )
+  normalized_values = []
+  for value in requested_values:
+    if not isinstance(value, str):
+      raise ToolError("change_resource_types values must be strings.")
+    normalized_value = value.upper()
+    quote_enum_values([normalized_value])
+    if normalized_value not in normalized_values:
+      normalized_values.append(normalized_value)
+
+  unsupported_values = [
+      value
+      for value in normalized_values
+      if value not in _CHANGE_EVENT_RESOURCE_TYPES
+  ]
+  if unsupported_values:
+    raise ToolError(
+        "Unsupported change_resource_types: "
+        + ", ".join(unsupported_values)
+        + ". Use one of: "
+        + ", ".join(sorted(_CHANGE_EVENT_RESOURCE_TYPES))
+        + "."
+    )
+  return normalized_values
+
+
+def _applied_change_event_lookback_days(
+    lookback_days: int | None,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+) -> int | None:
+  """Validates and clamps a relative inclusive change_event window."""
+  if lookback_days is None:
+    return None
+  if isinstance(lookback_days, bool) or not isinstance(lookback_days, int):
+    raise ToolError("lookback_days must be an integer.")
+  if lookback_days <= 0:
+    raise ToolError("lookback_days must be greater than 0.")
+  if start_date is not None or end_date is not None:
+    raise ToolError(
+        "lookback_days cannot be combined with start_date or end_date."
+    )
+  return min(lookback_days, _CHANGE_EVENT_MAX_LOOKBACK_DAYS)
+
+
+def _validate_change_event_lookback_page_token(
+    applied_lookback_days: int | None,
+    page_token: str | None,
+    bound_start_date: str | None,
+    bound_end_date: str | None,
+) -> None:
+  """Ensures a repeated lookback matches its bound pagination snapshot."""
+  if applied_lookback_days is None or page_token is None:
+    return
+  if bound_start_date is None or bound_end_date is None:
+    raise ToolError(
+        "lookback_days with page_token requires a server-issued bound "
+        "page_token. Use the next_page_token returned by list_change_events."
+    )
+  bound_lookback_days = (
+      date.fromisoformat(bound_end_date) - date.fromisoformat(bound_start_date)
+  ).days + 1
+  if bound_lookback_days != applied_lookback_days:
+    raise ToolError(
+        f"page_token is bound to a {bound_lookback_days}-day window, which "
+        "does not match applied "
+        f"lookback_days={applied_lookback_days}. Reuse the original "
+        "lookback_days or the continuation arguments from the previous "
+        "response."
+    )
 
 
 def _available_date_window(
@@ -1967,12 +2066,15 @@ def list_change_statuses(
 def list_change_events(
     customer_id: str,
     resource_change_operations: list[str] | str | None = None,
-    change_resource_types: list[str] | str | None = None,
+    change_resource_types: (
+        list[ChangeEventResourceType] | SkipJsonSchema[str] | None
+    ) = None,
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
+    lookback_days: StrictInt | None = None,
 ) -> dict[str, Any]:
   """Lists granular changes from change_event.
 
@@ -1988,6 +2090,10 @@ def list_change_events(
       limit: Maximum number of rows to return.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
+      lookback_days: Optional inclusive relative window ending today in the
+          Google Ads customer's timezone. Values above 30 are clamped to 30.
+          Cannot be combined with explicit dates. Repeat it with the
+          server-issued page_token when requesting the next page.
 
   Returns:
       A dict containing change event rows plus completeness metadata.
@@ -1997,9 +2103,13 @@ def list_change_events(
       resource_change_operations,
       "resource_change_operations",
   )
-  change_resource_types = normalize_list_arg(
+  change_resource_types = _normalize_change_event_resource_types(
       change_resource_types,
-      "change_resource_types",
+  )
+  applied_lookback_days = _applied_change_event_lookback_days(
+      lookback_days,
+      start_date=start_date,
+      end_date=end_date,
   )
   delegated_plan = _DELEGATED_SOURCE_PLAN.get()
   if delegated_plan is not None:
@@ -2018,6 +2128,12 @@ def list_change_events(
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
       page_token
   )
+  _validate_change_event_lookback_page_token(
+      applied_lookback_days,
+      page_token,
+      bound_start_date,
+      bound_end_date,
+  )
   start_date, end_date = _resolve_bound_page_dates(
       start_date,
       end_date,
@@ -2031,7 +2147,9 @@ def list_change_events(
   request = _HistoryDateIntent(
       start_date=start_date,
       end_date=end_date,
-      default_days_back=7,
+      default_days_back=(
+          applied_lookback_days - 1 if applied_lookback_days is not None else 7
+      ),
   ).resolve(snapshot)
   plan = _source_page_plan(
       request,
@@ -2061,6 +2179,10 @@ def list_change_events(
         "change_event retention advanced during list_change_events; its window "
         f"was recomputed for {read.plan.request.snapshot.today.isoformat()}."
     )
+  if applied_lookback_days is not None:
+    result["requested_lookback_days"] = lookback_days
+    result["applied_lookback_days"] = applied_lookback_days
+    result["lookback_days_clamped"] = lookback_days != applied_lookback_days
   return result
 
 

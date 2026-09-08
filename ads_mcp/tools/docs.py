@@ -27,9 +27,12 @@ from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_read_tool
 from ads_mcp.tooling import local_write_tool
 from ads_mcp.tooling import session_control_tool
+from ads_mcp.tools._gaql import gaql_quote_string
+from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools.api import applied_inline_page_size
 from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
+from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import handle_google_ads_errors
@@ -47,6 +50,16 @@ _TEXT_FILE_CACHE: dict[str, tuple[float, str]] = {}
 _YAML_FILE_CACHE: dict[str, tuple[float, Any]] = {}
 _CACHED_FIELDS: dict[str, Any] = {}
 _CACHED_FIELDS_MTIME: float | None = None
+_FIELD_PATTERN_MAX_COUNT = 10
+_FIELD_PATTERN_RE = re.compile(r"[a-z0-9_.%]+")
+_FIELD_PATTERN_SELECT_FIELDS = (
+    "name",
+    "category",
+    "data_type",
+    "selectable",
+    "filterable",
+    "sortable",
+)
 _LIVE_RELEASE_NOTES_URL = (
     "https://developers.google.com/google-ads/api/docs/release-notes"
 )
@@ -202,6 +215,100 @@ def _search_google_ads_field_page(
       "total_results_count": total_count,
       "next_page_token": next_page_token,
   }
+
+
+def _field_search_page_response(
+    query: str,
+    limit: int,
+    page_token: str | None,
+) -> dict[str, Any]:
+  """Builds one bounded GoogleAdsField query response."""
+  applied_page_size = _applied_field_page_size(limit)
+  page = _search_google_ads_field_page(
+      query,
+      page_size=applied_page_size,
+      page_token=page_token,
+  )
+  fields = [format_value(field) for field in page["rows"]]
+  shared_delivery = bound_inline_sections({"fields": fields})
+  bounded_fields = shared_delivery.pop("sections")["fields"]
+  omitted_count = shared_delivery["omitted_counts"]["fields"]
+  result = build_paginated_list_response(
+      "fields",
+      bounded_fields,
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=(None if omitted_count else page["next_page_token"]),
+  )
+  result["source_page_returned_count"] = len(fields)
+  result["shared_inline_delivery"] = shared_delivery
+  result["bulk_export_call"] = {
+      "tool": "export_google_ads_fields_csv",
+      "arguments": {"query": query},
+  }
+  if omitted_count:
+    result["truncated"] = True
+    result["complete_inline"] = False
+    result["shared_inline_omitted_count"] = omitted_count
+    result["continuation_unavailable"] = (
+        "The inline byte budget omitted rows from Google's current page, so "
+        "its later-page token would skip data. Use bulk_export_call for every "
+        "matching field and requested metadata column."
+    )
+  return result
+
+
+def _normalize_field_patterns(
+    patterns: list[str] | str,
+) -> list[str]:
+  """Normalizes safe GoogleAdsField name LIKE patterns."""
+  raw_patterns = normalize_list_arg(patterns, "patterns")
+  if not raw_patterns:
+    raise ToolError("patterns must not be empty.")
+  if len(raw_patterns) > _FIELD_PATTERN_MAX_COUNT:
+    raise ToolError(
+        f"patterns supports at most {_FIELD_PATTERN_MAX_COUNT} values."
+    )
+
+  normalized_patterns = []
+  for pattern in raw_patterns:
+    if not isinstance(pattern, str):
+      raise ToolError("patterns values must be strings.")
+    normalized_pattern = pattern.strip().lower()
+    if not normalized_pattern or not _FIELD_PATTERN_RE.fullmatch(
+        normalized_pattern
+    ):
+      raise ToolError(
+          "patterns values may contain lowercase letters, digits, dots, "
+          "underscores, and % wildcards only."
+      )
+    if normalized_pattern not in normalized_patterns:
+      normalized_patterns.append(normalized_pattern)
+  return normalized_patterns
+
+
+def _field_pattern_query(pattern: str) -> str:
+  return (
+      "SELECT "
+      + ", ".join(_FIELD_PATTERN_SELECT_FIELDS)
+      + " WHERE name LIKE "
+      + gaql_quote_string(pattern)
+  )
+
+
+def _pattern_page_sizes(limit: int, pattern_count: int) -> list[int]:
+  """Allocates one shared inline row budget across pattern queries."""
+  applied_limit = _applied_field_page_size(limit)
+  if pattern_count > applied_limit:
+    raise ToolError(
+        "limit must be at least the number of patterns so every pattern can "
+        "return one field."
+    )
+  base_size, remainder = divmod(applied_limit, pattern_count)
+  return [
+      base_size + (1 if index < remainder else 0)
+      for index in range(pattern_count)
+  ]
 
 
 def _topic_matches(topic: str, *texts: str) -> bool:
@@ -475,60 +582,104 @@ async def lock_mutation_tools(
 
 @ads_field_tool
 def search_google_ads_fields(
-    query: str,
+    query: str | None = None,
     limit: StrictInt = 50,
     page_token: str | None = None,
+    patterns: list[str] | str | None = None,
 ) -> dict[str, Any]:
-  """Searches live GoogleAdsField metadata to help build GAQL queries.
+  """Searches live GoogleAdsField metadata by query or name patterns.
 
   Results use Google-provided pagination so all matching live metadata remains
-  available without placing the entire result set in one model response.
+  available without placing the entire result set in one model response. In
+  pattern mode, each LIKE pattern runs as a separate Google query because the
+  GoogleAdsField query language does not support OR.
 
   Args:
-      query: A GoogleAdsFieldService query, for example:
+      query: Optional GoogleAdsFieldService query, for example:
           SELECT name, category, selectable WHERE name LIKE 'campaign.%'
       limit: Requested inline page size. Values above the server's token-safe
-          presentation cap are clamped; later pages remain available.
+          presentation cap are clamped. In pattern mode, this row budget is
+          divided across patterns.
       page_token: Google continuation token from the previous response.
+          Supported only with query mode; pattern results provide independent
+          continuation calls.
+      patterns: Optional field-name LIKE patterns such as
+          ["campaign.keyword%", "%search_term_matching%"]. Each pattern is
+          queried separately and may use % wildcards.
 
   Returns:
-      Current-page live field metadata plus counts and continuation metadata.
+      Query-mode field metadata or per-pattern results with independent counts
+      and continuation metadata.
   """
-  if not query.strip():
-    raise ToolError("query must not be empty.")
-  applied_page_size = _applied_field_page_size(limit)
-  page = _search_google_ads_field_page(
-      query,
-      page_size=applied_page_size,
-      page_token=page_token,
+  if query is not None and not isinstance(query, str):
+    raise ToolError("query must be a string.")
+  normalized_query = query.strip() if query is not None else ""
+  normalized_patterns = (
+      _normalize_field_patterns(patterns) if patterns is not None else []
   )
-  fields = [format_value(field) for field in page["rows"]]
-  shared_delivery = bound_inline_sections({"fields": fields})
-  bounded_fields = shared_delivery.pop("sections")["fields"]
-  omitted_count = shared_delivery["omitted_counts"]["fields"]
-  result = build_paginated_list_response(
-      "fields",
-      bounded_fields,
-      total_count=page["total_results_count"],
-      page_size=limit,
-      next_page_token=(None if omitted_count else page["next_page_token"]),
-  )
-  result["source_page_returned_count"] = len(fields)
-  result["shared_inline_delivery"] = shared_delivery
-  result["bulk_export_call"] = {
-      "tool": "export_google_ads_fields_csv",
-      "arguments": {"query": query},
-  }
-  if omitted_count:
-    result["truncated"] = True
-    result["complete_inline"] = False
-    result["shared_inline_omitted_count"] = omitted_count
-    result["continuation_unavailable"] = (
-        "The inline byte budget omitted rows from Google's current page, so "
-        "its later-page token would skip data. Use bulk_export_call for every "
-        "matching field and requested metadata column."
+  if normalized_query and normalized_patterns:
+    raise ToolError("Provide query or patterns, not both.")
+  if normalized_query:
+    return _field_search_page_response(
+        normalized_query,
+        limit,
+        page_token,
     )
-  return result
+  if not normalized_patterns:
+    raise ToolError("Provide a non-empty query or patterns.")
+  if page_token is not None:
+    raise ToolError(
+        "page_token is supported only with query mode. Use each pattern "
+        "result's continuation call."
+    )
+
+  page_sizes = _pattern_page_sizes(limit, len(normalized_patterns))
+  pattern_results = []
+  for pattern, page_size in zip(normalized_patterns, page_sizes, strict=True):
+    pattern_query = _field_pattern_query(pattern)
+    pattern_result = _field_search_page_response(
+        pattern_query,
+        page_size,
+        None,
+    )
+    pattern_result["pattern"] = pattern
+    pattern_result["query"] = pattern_query
+    if pattern_result["next_page_token"]:
+      pattern_result["continuation"] = {
+          "tool": "search_google_ads_fields",
+          "arguments": {
+              "query": pattern_query,
+              "limit": page_size,
+              "page_token": pattern_result["next_page_token"],
+          },
+      }
+    pattern_results.append(pattern_result)
+
+  response = {
+      "search_mode": "patterns",
+      "pattern_count": len(pattern_results),
+      "returned_count": sum(
+          result["returned_count"] for result in pattern_results
+      ),
+      "total_count": sum(result["total_count"] for result in pattern_results),
+      "counts_may_overlap": True,
+      "complete": all(
+          result["complete_inline"] and not result["has_more"]
+          for result in pattern_results
+      ),
+      "requested_limit": limit,
+      "applied_limit": sum(page_sizes),
+      "limit_clamped": sum(page_sizes) != limit,
+      "pattern_results": pattern_results,
+  }
+  # Keep each page and its cursor together so bounding cannot skip rows.
+  response = finalize_bounded_response(response, ("pattern_results",))
+  if response.get("truncated"):
+    response["returned_count"] = sum(
+        result["returned_count"] for result in response["pattern_results"]
+    )
+    response["complete"] = False
+  return response
 
 
 @ads_field_export_tool

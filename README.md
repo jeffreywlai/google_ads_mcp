@@ -66,7 +66,7 @@ accessible account available without an unbounded model response.
 | `get_resource_metadata` | Selectable, filterable, and sortable fields for a GAQL resource |
 | `get_reporting_view_doc` | Reporting view names or detailed view metadata |
 | `get_reporting_fields_doc` | Detailed docs for specific reporting query fields |
-| `search_google_ads_fields` | Live field metadata search for GAQL query building |
+| `search_google_ads_fields` | Live field metadata search by raw query or multiple safe name patterns |
 | `export_google_ads_fields_csv` | Export every matching live field-metadata row and requested column |
 
 ### 🔒 Session Controls
@@ -111,7 +111,7 @@ accessible account available without an unbounded model response.
 | Tool | Description |
 |------|-------------|
 | `list_change_statuses` | Changed resources and last change timestamps |
-| `list_change_events` | Granular change events with field-level detail |
+| `list_change_events` | Granular change events with typed resource filters and an optional auto-clamped relative lookback |
 | `export_change_history_csv` | Export maximum retrievable change data: daily status slices across 90 days plus a 30-day granular event overlay |
 | `get_change_history_extended` | Preview explicit dates, or 90-day latest-status data plus the 30-day event overlay when dates are omitted |
 
