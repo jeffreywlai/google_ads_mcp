@@ -13,6 +13,7 @@ import pytest
 
 from ads_mcp.tools import _gaql
 from ads_mcp.tools import api
+from ads_mcp.tools import changes
 from ads_mcp.coordinator import mcp_server
 
 
@@ -92,6 +93,62 @@ def test_unknown_future_field_passes_but_known_invalid_fields_do_not():
         "SELECT segments.new_versus_returning_customers, "
         "metrics.cost_micros FROM campaign"
     )
+
+
+@pytest.mark.parametrize("tool_name", ["execute_gaql", "export_gaql_csv"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT metrics.unique_users, segments.future_valid_field "
+        "FROM campaign",
+        "SELECT metrics.future_valid_field, segments.device FROM campaign",
+        "SELECT metrics.future_valid_field, segments.future_valid_field "
+        "FROM campaign",
+        "SELECT metrics.unique_users FROM campaign "
+        "WHERE segments.future_valid_field = 'VALUE' "
+        "ORDER BY segments.future_valid_field",
+    ],
+)
+def test_unknown_pairwise_fields_reach_service_unchanged(
+    tool_name, query, tmp_path
+):
+  kwargs = (
+      {"output_path": str(tmp_path / "future.csv")}
+      if tool_name == "export_gaql_csv"
+      else {}
+  )
+  with mock.patch.object(api, "get_ads_client") as client:
+    service = client.return_value.get_service.return_value
+    service.search_stream.return_value = []
+    getattr(api, tool_name)(query, "123", **kwargs)
+  service.search_stream.assert_called_once_with(
+      query=query + " PARAMETERS omit_unselected_resource_names=true",
+      customer_id="123",
+  )
+
+
+@pytest.mark.parametrize(
+    "selected_fields,error",
+    [
+        (
+            "metrics.cost_micros, segments.new_versus_returning_customers",
+            "not selectable",
+        ),
+        ("metrics.unique_users, segments.conversion_action", "not selectable"),
+        ("campaign.url_expansion_opt_out", "unavailable in v24"),
+    ],
+)
+def test_unknown_fields_do_not_bypass_known_invalid_checks(
+    selected_fields, error
+):
+  query = (
+      f"SELECT {selected_fields}, metrics.future_valid_field, "
+      "segments.future_valid_field FROM campaign"
+  )
+  with mock.patch.object(api, "get_ads_client") as client:
+    with pytest.raises(ToolError, match=error):
+      api.execute_gaql(query, "123")
+  client.assert_not_called()
 
 
 def test_exact_known_field_suggests_verified_from_resource():
@@ -207,8 +264,14 @@ def test_query_safety_tools_expose_retention_enum_and_preserve_annotations():
   async def check():
     async with Client(mcp_server) as client:
       tools = {tool.name: tool for tool in await client.list_tools()}
-      for name in ("execute_gaql", "export_gaql_csv", "list_change_events"):
-        policy = tools[name].inputSchema["properties"]["retention_policy"]
+      for function in (
+          api.execute_gaql,
+          api.export_gaql_csv,
+          changes.list_change_events,
+      ):
+        policy = tools[function.__name__].inputSchema["properties"][
+            "retention_policy"
+        ]
         assert policy["enum"] == ["error", "clamp"]
         assert policy["default"] == "error"
       assert tools["execute_gaql"].annotations.readOnlyHint is True

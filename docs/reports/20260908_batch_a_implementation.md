@@ -176,3 +176,45 @@ git diff --check
 
 Live tests remain opt-in and were not run. This follow-up does not authorize
 or perform a merge, API upgrade, or ad-account mutation.
+
+### Follow-up: unknown fields and pairwise validation
+
+Review comment `3962096208` was confirmed: a future segment with unique-user
+metrics was rejected by the local allowlist after passing the unknown-field
+check. The generated compatibility graph likewise rejected a future metric
+paired with a known segment. Pairwise validation now receives only locally
+known, FROM-compatible fields; per-field rejection of known-incompatible or
+removed fields still runs first. Unknown fields stay in the actual query for
+Google to validate. They do not suppress validation of other known pairs.
+
+New service-boundary cases cover both execution and CSV export, unknown
+metrics/segments, and WHERE/ORDER references. Guard cases preserve known
+invalid pairs and removed-field rejection. The isolated schema test now
+imports all three tools it checks instead of relying on another test module
+to register `list_change_events`.
+
+```text
+.venv/bin/pytest -q tests/tools/test_batch_a_gaql.py -k 'unknown_pairwise or unknown_fields_do_not' --tb=short
+[before fix] 6 failed, 5 passed, 20 deselected in 4.52s
+
+.venv/bin/pytest -q tests/tools/test_batch_a_gaql.py tests/tools/test_gaql.py tests/tools/test_api.py
+204 passed in 4.70s
+
+uv sync --locked
+Resolved 113 packages in 4ms
+Audited 108 packages in 14ms
+
+uv run pyink --check .
+64 files would be left unchanged.
+
+uv run pylint ads_mcp tests --fail-under=9.5
+Your code has been rated at 9.84/10
+
+uv run pylint ads_mcp/tools/_gaql.py tests/tools/test_batch_a_gaql.py --fail-under=10
+Your code has been rated at 10.00/10
+
+uv run pytest -q
+1808 passed, 17 skipped in 11.95s
+```
+
+The 17 opt-in live tests remain skipped; no live account validation is claimed.

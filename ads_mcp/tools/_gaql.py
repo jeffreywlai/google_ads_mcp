@@ -965,7 +965,11 @@ def validate_gaql_field_compatibility(query: str) -> None:
         + _field_recovery_hint(field_name, compatible_fields)
         + _compatible_fields_text(resource_name, field_sets)
     )
-  _validate_pairwise_field_compatibility(resource_name, referenced_fields)
+  # Pairwise metadata cannot prove unknown future fields incompatible either.
+  _validate_pairwise_field_compatibility(
+      resource_name,
+      [field for field in referenced_fields if field in compatible_fields],
+  )
 
 
 def _validate_pairwise_field_compatibility(
