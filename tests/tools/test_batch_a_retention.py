@@ -9,6 +9,7 @@ import pytest
 
 from ads_mcp.tools import api
 from ads_mcp.tools import changes
+from ads_mcp.tools import _gaql
 from ads_mcp.tools import _history
 
 
@@ -80,6 +81,61 @@ def test_clamp_preserves_last_30_days_exclusion_of_today(tool_name, tmp_path):
   )
   assert result["retention"]["clamped"] is True
   assert result["warnings"]
+
+
+@pytest.mark.parametrize("tool_name", ["execute_gaql", "export_gaql_csv"])
+@pytest.mark.parametrize("separator", ["-", " "])
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "LAST_7_DAYS",
+        "LAST_30_DAYS",
+        "LAST_90_DAYS",
+        "LAST_12_MONTHS",
+        "LAST_QUARTER",
+    ],
+)
+def test_history_range_aliases_match_canonical_account_local_bounds(
+    tool_name, separator, literal, tmp_path
+):
+  alias = literal.replace("_", separator).lower()
+  extra_filter = (
+      " AND change_event.user_email = "
+      "'change_event.change_date_time DURING LAST-7-DAYS'"
+  )
+  query = history_query(f"{FIELD} DURING {alias}" + extra_filter)
+  canonical_query = history_query(f"{FIELD} DURING {literal}" + extra_filter)
+  expected_query, expected_metadata = _history.prepare_change_event_query(
+      canonical_query, TODAY, "America/New_York", "clamp"
+  )
+  kwargs = (
+      {"output_path": str(tmp_path / "aliases.csv")}
+      if tool_name == "export_gaql_csv"
+      else {}
+  )
+  with mock.patch.object(api, "run_gaql_query", return_value=[]) as run:
+    result = getattr(api, tool_name)(
+        query, "123", retention_policy="clamp", **kwargs
+    )
+  assert result["retention"] == expected_metadata["retention"]
+  assert result["account_today"] == TODAY.isoformat()
+  assert result["original_query"] == query
+  if expected_query is None:
+    run.assert_not_called()
+    assert result["executed_query"] is None
+  else:
+    prepared = _gaql.preprocess_gaql_query(expected_query)
+    assert result["executed_query"] == prepared
+    run.assert_called_once_with(
+        query=prepared, customer_id="123", login_customer_id=None
+    )
+
+
+def test_out_of_window_history_alias_still_requires_explicit_clamp():
+  with mock.patch.object(api, "run_gaql_query") as run:
+    with pytest.raises(ToolError, match="retention_policy"):
+      api.execute_gaql(history_query(f"{FIELD} DURING LAST 30 DAYS"), "123")
+  run.assert_not_called()
 
 
 @pytest.mark.parametrize("tool_name", ["execute_gaql", "export_gaql_csv"])

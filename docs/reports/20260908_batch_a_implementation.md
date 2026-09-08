@@ -129,3 +129,50 @@ Your code has been rated at 10.00/10
 - Batches B onward remain separate work. Batch A does not complete the entire
   report or add conversion-goal resolution, field diffs, comparison reports,
   location topology, or creative/PMax mutations.
+
+## PR #18 review follow-up — 2026-09-08
+
+- Review comment `3961494777`: confirmed that accepted date-range aliases
+  such as `LAST-7-DAYS` and `LAST 7 DAYS` failed in the new history parser.
+  Reused the existing GAQL date-clause grammar and literal normalization,
+  while continuing to resolve bounds against the captured account-local
+  date. No host-time date rewriting was introduced. Regression coverage
+  includes both execution/export, extended ranges, unavailable intersections,
+  quoted query-like text, and the default error policy.
+- Review comment `3961485610`: the claimed loss of preprocessing was not
+  reproduced at the service boundary. Both tools reach
+  `_iter_gaql_query_attempt`, which preprocesses the query immediately before
+  `GoogleAdsService.search_stream`. Two new service-boundary tests pass on the
+  reviewed implementation and verify date rewrites, enum normalization, and
+  the PARAMETERS addition without mocking `run_gaql_query`. No unnecessary
+  production change was made for this finding.
+
+The new review cases initially produced `21 failed, 2 passed, 68 deselected`;
+the two passing cases are the service-boundary checks above. After the fix:
+
+```text
+.venv/bin/pytest -q tests/tools/test_batch_a_gaql.py tests/tools/test_batch_a_retention.py
+91 passed in 14.88s
+
+uv sync --locked
+Resolved 113 packages in 28ms
+Audited 108 packages in 265ms
+
+uv run pyink --check .
+64 files would be left unchanged.
+
+uv run pylint ads_mcp tests --fail-under=9.5
+Your code has been rated at 9.84/10
+
+uv run pylint ads_mcp/tools/_history.py tests/tools/test_batch_a_gaql.py tests/tools/test_batch_a_retention.py --fail-under=10
+Your code has been rated at 10.00/10
+
+uv run pytest -q
+1797 passed, 17 skipped in 30.63s
+
+git diff --check
+[no output; exit 0]
+```
+
+Live tests remain opt-in and were not run. This follow-up does not authorize
+or perform a merge, API upgrade, or ad-account mutation.

@@ -26,7 +26,6 @@ _BETWEEN = re.compile(
     rf"{_FIELD_PATTERN}\s+BETWEEN\s+({_QUOTED_DATE})\s+AND\s+({_QUOTED_DATE})",
     re.I,
 )
-_DURING = re.compile(rf"{_FIELD_PATTERN}\s+DURING\s+([A-Z0-9_]+)", re.I)
 _TIMESTAMP = re.compile(
     r"(?:\d{4}-\d{2}-\d{2}|\d{8})(?: \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)?"
 )
@@ -246,7 +245,7 @@ def _parse_interval(
     indices.append(index)
     comparison = _COMPARISON.fullmatch(part)
     between = _BETWEEN.fullmatch(part)
-    during = _DURING.fullmatch(part)
+    during = _gaql._DATE_FIELD_PATTERN.fullmatch(part)  # pylint: disable=protected-access
     if comparison:
       operator, value = comparison.groups()
       bound = (_timestamp(value), "=" in operator)
@@ -261,7 +260,9 @@ def _parse_interval(
           _timestamp(between[1]), _timestamp(between[2]), True, True
       )
     elif during and complete is None:
-      bounds = _gaql._literal_date_bounds(during[1].upper(), today)  # pylint: disable=protected-access
+      # Share accepted spellings without resolving dates in the host timezone.
+      literal = _gaql.normalize_date_range_literal(during["literal"])
+      bounds = _gaql._literal_date_bounds(literal, today)  # pylint: disable=protected-access
       if bounds is None:
         raise _unsupported_interval()
       complete = date_interval(bounds[0].isoformat(), bounds[1].isoformat())

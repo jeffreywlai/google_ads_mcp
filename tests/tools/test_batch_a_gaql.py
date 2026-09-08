@@ -3,6 +3,7 @@
 import csv
 import json
 import asyncio
+from datetime import date
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
@@ -142,6 +143,44 @@ def test_execute_and_export_report_identical_required_select_adjustments(
   assert result["query_adjustments"][0]["field"] == "campaign.id"
   assert "campaign.id" in result["executed_query"].split("FROM")[0]
   assert result["original_query"] == SHOPPING_QUERY
+
+
+@pytest.mark.parametrize("tool_name", ["execute_gaql", "export_gaql_csv"])
+def test_metadata_free_query_is_preprocessed_at_service_boundary(
+    tool_name, tmp_path
+):
+  query = (
+      "SELECT campaign.id FROM campaign WHERE campaign.status = 'enabled' "
+      "AND segments.date DURING LAST_90_DAYS"
+  )
+  kwargs = (
+      {"output_path": str(tmp_path / "normalized.csv")}
+      if tool_name == "export_gaql_csv"
+      else {}
+  )
+  with (
+      mock.patch.object(api, "get_ads_client") as client,
+      mock.patch.object(
+          _gaql,
+          "_literal_date_bounds",
+          return_value=(date(2026, 5, 15), date(2026, 8, 12)),
+      ),
+  ):
+    service = client.return_value.get_service.return_value
+    service.search_stream.return_value = []
+    result = getattr(api, tool_name)(
+        query, "123", login_customer_id="456", **kwargs
+    )
+  assert "query_adjustments" not in result
+  client.assert_called_once_with("456")
+  service.search_stream.assert_called_once_with(
+      query=(
+          "SELECT campaign.id FROM campaign WHERE campaign.status = ENABLED "
+          "AND segments.date BETWEEN '2026-05-15' AND '2026-08-12' "
+          "PARAMETERS omit_unselected_resource_names=true"
+      ),
+      customer_id="123",
+  )
 
 
 def test_adjustment_metadata_is_bounded_and_exactly_exportable(tmp_path):
