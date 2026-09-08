@@ -32,6 +32,7 @@ from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools.api import applied_inline_page_size
 from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
+from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import handle_google_ads_errors
@@ -654,7 +655,7 @@ def search_google_ads_fields(
       }
     pattern_results.append(pattern_result)
 
-  return {
+  response = {
       "search_mode": "patterns",
       "pattern_count": len(pattern_results),
       "returned_count": sum(
@@ -671,6 +672,14 @@ def search_google_ads_fields(
       "limit_clamped": sum(page_sizes) != limit,
       "pattern_results": pattern_results,
   }
+  # Keep each page and its cursor together so bounding cannot skip rows.
+  response = finalize_bounded_response(response, ("pattern_results",))
+  if response.get("truncated"):
+    response["returned_count"] = sum(
+        result["returned_count"] for result in response["pattern_results"]
+    )
+    response["complete"] = False
+  return response
 
 
 @ads_field_export_tool
