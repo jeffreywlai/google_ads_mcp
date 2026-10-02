@@ -392,6 +392,15 @@ uv run -m ads_mcp.server
 Use `run-mcp-server-http` to launch the streamable-HTTP server. The
 `run-mcp-server` script is reserved for stdio clients.
 
+The MCP runtime requires version 1.30 or later within the 1.x series.
+Authenticated HTTP sessions are bound to the identity that created them.
+Idle HTTP sessions expire after 30 minutes; an open GET stream keeps a session
+active. After expiry, the next request returns 404 and the client must initialize
+a new session.
+The server accepts at most 10,000 simultaneous sessions and returns 503 for
+new sessions while that limit is reached. HTTP request bodies are limited to
+4 MiB; larger requests return 413 and should be split into smaller batches.
+
 When running the HTTP server with Google OAuth enabled, these optional env vars
 control the new hardening and resumability behavior:
 
