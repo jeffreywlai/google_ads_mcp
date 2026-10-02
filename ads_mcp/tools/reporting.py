@@ -15,6 +15,8 @@
 """Curated reporting tools for high-frequency Google Ads read workflows."""
 
 from collections import Counter
+from datetime import date
+from datetime import timedelta
 import re
 from typing import Any
 
@@ -36,11 +38,15 @@ from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools._periods import aggregate_periods
 from ads_mcp.tools._periods import normalize_periods
 from ads_mcp.tools._periods import PERFORMANCE_FIELDS
+from ads_mcp.tools._periods import periods_around_changes
 from ads_mcp.tools.api import applied_inline_page_size
 from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import finalize_bounded_response
+from ads_mcp.tools.api import get_account_calendar
 from ads_mcp.tools.api import INLINE_PAGE_BYTE_LIMIT
+from ads_mcp.tools.api import INLINE_RESPONSE_BYTE_LIMIT
+from ads_mcp.tools.api import is_inline_omission
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
 from ads_mcp.tools.api import run_gaql_query_snapshot
@@ -710,7 +716,11 @@ def list_geographic_performance(
       login_customer_id: Optional manager account ID.
 
   Returns:
-      A dict containing geographic performance rows.
+      Geographic rows and a country-ID-to-name map for this page. Any bounded
+      page rows/names remain in the materialized export; continuation advances
+      by the original source page, and source exports contain country IDs.
+      USER_LOCATION describes physical location; GEOGRAPHIC may include
+      location of interest. Country reporting can differ from campaign totals.
   """
   validate_limit(limit)
   normalized_view = _normalize_choice(
@@ -779,7 +789,49 @@ def list_geographic_performance(
       snapshot_token=page.get("snapshot_token"),
   )
   result["location_view"] = normalized_view
-  return result
+  result["resolved_countries"] = _resolve_country_ids(
+      customer_id,
+      {
+          str(row[f"{from_resource}.country_criterion_id"])
+          for row in page["rows"]
+          if row.get(f"{from_resource}.country_criterion_id") is not None
+      },
+      login_customer_id,
+  )
+  result["country_names_scope"] = "country IDs on this source page"
+  bounded = finalize_bounded_response(
+      result,
+      ("resolved_countries",),
+      max_bytes=INLINE_RESPONSE_BYTE_LIMIT - 1024,
+  )
+  if not isinstance(bounded["geographic_performance"], list):
+    bounded = finalize_bounded_response(
+        result,
+        ("geographic_performance", "resolved_countries"),
+        max_bytes=INLINE_RESPONSE_BYTE_LIMIT - 1024,
+    )
+  if "full_materialized_response_export" in bounded:
+    kept = bounded["geographic_performance"]
+    omitted = (
+        len(page["rows"])
+        - len(kept)
+        + sum(is_inline_omission(row) for row in kept)
+    )
+    bounded["returned_count"] = len(kept) - sum(
+        is_inline_omission(row) for row in kept
+    )
+    bounded["represented_row_count"] = len(page["rows"])
+    bounded["inline_omitted_row_count"] = omitted
+    bounded["complete_inline"] = (
+        omitted == 0 and bounded["total_count"] == bounded["returned_count"]
+    )
+    if omitted:
+      bounded["inline_omission_note"] = (
+          "Continuation advances past the complete original source page. "
+          "Export full_materialized_response_export for omitted rows and "
+          "names on this page, or bulk_export_call for every raw source row."
+      )
+  return bounded
 
 
 @reporting_tool
@@ -4329,6 +4381,118 @@ def get_campaign_settings(
   )
 
 
+def _resolve_country_ids(
+    customer_id: str,
+    country_ids: set[str],
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Resolves retained IDs without replacing unknowns with invented names."""
+  resolved = dict.fromkeys(sorted(country_ids))
+  positive_ids = [
+      country_id
+      for country_id in resolved
+      if country_id.isdigit() and int(country_id) > 0
+  ]
+  if not positive_ids:
+    return resolved
+  rows = _settings_rows(
+      customer_id,
+      "geo_target_constant",
+      [
+          "geo_target_constant.id",
+          "geo_target_constant.resource_name",
+          "geo_target_constant.name",
+          "geo_target_constant.canonical_name",
+          "geo_target_constant.country_code",
+          "geo_target_constant.target_type",
+      ],
+      "geo_target_constant.id IN ("
+      + quote_int_values(positive_ids, "country_ids")
+      + ")",
+      login_customer_id,
+  )
+  for row in rows:
+    country_id = str(row.get("geo_target_constant.id"))
+    if country_id in resolved:
+      resolved[country_id] = row
+  return resolved
+
+
+def _comparison_segment(
+    segment_by: str | None,
+) -> tuple[str | None, str | None]:
+  normalized = (
+      _normalize_choice(segment_by, "segment_by", {"DEVICE", "COUNTRY"})
+      if segment_by is not None
+      else None
+  )
+  field = {
+      "DEVICE": "segments.device",
+      "COUNTRY": "user_location_view.country_criterion_id",
+  }.get(normalized)
+  return normalized, field
+
+
+def _daily_performance_source(
+    customer_id: str,
+    campaign_id: str,
+    start_date: str,
+    end_date: str,
+    segment_field: str | None,
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Captures all daily rows before any response presentation limit."""
+  select_fields = ["campaign.id", "segments.date"]
+  from_resource = "campaign"
+  if segment_field:
+    select_fields.append(segment_field)
+    if segment_field == "user_location_view.country_criterion_id":
+      from_resource = "user_location_view"
+      select_fields.append("user_location_view.targeting_location")
+  select_fields.extend(PERFORMANCE_FIELDS.values())
+  date_condition = segments_date_condition(
+      {"start_date": start_date, "end_date": end_date}
+  )
+  fields_csv = ", ".join(select_fields)
+  query = (
+      f"SELECT {fields_csv} FROM {from_resource} "
+      f"WHERE campaign.id = {campaign_id} AND {date_condition} "
+      "ORDER BY segments.date ASC"
+  )
+  source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
+  for row in source["rows"]:
+    if str(row.get("campaign.id")) != campaign_id:
+      raise ToolError("Performance source returned a different campaign.")
+  return source
+
+
+def _add_country_names(
+    result: dict[str, Any],
+    customer_id: str,
+    login_customer_id: str | None,
+) -> None:
+  """Enriches the complete aggregated result, before bounding its preview."""
+  if result["segment_by"] != "COUNTRY":
+    return
+  ids = {
+      segment["segment"]
+      for period in result["periods"]
+      for segment in period.get("segments", [])
+  }
+  countries = _resolve_country_ids(customer_id, ids, login_customer_id)
+  for period in result["periods"]:
+    for segment in period.get("segments", []):
+      segment["country_criterion_id"] = segment["segment"]
+      segment["country"] = countries.get(segment["segment"])
+  result["performance_source"] = "user_location_view"
+  result["country_coverage_note"] = (
+      "Physical user country; both targeting-location buckets are summed. "
+      "Unresolved/unknown IDs remain visible. Totals cover all captured "
+      "user-location rows; geographic reporting can differ from campaign "
+      "summary totals and may not identify every user's country."
+  )
+
+
 @reporting_tool
 def compare_performance_periods(
     customer_id: str,
@@ -4351,7 +4515,9 @@ def compare_performance_periods(
       periods: Nonoverlapping objects with start_date, end_date, and optional
           unique label. Dates are inclusive YYYY-MM-DD in the account time zone.
           A JSON array string is also accepted. Gaps are excluded from totals.
-      segment_by: Optional DEVICE breakdown.
+      segment_by: Optional DEVICE or physical-user COUNTRY breakdown. COUNTRY
+          totals describe the user-location source, with resolved API names;
+          geographic reporting can differ from campaign summary totals.
       login_customer_id: Optional manager account ID.
 
   Returns:
@@ -4361,12 +4527,7 @@ def compare_performance_periods(
   customer_id = _report_customer_id(customer_id)
   campaign_id = _positive_report_id(campaign_id, "campaign_id")
   normalized_periods = normalize_periods(periods)
-  normalized_segment = (
-      _normalize_choice(segment_by, "segment_by", {"DEVICE"})
-      if segment_by is not None
-      else None
-  )
-  segment_field = "segments.device" if normalized_segment else None
+  normalized_segment, segment_field = _comparison_segment(segment_by)
   account_rows = _settings_rows(
       customer_id,
       "customer",
@@ -4385,27 +4546,14 @@ def compare_performance_periods(
   )
   if not campaign_rows:
     raise ToolError(f"No campaign was returned for {campaign_id}.")
-  date_condition = segments_date_condition(
-      {
-          "start_date": normalized_periods[0]["start_date"],
-          "end_date": normalized_periods[-1]["end_date"],
-      }
+  source = _daily_performance_source(
+      customer_id,
+      campaign_id,
+      normalized_periods[0]["start_date"],
+      normalized_periods[-1]["end_date"],
+      segment_field,
+      login_customer_id,
   )
-  select_fields = ["campaign.id", "segments.date"]
-  if segment_field:
-    select_fields.append(segment_field)
-  select_fields.extend(PERFORMANCE_FIELDS.values())
-  fields_csv = ", ".join(select_fields)
-  query = (
-      f"SELECT {fields_csv} FROM campaign "
-      f"WHERE campaign.id = {campaign_id} "
-      f"AND {date_condition} "
-      "ORDER BY segments.date ASC"
-  )
-  source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
-  for row in source["rows"]:
-    if str(row.get("campaign.id")) != campaign_id:
-      raise ToolError("Performance source returned a different campaign.")
   result = {
       "campaign_id": campaign_id,
       "campaign": campaign_rows[0],
@@ -4426,6 +4574,313 @@ def compare_performance_periods(
           "mid-day settings change; goal-switch dates are not inferred."
       ),
   }
+  _add_country_names(result, customer_id, login_customer_id)
   return finalize_bounded_response(
       result, ("periods",), max_bytes=INLINE_PAGE_BYTE_LIMIT
+  )
+
+
+_BOUNDARY_EVENT_FIELDS = (
+    "change_event.resource_name",
+    "change_event.change_date_time",
+    "change_event.change_resource_name",
+    "change_event.change_resource_type",
+    "change_event.campaign",
+    "change_event.resource_change_operation",
+    "change_event.changed_fields",
+    "change_event.old_resource",
+    "change_event.new_resource",
+)
+_CAMPAIGN_BOUNDARY_ROOTS = {
+    "campaign_budget",
+    "bidding_strategy",
+    "bidding_strategy_type",
+    "target_roas",
+    "target_cpa",
+    "maximize_conversion_value",
+    "maximize_conversions",
+    "manual_cpc",
+    "manual_cpm",
+    "manual_cpv",
+    "target_cpm",
+    "target_impression_share",
+    "target_spend",
+    "percent_cpc",
+    "commission",
+}
+_BUDGET_BOUNDARY_ROOTS = {
+    "amount_micros",
+    "total_amount_micros",
+    "delivery_method",
+}
+
+
+def _boundary_change_source(
+    customer_id: str,
+    resource: str,
+    resource_type: str,
+    start_date: str,
+    end_date: str,
+    login_customer_id: str | None,
+) -> dict[str, Any]:
+  """Fetches retained scoped events with the mandatory API result cap."""
+  end_exclusive = (
+      date.fromisoformat(end_date) + timedelta(days=1)
+  ).isoformat()
+  fields_csv = ", ".join(_BOUNDARY_EVENT_FIELDS)
+  campaign_condition = (
+      f"AND change_event.campaign = {gaql_quote_string(resource)} "
+      if resource_type == "CAMPAIGN"
+      else ""
+  )
+  query = (
+      f"SELECT {fields_csv} FROM change_event "
+      f"WHERE change_event.change_date_time >= '{start_date} 00:00:00' "
+      f"AND change_event.change_date_time < '{end_exclusive} 00:00:00' "
+      f"AND change_event.change_resource_type = {resource_type} "
+      f"{campaign_condition}"
+      "ORDER BY change_event.change_date_time ASC LIMIT 10000"
+  )
+  source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
+  for row in source["rows"]:
+    if row.get("change_event.change_resource_type") != resource_type or (
+        resource_type == "CAMPAIGN"
+        and row.get("change_event.change_resource_name") != resource
+    ):
+      raise ToolError("Change source returned a different resource or type.")
+  periods_around_changes(start_date, end_date, source["rows"])
+  return source
+
+
+def _supported_boundary_event(row: dict[str, Any]) -> bool:
+  mask = row.get("change_event.changed_fields", {})
+  paths = mask.get("paths", []) if isinstance(mask, dict) else []
+  if not isinstance(paths, list) or not all(
+      isinstance(path, str) for path in paths
+  ):
+    raise ToolError("Invalid change-event field mask.")
+  roots = (
+      _BUDGET_BOUNDARY_ROOTS
+      if row.get("change_event.change_resource_type") == "CAMPAIGN_BUDGET"
+      else _CAMPAIGN_BOUNDARY_ROOTS
+  )
+  return any(path.split(".")[0] in roots for path in paths)
+
+
+@reporting_tool
+def compare_performance_around_changes(
+    customer_id: str,
+    campaign_id: str,
+    start_date: str,
+    end_date: str,
+    segment_by: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Compares daily performance around retained target/bid/budget evidence.
+
+  Uses Google-reported campaign bidding/target/budget-link changes and budget
+  changes explicitly associated with the campaign. Every boundary day is
+  excluded conservatively and its complete totals are returned separately.
+  Exact timestamps and old/new resources remain evidence; daily metrics cannot
+  allocate performance to a timestamp or establish causality. Budget changes
+  found only through today's budget link are evidence, not proven boundaries.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      campaign_id: Campaign to compare.
+      start_date: Inclusive account-local YYYY-MM-DD within retained 30 days.
+      end_date: Inclusive date before account-local today, for complete days.
+      segment_by: Optional DEVICE or physical-user COUNTRY breakdown.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Derived periods, exact change evidence and captured-source totals,
+      excluded boundary-day totals, current budget association, coverage limits
+      and exact exports. A capped change query disables the comparison rather
+      than deriving windows from incomplete evidence. Older historical windows
+      use compare_performance_periods with caller-supplied dates.
+  """
+  customer_id = _report_customer_id(customer_id)
+  campaign_id = _positive_report_id(campaign_id, "campaign_id")
+  start_date, end_date = date_range_bounds(
+      {"start_date": start_date, "end_date": end_date}
+  )
+  normalized_segment, segment_field = _comparison_segment(segment_by)
+  today, time_zone = get_account_calendar(customer_id, login_customer_id)
+  oldest = (today - timedelta(days=29)).isoformat()
+  if start_date < oldest or end_date >= today.isoformat():
+    raise ToolError(
+        f"Change comparison requires complete account-local days from {oldest} "
+        "through yesterday. For older dates use compare_performance_periods "
+        "with caller-supplied periods; older change evidence is unavailable."
+    )
+  account_rows = _settings_rows(
+      customer_id,
+      "customer",
+      ["customer.currency_code"],
+      "",
+      login_customer_id,
+  )
+  campaign_rows = _settings_rows(
+      customer_id,
+      "campaign",
+      [
+          "campaign.id",
+          "campaign.name",
+          "campaign.status",
+          "campaign.resource_name",
+          "campaign.campaign_budget",
+          "campaign.bidding_strategy",
+          "campaign.bidding_strategy_type",
+          "campaign_budget.explicitly_shared",
+      ],
+      f"campaign.id = {campaign_id}",
+      login_customer_id,
+  )
+  if not account_rows or not campaign_rows:
+    raise ToolError("No customer currency or campaign settings were returned.")
+  campaign = campaign_rows[0]
+  campaign_resource = f"customers/{customer_id}/campaigns/{campaign_id}"
+  budget_resource = campaign.get("campaign.campaign_budget")
+  sources = [
+      _boundary_change_source(
+          customer_id,
+          campaign_resource,
+          "CAMPAIGN",
+          start_date,
+          end_date,
+          login_customer_id,
+      )
+  ]
+  if budget_resource:
+    sources.append(
+        _boundary_change_source(
+            customer_id,
+            budget_resource,
+            "CAMPAIGN_BUDGET",
+            start_date,
+            end_date,
+            login_customer_id,
+        )
+    )
+  result = {
+      "campaign_id": campaign_id,
+      "campaign": campaign,
+      "account_time_zone": time_zone,
+      "currency_code": account_rows[0].get("customer.currency_code"),
+      "start_date": start_date,
+      "end_date": end_date,
+      "granularity": "DAY",
+      "segment_by": normalized_segment,
+      "current_budget_resource": budget_resource,
+      "current_budget_association_scope": "current settings only",
+      "budget_change_query_scope": (
+          "all account CAMPAIGN_BUDGET events, then scoped locally; "
+          "change_resource_name is not filterable in v24"
+      ),
+      "change_source_export_calls": [
+          _snapshot_export_call(source["snapshot_token"]) for source in sources
+      ],
+      "captured_change_row_count": sum(
+          len(source["rows"]) for source in sources
+      ),
+      "change_query_result_cap": 10000,
+      "coverage_note": (
+          "Retained campaign events and account budget events were queried. "
+          "Only Google-associated campaign budget events or current-linked "
+          "unassociated budget evidence are retained. A current budget link "
+          "does not prove historic "
+          "association; shared budgets may affect other campaigns. Portfolio "
+          "strategy edits, ad-group/criterion bids, conversion-goal switches "
+          "and unreported changes are outside this evidence scope. Absence "
+          "of events does not prove unchanged settings. Changes may take "
+          "three minutes to appear; performance can change with conversion lag."
+      ),
+  }
+  if any(len(source["rows"]) >= 10000 for source in sources):
+    result.update(
+        {
+            "analysis_complete": False,
+            "comparison_available": False,
+            "change_source_complete": False,
+            "reason": (
+                "A change query reached the API cap. Subdivide the dates; "
+                "no periods were inferred from incomplete event evidence."
+            ),
+        }
+    )
+    return finalize_bounded_response(
+        result,
+        ("change_source_export_calls",),
+        max_bytes=INLINE_PAGE_BYTE_LIMIT,
+    )
+  evidence = []
+  current_link_only = []
+  for source in sources:
+    for row in source["rows"]:
+      if not _supported_boundary_event(row):
+        continue
+      if row.get("change_event.change_resource_type") == "CAMPAIGN_BUDGET":
+        if row.get("change_event.campaign") != campaign_resource:
+          if row.get("change_event.change_resource_name") != budget_resource:
+            continue
+          current_link_only.append(
+              {**row, "association_evidence": "current_link_only"}
+          )
+          continue
+      evidence.append(
+          {**row, "association_evidence": "Google-reported campaign"}
+      )
+  evidence.sort(key=lambda row: row["change_event.change_date_time"])
+  periods, excluded_days = periods_around_changes(
+      start_date, end_date, evidence
+  )
+  source = _daily_performance_source(
+      customer_id,
+      campaign_id,
+      start_date,
+      end_date,
+      segment_field,
+      login_customer_id,
+  )
+  result.update(
+      {
+          "analysis_complete": True,
+          "comparison_available": True,
+          "change_source_complete": True,
+          "change_evidence": evidence,
+          "current_link_only_budget_evidence": current_link_only,
+          "boundary_event_count": len(evidence),
+          "unproven_budget_event_count": len(current_link_only),
+          "excluded_boundary_dates": excluded_days,
+          "source_row_count": len(source["rows"]),
+          **aggregate_periods(
+              source["rows"], periods, segment_field, (start_date, end_date)
+          ),
+          "bulk_export_call": _snapshot_export_call(source["snapshot_token"]),
+          "methodology": (
+              "Exact change timestamps are evidence in the account time zone. "
+              "All days containing a supported proven boundary are excluded, "
+              "including midnight changes, conservatively avoiding mixed "
+              "settings and exact timestamp allocation. Period plus excluded "
+              "totals reconcile to captured source metrics. Periods express "
+              "observed evidence boundaries, not proven stable settings or "
+              "causal effects; goal switches are never inferred."
+          ),
+      }
+  )
+  for period in result["periods"]:
+    period["boundary_evidence"] = "retained_google_reported_changes"
+  result["excluded_boundary_row_count"] = result.pop("excluded_gap_row_count")
+  result["excluded_boundary_total"] = result.pop("excluded_gap_total")
+  _add_country_names(result, customer_id, login_customer_id)
+  return finalize_bounded_response(
+      result,
+      (
+          "periods",
+          "change_evidence",
+          "current_link_only_budget_evidence",
+          "excluded_boundary_dates",
+      ),
+      max_bytes=INLINE_PAGE_BYTE_LIMIT,
   )

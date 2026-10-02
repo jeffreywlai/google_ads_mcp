@@ -14,6 +14,7 @@
 
 """The server for the Google Ads API MCP."""
 from ads_mcp.coordinator import mcp_server
+from ads_mcp.diagnostics import enable_diagnostics
 from ads_mcp.scripts.generate_views import refresh_view_docs_for_startup
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
@@ -63,6 +64,7 @@ tools = [
 
 def main():
   """Initializes and runs the MCP server."""
+  enable_diagnostics(mcp_server, "stdio")
   refresh_view_docs_for_startup()  # Check and update docs resource
   api.get_ads_client()  # Check Google Ads credentials
   mcp_server.run(

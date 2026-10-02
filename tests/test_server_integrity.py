@@ -70,6 +70,7 @@ def _expected_history_retention(today):
       "available_range": {
           **requested,
           "start": f"{today - timedelta(days=29)} 00:00:00",
+          "end_inclusive": True,
       },
       "applied_range": requested,
       "unavailable_ranges": [],
@@ -99,6 +100,7 @@ TOOL_MODULES = {
     ],
     audiences: [
         "search_user_interests",
+        "summarize_customer_match_jobs",
         "create_audience",
     ],
     campaigns: [
@@ -106,6 +108,8 @@ TOOL_MODULES = {
         "update_campaign_budget",
         "set_campaign_view_through_conversion_optimization",
         "update_campaign_targeting_setting",
+        "add_campaign_location_targets",
+        "remove_campaign_location_targets",
         "list_campaign_audiences",
         "diff_campaign_audiences",
         "add_campaign_audiences",
@@ -212,6 +216,7 @@ TOOL_MODULES = {
         "get_campaign_conversion_goals",
         "get_campaign_settings",
         "compare_performance_periods",
+        "compare_performance_around_changes",
         "list_keyword_quality_scores",
         "summarize_keyword_quality_scores",
         "list_rsa_ad_strength",
@@ -249,9 +254,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_113(self):
+  def test_total_tool_count_is_117(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 113, f"Expected 113 tools, found {total}"
+    assert total == 117, f"Expected 117 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -317,6 +322,15 @@ class TestToolRegistration:
         if not (
             "build_bounded_mutation_response" in source
             or "_bound_audience_mutation_result" in source
+            or (
+                module is campaigns
+                and function_name
+                in {
+                    "add_campaign_location_targets",
+                    "remove_campaign_location_targets",
+                }
+                and "_location_mutation_result" in source
+            )
         ):
           unbounded_mutation_results.append(
               f"{module.__name__}.{function_name}"
@@ -719,7 +733,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 113
+    assert len(registered_tools) == 117
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"

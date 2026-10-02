@@ -14,6 +14,7 @@
 
 """Tools for managing campaigns, budgets, and targeting in Google Ads."""
 
+import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -25,6 +26,7 @@ from google.ads.googleads.v24.common.types.targeting_setting import (
 from google.ads.googleads.v24.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
+from pydantic import StrictBool
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
@@ -43,6 +45,8 @@ from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import handle_google_ads_errors
+from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
 from ads_mcp.tools.api import run_gaql_query_snapshot
 
@@ -1255,4 +1259,280 @@ def remove_campaign_audiences(
           ],
       },
       ("removed_resource_names",),
+  )
+
+
+def _positive_location_id(value: Any, field_name: str) -> str:
+  normalized = _validate_numeric_id(value, field_name)
+  if not 0 < int(normalized) <= 2**63 - 1:
+    raise ToolError(f"{field_name} must be a positive int64 ID.")
+  return normalized
+
+
+def _location_account_id(value: Any, field_name: str) -> str:
+  if isinstance(value, str):
+    value = value.strip()
+    if not re.fullmatch(r"[0-9]+(?:[ -]+[0-9]+)*", value):
+      raise ToolError(f"{field_name} must be a numeric account ID.")
+    value = re.sub(r"[ -]", "", value)
+  return _positive_location_id(value, field_name)
+
+
+def _location_mutation_inputs(
+    customer_id: str,
+    campaign_id: str,
+    login_customer_id: str | None,
+    validate_only: bool,
+    partial_failure: bool,
+) -> tuple[str, str, str | None]:
+  for field_name, value in (
+      ("validate_only", validate_only),
+      ("partial_failure", partial_failure),
+  ):
+    if not isinstance(value, bool):
+      raise ToolError(f"{field_name} must be a boolean.")
+  return (
+      _location_account_id(customer_id, "customer_id"),
+      _positive_location_id(campaign_id, "campaign_id"),
+      _location_account_id(login_customer_id, "login_customer_id")
+      if login_customer_id is not None
+      else None,
+  )
+
+
+def _location_mutation_result(
+    raw_resource_names: list[str],
+    error: Any,
+    operation_count: int,
+    validate_only: bool,
+    partial_failure: bool,
+    id_key: str,
+) -> dict[str, Any]:
+  """Reports confirmed results without treating a dry run as a mutation."""
+  partial_error = (
+      {"code": error.code, "message": error.message} if error.code else None
+  )
+  failed_indexes = (
+      _failed_operation_indexes(raw_resource_names, operation_count, error)
+      if not validate_only
+      else _partial_failure_indexes(error)
+      if partial_error
+      else []
+  )
+  resource_names = (
+      [] if validate_only else [name for name in raw_resource_names if name]
+  )
+  result = {
+      "validate_only": validate_only,
+      "partial_failure": partial_failure,
+      "submitted_count": operation_count,
+      "mutated_count": len(resource_names),
+      "resource_names": resource_names,
+      id_key: _extract_campaign_criterion_ids(resource_names),
+      "successes": (
+          []
+          if validate_only
+          else _operation_successes(
+              raw_resource_names, failed_indexes, operation_count
+          )
+      ),
+      "failures": _partial_failure_entries(partial_error, failed_indexes),
+  }
+  if validate_only:
+    result["validation_successful"] = partial_error is None
+  if partial_error:
+    result["partial_failure_error"] = partial_error
+  return build_bounded_mutation_response(
+      result, ("resource_names", id_key, "successes", "failures")
+  )
+
+
+@campaign_tool
+def add_campaign_location_targets(
+    customer_id: str,
+    campaign_id: str,
+    geo_target_ids: list[str] | str,
+    negative: StrictBool,
+    validate_only: StrictBool = False,
+    partial_failure: StrictBool = False,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Adds explicit location targets or exclusions to one campaign.
+
+  Args:
+      customer_id: Google Ads customer ID; dashes/spaces are accepted.
+      campaign_id: Campaign ID to target.
+      geo_target_ids: Numeric geo IDs or exact geoTargetConstants/<ID>
+          resource names. Accepts an array, JSON array string, or CSV string.
+      negative: Required boolean; false targets and true excludes locations.
+      validate_only: Validate the request in Google Ads without applying it.
+      partial_failure: Allow valid operations to succeed independently.
+          Defaults to false, so Google applies the batch atomically.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Confirmed resource names/criterion IDs, successes/failures, and counts.
+      Validation-only responses report no creations. Geo IDs identify places;
+      created criterion IDs identify their campaign attachments.
+  """
+  customer_id, campaign_id, login_customer_id = _location_mutation_inputs(
+      customer_id,
+      campaign_id,
+      login_customer_id,
+      validate_only,
+      partial_failure,
+  )
+  if not isinstance(negative, bool):
+    raise ToolError("negative must be a boolean.")
+  resources = []
+  for value in normalize_list_arg(geo_target_ids, "geo_target_ids"):
+    if isinstance(value, str) and value.startswith("geoTargetConstants/"):
+      if not re.fullmatch(r"geoTargetConstants/[1-9][0-9]*", value):
+        raise ToolError("Invalid geoTargetConstants resource name.")
+      geo_id = value.split("/", 1)[1]
+    else:
+      geo_id = value
+    normalized = _positive_location_id(geo_id, "geo_target_ids")
+    resources.append(f"geoTargetConstants/{normalized}")
+  if not resources:
+    raise ToolError("geo_target_ids must not be empty.")
+  resources = require_unique_values(resources, "geo_target_ids")
+
+  ads_client = get_ads_client(login_customer_id)
+  service = ads_client.get_service("CampaignCriterionService")
+  operations = []
+  for resource in resources:
+    operation = ads_client.get_type("CampaignCriterionOperation")
+    operation.create.campaign = (
+        f"customers/{customer_id}/campaigns/{campaign_id}"
+    )
+    operation.create.negative = negative
+    operation.create.location.geo_target_constant = resource
+    operations.append(operation)
+  with handle_google_ads_errors():
+    response = service.mutate_campaign_criteria(
+        request={
+            "customer_id": customer_id,
+            "operations": operations,
+            "validate_only": validate_only,
+            "partial_failure": partial_failure,
+        }
+    )
+    resource_names = [item.resource_name for item in response.results]
+    error = response.partial_failure_error
+  return _location_mutation_result(
+      resource_names,
+      error,
+      len(operations),
+      validate_only,
+      partial_failure,
+      "created_criterion_ids",
+  )
+
+
+@ads_mutation_tool(mcp, tags={"campaigns"}, destructive=True)
+def remove_campaign_location_targets(
+    customer_id: str,
+    campaign_id: str,
+    criterion_ids: list[str] | str,
+    validate_only: StrictBool = False,
+    partial_failure: StrictBool = False,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Removes location targets or exclusions by campaign criterion ID.
+
+  Verifies every requested criterion is an active LOCATION in this customer
+  and campaign before submitting the batch. Geo target IDs are not criterion
+  IDs. Read get_campaign_settings to find each attachment's criterion_id.
+
+  Args:
+      customer_id: Google Ads customer ID; dashes/spaces are accepted.
+      campaign_id: Campaign containing all requested location criteria.
+      criterion_ids: Campaign criterion IDs; array, JSON array, or CSV string.
+      validate_only: Validate in Google Ads without removing anything.
+      partial_failure: Allow valid operations to succeed independently.
+          Local scope/type preflight always validates the entire batch.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Confirmed removed resources/criterion IDs, successes/failures, and counts.
+      Validation-only responses report no removals.
+  """
+  customer_id, campaign_id, login_customer_id = _location_mutation_inputs(
+      customer_id,
+      campaign_id,
+      login_customer_id,
+      validate_only,
+      partial_failure,
+  )
+  ids = [
+      _positive_location_id(value, "criterion_ids")
+      for value in normalize_list_arg(criterion_ids, "criterion_ids")
+  ]
+  if not ids:
+    raise ToolError("criterion_ids must not be empty.")
+  ids = require_unique_values(ids, "criterion_ids")
+  expected_resources = {
+      value: f"customers/{customer_id}/campaignCriteria/{campaign_id}~{value}"
+      for value in ids
+  }
+  criterion_filter = quote_int_values(ids, "criterion_ids")
+  query = (
+      "SELECT campaign.id, campaign_criterion.resource_name, "
+      "campaign_criterion.criterion_id, campaign_criterion.type, "
+      "campaign_criterion.status FROM campaign_criterion "
+      f"WHERE campaign.id = {campaign_id} "
+      f"AND campaign_criterion.criterion_id IN ({criterion_filter})"
+  )
+  with handle_google_ads_errors():
+    rows = run_gaql_query(query, customer_id, login_customer_id)
+  verified = set()
+  for row in rows:
+    criterion_id = str(row.get("campaign_criterion.criterion_id"))
+    if (
+        criterion_id not in expected_resources
+        or str(row.get("campaign.id")) != campaign_id
+        or row.get("campaign_criterion.resource_name")
+        != expected_resources[criterion_id]
+    ):
+      raise ToolError(
+          "Location preflight returned a different account/campaign."
+      )
+    if row.get("campaign_criterion.type") != "LOCATION":
+      raise ToolError(f"Criterion {criterion_id} is not a LOCATION criterion.")
+    if row.get("campaign_criterion.status") not in {"ENABLED", "PAUSED"}:
+      raise ToolError(f"Location criterion {criterion_id} is not active.")
+    verified.add(criterion_id)
+  missing_ids = [value for value in ids if value not in verified]
+  if missing_ids:
+    raise ToolError(
+        "Location criteria not found in the requested campaign: "
+        + ", ".join(missing_ids)
+    )
+
+  ads_client = get_ads_client(login_customer_id)
+  service = ads_client.get_service("CampaignCriterionService")
+  operations = []
+  for criterion_id in ids:
+    operation = ads_client.get_type("CampaignCriterionOperation")
+    operation.remove = expected_resources[criterion_id]
+    operations.append(operation)
+  with handle_google_ads_errors():
+    response = service.mutate_campaign_criteria(
+        request={
+            "customer_id": customer_id,
+            "operations": operations,
+            "validate_only": validate_only,
+            "partial_failure": partial_failure,
+        }
+    )
+    resource_names = [item.resource_name for item in response.results]
+    error = response.partial_failure_error
+  return _location_mutation_result(
+      resource_names,
+      error,
+      len(operations),
+      validate_only,
+      partial_failure,
+      "removed_criterion_ids",
   )

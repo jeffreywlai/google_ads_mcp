@@ -15,9 +15,12 @@
 """Validation and aggregation for explicit daily performance comparisons."""
 
 from datetime import date
+from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 from decimal import InvalidOperation
 import math
+import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -115,13 +118,18 @@ def aggregate_periods(
     rows: list[dict[str, Any]],
     periods: list[dict[str, str]],
     segment_field: str | None,
+    source_bounds: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
   """Aggregates complete rows once, using ratios of summed metrics."""
   totals_by_label = {period["label"]: _empty_totals() for period in periods}
   segments_by_label = {period["label"]: {} for period in periods}
   counts_by_label = {period["label"]: 0 for period in periods}
   requested_totals = _empty_totals()
+  source_totals = _empty_totals()
+  excluded_totals = _empty_totals()
   excluded_gap_row_count = 0
+  if source_bounds is None:
+    source_bounds = (periods[0]["start_date"], periods[-1]["end_date"])
   for row in rows:
     row_date = row.get("segments.date")
     if not isinstance(row_date, str):
@@ -132,8 +140,11 @@ def aggregate_periods(
       raise ToolError("Invalid performance source date.") from exc
     if not valid_date:
       raise ToolError("Invalid performance source date.")
-    if not periods[0]["start_date"] <= row_date <= periods[-1]["end_date"]:
+    if not source_bounds[0] <= row_date <= source_bounds[1]:
       raise ToolError("Performance source returned a date outside periods.")
+    values = {name: _metric_value(row, name) for name in PERFORMANCE_FIELDS}
+    for name, value in values.items():
+      source_totals[name] += value
     period = next(
         (
             period
@@ -144,8 +155,9 @@ def aggregate_periods(
     )
     if period is None:
       excluded_gap_row_count += 1
+      for name, value in values.items():
+        excluded_totals[name] += value
       continue
-    values = {name: _metric_value(row, name) for name in PERFORMANCE_FIELDS}
     label = period["label"]
     counts_by_label[label] += 1
     for name, value in values.items():
@@ -179,4 +191,58 @@ def aggregate_periods(
       "periods": results,
       "requested_periods_total": _present_totals(requested_totals),
       "excluded_gap_row_count": excluded_gap_row_count,
+      "excluded_gap_total": _present_totals(excluded_totals),
+      "captured_source_total": _present_totals(source_totals),
   }
+
+
+def periods_around_changes(
+    start_date: str,
+    end_date: str,
+    evidence: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], list[str]]:
+  """Derives daily windows, conservatively excluding every boundary day.
+
+  Timestamps remain evidence only. Excluding even a midnight boundary avoids
+  assuming the API timestamp is an exact performance allocation boundary.
+  """
+  change_days = set()
+  for event in evidence:
+    value = event.get("change_event.change_date_time")
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?", value
+    ):
+      raise ToolError("Invalid account-local change-event timestamp.")
+    try:
+      timestamp = datetime.fromisoformat(value)
+    except ValueError as exc:
+      raise ToolError("Invalid change-event timestamp.") from exc
+    if timestamp.tzinfo is not None:
+      raise ToolError("Expected an account-local change-event timestamp.")
+    change_date = timestamp.date().isoformat()
+    if not start_date <= change_date <= end_date:
+      raise ToolError("Change evidence returned a timestamp outside dates.")
+    change_days.add(change_date)
+  periods = []
+  cursor = date.fromisoformat(start_date)
+  last_date = date.fromisoformat(end_date)
+  for change_date in sorted(change_days):
+    boundary = date.fromisoformat(change_date)
+    if cursor < boundary:
+      periods.append(
+          {
+              "label": f"period_{len(periods) + 1}",
+              "start_date": cursor.isoformat(),
+              "end_date": (boundary - timedelta(days=1)).isoformat(),
+          }
+      )
+    cursor = boundary + timedelta(days=1)
+  if cursor <= last_date:
+    periods.append(
+        {
+            "label": f"period_{len(periods) + 1}",
+            "start_date": cursor.isoformat(),
+            "end_date": last_date.isoformat(),
+        }
+    )
+  return periods, sorted(change_days)

@@ -17,6 +17,7 @@ import os
 from urllib.parse import urlparse
 
 from ads_mcp.coordinator import mcp_server
+from ads_mcp.diagnostics import enable_diagnostics
 from ads_mcp.scripts.generate_views import refresh_view_docs_for_startup
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
@@ -213,6 +214,7 @@ def _serve_streamable_http_app(app) -> None:
 
 def main():
   """Initializes and runs the MCP server."""
+  enable_diagnostics(mcp_server, "streamable-http")
   refresh_view_docs_for_startup()  # Check and update docs resource
   api.get_ads_client()  # Check Google Ads credentials
   mcp_server.auth = _build_auth_provider()

@@ -67,7 +67,7 @@ def test_list_ad_group_simulations_uses_type_specific_fields():
   assert "ad_group_simulation.cpc_bid_point_list.points" in query
 
 
-def test_list_campaign_simulations_without_type_stays_lightweight():
+def test_list_campaign_simulations_without_type_includes_all_points():
   with mock.patch(
       "ads_mcp.tools.simulations.run_gaql_query_page",
       return_value={
@@ -80,8 +80,26 @@ def test_list_campaign_simulations_without_type_stays_lightweight():
 
   query = mock_query.call_args.kwargs["query"]
   assert "FROM campaign_simulation" in query
-  assert "budget_point_list.points" not in query
-  assert "cpc_bid_point_list.points" not in query
+  for fields in simulations._CAMPAIGN_SIMULATION_FIELDS.values():
+    assert all(field in query for field in fields)
+  assert "campaign_simulation.type =" not in query
+
+
+def test_list_ad_group_simulations_without_type_includes_all_points():
+  with mock.patch(
+      "ads_mcp.tools.simulations.run_gaql_query_page",
+      return_value={
+          "rows": [],
+          "next_page_token": None,
+          "total_results_count": 0,
+      },
+  ) as mock_query:
+    simulations.list_ad_group_simulations(CUSTOMER_ID)
+
+  query = mock_query.call_args.kwargs["query"]
+  for fields in simulations._AD_GROUP_SIMULATION_FIELDS.values():
+    assert all(field in query for field in fields)
+  assert "ad_group_simulation.type =" not in query
 
 
 def test_simulation_tools_ignore_empty_string_list_filters():

@@ -9,8 +9,9 @@ principles:
   - Use search_tools only when the right tool name is unclear.
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
-  - execute_gaql bounds inline data to 32 KiB and the complete response to
-    48 KiB. max_rows is an optional inline row cap; exact bulk_export_call
+  - execute_gaql bounds inline data to 32 KiB and the logical response to
+    48 KiB. MCP text/structured duplication and framing can produce a larger
+    transport envelope. max_rows is an optional inline row cap; exact bulk_export_call
     preserves every retrieved row. Query LIMIT and upstream API restrictions
     still apply to the reported total. A subset without ORDER BY is in API
     order and is not a ranked sample.
@@ -37,7 +38,7 @@ principles:
     truncated, and next_page_token before assuming you have the full result.
   - Inline rows are a presentation preview, capped at 100 rows. Source pages
     use 32 KiB, fan-out/derived sections share 40 KiB, and the complete
-    response targets 48 KiB. These are presentation budgets, never source-data
+    logical response targets 48 KiB. These are presentation budgets, never source-data
     caps; follow stable page tokens or call the exact bulk_export_call. If
     shared post-processing would make a continuation skip rows, the response
     suppresses that token and makes exact export the completeness path.
@@ -55,8 +56,26 @@ principles:
     form the snapshot and may observe changes between reads.
   - Use compare_performance_periods for explicit nonoverlapping inclusive
     date windows. It sums complete daily data before bounding the response.
+    segment_by accepts DEVICE or physical-user COUNTRY; country names come
+    from the API, and geographic totals can differ from campaign totals.
     It does not infer historical goal changes from conversion activity or
     allocate daily metrics at an exact intra-day change timestamp.
+  - Use compare_performance_around_changes for complete days within retained
+    granular history. It uses supported Google-reported campaign/budget
+    boundaries and excludes every changed day. Capped change reads disable
+    the comparison. Today's budget link alone does not prove past campaign
+    association. Portfolio-strategy edits, goal switches, and causality are
+    not inferred; absence of events does not prove unchanged settings.
+  - Use summarize_customer_match_jobs for complete available job counts by
+    list, status, match-rate range, and failure reason. jobs_per_list only
+    limits highest-ID previews. v24 has no Customer Match job timestamp;
+    these previews do not prove latest uploads by time. Match-rate buckets
+    are not exact or volume-weighted rates; offline conversion health uses
+    the separate upload summary tools.
+  - Campaign location additions require explicit negative=false for targets
+    or true for exclusions. Removals use campaign criterion_ids from
+    get_campaign_settings, not geo_target_ids. Both support validate_only
+    and optional partial_failure; mutations are not retried.
   - For campaign-specific history, pass campaign_id or ad_group_id and use
     include_values=true for compact changed-field diffs. Scope follows Google's
     campaign association; shared account resources may have no campaign link.
@@ -84,14 +103,15 @@ categories:
     summary: High-frequency performance and configuration reports.
     tools:
       list_device_performance: Campaign performance segmented by device.
-      list_geographic_performance: Campaign performance segmented by user or geographic location.
+      list_geographic_performance: Campaign performance segmented by user or geographic location, with API-resolved country names for the page.
       list_impression_share: Campaign impression share metrics.
       get_campaign_performance: Core campaign performance with optional date, week, month, device, or network segmenting.
       analyze_customer_acquisition_performance: New-versus-returning conversion performance joined to total campaign traffic and cost using compatible split queries.
       get_competitive_pressure_report: Impression-share pressure, auction insights, and change history in one compact report.
       get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
       get_campaign_settings: Current campaign settings, budget, targeting, shared lists, conversion goals, and lifecycle goals without client-side joins.
-      compare_performance_periods: Complete campaign metrics across explicit daily date windows, optionally split by device, without inferring goal switches or causality.
+      compare_performance_periods: Complete campaign metrics across explicit daily date windows, optionally split by DEVICE or physical-user COUNTRY with API names, without inferring goal switches or causality.
+      compare_performance_around_changes: Derive daily periods from complete supported retained campaign/budget change evidence, excluding boundary days without claiming causality or goal history.
       list_keyword_quality_scores: Keyword quality score diagnostics.
       summarize_keyword_quality_scores: Compact keyword quality score distributions without raw row dumps.
       list_rsa_ad_strength: Responsive search ad strength diagnostics.
@@ -158,6 +178,8 @@ categories:
       set_campaign_status: Pause or enable a campaign.
       update_campaign_budget: Change daily budget amount.
       update_campaign_targeting_setting: Replace campaign targeting restrictions for dimensions like AUDIENCE or KEYWORD.
+      add_campaign_location_targets: Add explicit geo_target_ids as targets or exclusions using required negative, with optional validate_only and partial_failure.
+      remove_campaign_location_targets: Verify and remove campaign LOCATION criterion_ids, with optional validate_only and partial_failure.
       set_campaign_view_through_conversion_optimization: Enable or disable view-through conversion optimization on eligible campaigns.
       list_campaign_audiences: List campaign-level audience criteria with resource names ready for copying.
       diff_campaign_audiences: Compare two campaigns and return missing/common/target-only audiences.
@@ -166,9 +188,10 @@ categories:
       remove_campaign_audiences: Remove campaign audience criteria by criterion ID.
 
   audiences:
-    summary: Discover or create audience resources.
+    summary: Discover audiences, summarize Customer Match jobs, or create resources.
     tools:
       search_user_interests: Search affinity and in-market user-interest taxonomy nodes with add_campaign_audiences-ready resource names.
+      summarize_customer_match_jobs: Complete available jobs by list name, status, match-rate bucket, and failure reason, with highest-ID heuristic previews and exact exports.
       create_audience: Create a customer-scope audience resource with AND/OR include logic and optional user-list exclusions.
 
   ad_groups:
@@ -237,8 +260,8 @@ categories:
   simulations:
     summary: Forecast bid and budget tradeoffs before changing settings.
     tools:
-      list_campaign_simulations: Campaign-level simulations. Add simulation_type for point lists.
-      list_ad_group_simulations: Ad-group-level simulations. Add simulation_type for point lists.
+      list_campaign_simulations: Campaign-level simulations with every supported point list by default; simulation_type narrows the output. Forecast calibration remains analyst judgment.
+      list_ad_group_simulations: Ad-group-level simulations with every supported point list by default; simulation_type narrows the output.
       list_ad_group_criterion_simulations: Keyword-level CPC bid simulations.
 
   change_history:

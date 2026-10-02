@@ -124,6 +124,10 @@ def plan_retention(
           oldest_supported_start(CHANGE_EVENT_LOOKBACK_DAYS, today)
       ),
       datetime.combine(today + timedelta(days=1), datetime.min.time()),
+      # Google accepts a finite <= next-midnight endpoint. Keep that single
+      # boundary instant without rewriting the caller's comparison operator;
+      # later future timestamps and older history still require explicit clamp.
+      end_inclusive=True,
   )
   applied = _intersect(requested, available)
   unavailable = []

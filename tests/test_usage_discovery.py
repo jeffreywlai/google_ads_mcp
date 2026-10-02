@@ -42,7 +42,7 @@ def test_dedicated_workflow_routing_is_a_read(query, target):
         "campaign settings history",
         "change campaign settings",
         "compare campaign audiences across periods",
-        "compare campaign country performance across periods",
+        "compare campaign city performance across periods",
         "export current campaign settings",
         "update campaign settings",
         "delete campaign configuration",
