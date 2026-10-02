@@ -52,7 +52,7 @@ def _selected_point_fields(
     simulation_type: str | None,
 ) -> list[str]:
   if simulation_type is None:
-    return []
+    return [field for fields in allowed_fields.values() for field in fields]
   if not isinstance(simulation_type, str) or not simulation_type.strip():
     raise ToolError("simulation_type must be a non-empty string.")
 
@@ -82,7 +82,8 @@ def list_campaign_simulations(
   Args:
       customer_id: Google Ads customer ID.
       campaign_ids: Optional campaign IDs to filter to.
-      simulation_type: Optional type such as BUDGET or CPC_BID.
+      simulation_type: Optional type such as BUDGET or CPC_BID. When omitted,
+          includes point lists for every supported simulation type.
       limit: Maximum number of rows to return.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
@@ -153,7 +154,8 @@ def list_ad_group_simulations(
   Args:
       customer_id: Google Ads customer ID.
       ad_group_ids: Optional ad group IDs to filter to.
-      simulation_type: Optional type such as CPC_BID or TARGET_ROAS.
+      simulation_type: Optional type such as CPC_BID or TARGET_ROAS. When
+          omitted, includes point lists for every supported simulation type.
       limit: Maximum number of rows to return.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.

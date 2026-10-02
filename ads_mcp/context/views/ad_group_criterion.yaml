@@ -6,15 +6,15 @@ description: '<p>An ad group criterion.
 
   added to the ad group.</p>'
 attributed_views:
-- ad_group
-- topic_constant
-- customer
-- mobile_app_category_constant
-- user_interest
-- campaign
-- shared_set
-- language_constant
 - user_list
+- campaign
+- language_constant
+- ad_group
+- user_interest
+- topic_constant
+- shared_set
+- mobile_app_category_constant
+- customer
 attributes:
 - ad_group_criterion.ad_group
 - ad_group_criterion.age_range.type
@@ -41,6 +41,7 @@ attributes:
 - ad_group_criterion.effective_cpv_bid_source
 - ad_group_criterion.effective_percent_cpc_bid_micros
 - ad_group_criterion.effective_percent_cpc_bid_source
+- ad_group_criterion.entity_bid.item_code
 - ad_group_criterion.extended_demographic.extended_demographic_id
 - ad_group_criterion.final_mobile_urls
 - ad_group_criterion.final_url_suffix
@@ -166,6 +167,7 @@ attributes:
 - ad_group.vertical_ads_format_setting.enable_booking_links
 - ad_group.vertical_ads_format_setting.enable_vertical_promotion_ads
 - ad_group.video_ad_group_settings.video_ad_sequence.step_id
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -185,6 +187,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -280,6 +283,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -340,6 +344,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 - language_constant.code

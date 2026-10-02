@@ -26,7 +26,10 @@ class Domain(str, Enum):
 
   CHANGE_CONFIGURATION = "change_configuration"
   REPORTING_METRIC = "reporting_metric"
+  CAMPAIGN_SETTINGS = "campaign_settings"
+  CAMPAIGN_LOCATION = "campaign_location"
   CAMPAIGN_AUDIENCE = "campaign_audience"
+  CUSTOMER_MATCH = "customer_match"
   RECOMMENDATION = "recommendation"
   DEMOGRAPHIC = "demographic"
   ASSET_GROUP_ASSET = "asset_group_asset"
@@ -71,6 +74,7 @@ class Detail(str, Enum):
   COPY = "copy"
   REMOVAL = "removal"
   APPLICATION = "application"
+  CHANGE_BOUNDARIES = "change_boundaries"
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,8 @@ class IntentFeatures:
   campaign_budget_mutation: bool
   campaign_audience_copy: bool
   campaign_audience_remove: bool
+  campaign_location_add: bool
+  campaign_location_remove: bool
   mutation_negated: bool
   mutation_advisory: bool
   remote_mutation_guarded: bool
@@ -149,6 +155,12 @@ ROUTE_CATALOG = MappingProxyType(
         "audience_remove": "remove_campaign_audiences",
         "campaign_budget_mutation": "update_campaign_budget",
         "campaign_status_mutation": "set_campaign_status",
+        "campaign_settings": "get_campaign_settings",
+        "campaign_location_add": "add_campaign_location_targets",
+        "campaign_location_remove": "remove_campaign_location_targets",
+        "period_comparison": "compare_performance_periods",
+        "change_period_comparison": "compare_performance_around_changes",
+        "customer_match_jobs": "summarize_customer_match_jobs",
         "change_history_artifact": "export_change_history_csv",
         "change_history_events": "list_change_events",
         "change_history_preview": "get_change_history_extended",
@@ -163,6 +175,50 @@ ROUTE_CATALOG = MappingProxyType(
 )
 
 TOOL_CAPABILITIES = (
+    ToolCapability(
+        "add_campaign_location_targets",
+        Domain.CAMPAIGN_LOCATION,
+        Operation.MUTATE,
+        Delivery.INLINE,
+        Detail.APPLICATION,
+        Effect.REMOTE_MUTATION,
+    ),
+    ToolCapability(
+        "remove_campaign_location_targets",
+        Domain.CAMPAIGN_LOCATION,
+        Operation.MUTATE,
+        Delivery.INLINE,
+        Detail.REMOVAL,
+        Effect.REMOTE_MUTATION,
+    ),
+    ToolCapability(
+        "summarize_customer_match_jobs",
+        Domain.CUSTOMER_MATCH,
+        Operation.READ,
+        Delivery.INLINE,
+        Detail.SUMMARY,
+    ),
+    ToolCapability(
+        "compare_performance_around_changes",
+        Domain.REPORTING_METRIC,
+        Operation.COMPARE,
+        Delivery.INLINE,
+        Detail.CHANGE_BOUNDARIES,
+    ),
+    ToolCapability(
+        "get_campaign_settings",
+        Domain.CAMPAIGN_SETTINGS,
+        Operation.READ,
+        Delivery.INLINE,
+        Detail.CONFIGURATION,
+    ),
+    ToolCapability(
+        "compare_performance_periods",
+        Domain.REPORTING_METRIC,
+        Operation.COMPARE,
+        Delivery.INLINE,
+        Detail.PERFORMANCE,
+    ),
     ToolCapability(
         "get_optimization_score_summary",
         Domain.RECOMMENDATION,
@@ -325,6 +381,30 @@ _MUTATION_TOOLS = frozenset(
     capability.name
     for capability in TOOL_CAPABILITIES
     if capability.effect == Effect.REMOTE_MUTATION
+)
+_LOCATION_MUTATION_TOOLS = frozenset(
+    {
+        ROUTE_CATALOG["campaign_location_add"],
+        ROUTE_CATALOG["campaign_location_remove"],
+    }
+)
+_OTHER_LOCATION_ACTION_SUBJECTS = frozenset(
+    {
+        "keyword",
+        "keywords",
+        "ad",
+        "ads",
+        "adgroup",
+        "adgroups",
+        "group",
+        "groups",
+        "audience",
+        "audiences",
+        "recommendation",
+        "recommendations",
+        "rec",
+        "recs",
+    }
 )
 _COMPETITIVE_PRESSURE_TOOL = ROUTE_CATALOG["competitive_pressure"]
 _HISTORY_AND_PRESSURE_TOOLS = frozenset(
@@ -939,11 +1019,23 @@ def extract_intent_features(query: str) -> IntentFeatures:
       )
   )
   budget_actions = token_set & _BUDGET_ACTIONS
+  compared_budget_change = (
+      (metric_subject or performance_requested)
+      and (
+          token_set.issuperset({"before", "after"})
+          or (compare_requested and bool(token_set & {"around", "across"}))
+      )
+      and tokens.count("change") == 1
+      and _contains_sequence(tokens, "budget", "change")
+  )
   has_budget_action = (
       has_campaign
       and bool(token_set & {"budget", "budgets"})
       and bool(budget_actions)
-      and not (budget_actions == {"change"} and change_record_phrase)
+      and not (
+          budget_actions == {"change"}
+          and (change_record_phrase or compared_budget_change)
+      )
   )
   has_audience_copy_action = (
       has_campaign and has_audience and ("copy" in token_set)
@@ -956,6 +1048,28 @@ def extract_intent_features(query: str) -> IntentFeatures:
           or ("take" in token_set and "off" in token_set)
       )
   )
+  has_location = (
+      has_campaign
+      and bool(
+          token_set
+          & {
+              "location",
+              "locations",
+              "country",
+              "countries",
+              "city",
+              "cities",
+              "geo",
+          }
+      )
+      and not token_set & _OTHER_LOCATION_ACTION_SUBJECTS
+  )
+  has_location_add_action = has_location and bool(
+      token_set & {"add", "attach", "exclude"}
+  )
+  has_location_remove_action = has_location and bool(
+      token_set & _AUDIENCE_REMOVE_ACTIONS
+  )
   has_recommendation_action = has_recommendation and bool(
       token_set & {"accept", "apply", "implement"}
   )
@@ -964,6 +1078,8 @@ def extract_intent_features(query: str) -> IntentFeatures:
       or has_budget_action
       or has_audience_copy_action
       or has_audience_remove_action
+      or has_location_add_action
+      or has_location_remove_action
       or has_recommendation_action
   )
   mutation_negated = has_mutation_subject and _has_negated_action(
@@ -1029,6 +1145,20 @@ def extract_intent_features(query: str) -> IntentFeatures:
       and not mutation_guarded
       and not retrospective_action
   )
+  campaign_location_add = (
+      has_location_add_action
+      and not explicit_history
+      and not completed
+      and not mutation_guarded
+      and not retrospective_action
+  )
+  campaign_location_remove = (
+      has_location_remove_action
+      and not explicit_history
+      and not completed
+      and not mutation_guarded
+      and not retrospective_action
+  )
   mixed_history_mutation = (
       explicit_history
       and has_mutation_subject
@@ -1080,6 +1210,8 @@ def extract_intent_features(query: str) -> IntentFeatures:
       campaign_budget_mutation=campaign_budget_mutation,
       campaign_audience_copy=campaign_audience_copy,
       campaign_audience_remove=campaign_audience_remove,
+      campaign_location_add=campaign_location_add,
+      campaign_location_remove=campaign_location_remove,
       mutation_negated=mutation_negated,
       mutation_advisory=mutation_advisory,
       remote_mutation_guarded=remote_mutation_guarded,
@@ -1108,6 +1240,8 @@ def _has_change_history_context(features: IntentFeatures) -> bool:
       or features.campaign_budget_mutation
       or features.campaign_audience_copy
       or features.campaign_audience_remove
+      or features.campaign_location_add
+      or features.campaign_location_remove
       or (features.prospective and not features.completed)
   ):
     return False
@@ -1209,6 +1343,10 @@ def _mutation_targets(features: IntentFeatures) -> tuple[str, ...]:
             detail=Detail.REMOVAL,
         )
     )
+  if features.campaign_location_add:
+    targets.append(ROUTE_CATALOG["campaign_location_add"])
+  if features.campaign_location_remove:
+    targets.append(ROUTE_CATALOG["campaign_location_remove"])
   return tuple(dict.fromkeys(targets))
 
 
@@ -1256,6 +1394,114 @@ def _dedicated_large_read_target(features: IntentFeatures) -> str | None:
         detail=Detail.CONFIGURATION,
     )
   return None
+
+
+def _supports_daily_campaign_grain(features: IntentFeatures) -> bool:
+  """Keeps fixed comparisons at campaign/day, with device or country only."""
+  return not features.token_set & {
+      "keyword",
+      "keywords",
+      "term",
+      "terms",
+      "ad",
+      "ads",
+      "adgroup",
+      "adgroups",
+      "group",
+      "groups",
+      "product",
+      "products",
+      "geo",
+      "geographic",
+      "location",
+      "locations",
+      "city",
+      "cities",
+      "county",
+      "counties",
+      "region",
+      "regions",
+      "hour",
+      "hourly",
+      "timestamp",
+      "timestamps",
+      "network",
+      "networks",
+  } and not (
+      "conversion" in features.token_set
+      and features.token_set & {"action", "actions"}
+  )
+
+
+def _customer_match_job_read(features: IntentFeatures) -> bool:
+  tokens = features.token_set
+  customer_match = "customermatch" in tokens or _contains_sequence(
+      features.tokens, "customer", "match"
+  )
+  offline_users = tokens.issuperset({"offline", "user"})
+  summary_requested = bool(
+      tokens
+      & {"summary", "summarize", "counts", "count", "status", "statuses"}
+  )
+  return (
+      (customer_match or offline_users)
+      and bool(tokens & {"job", "jobs"})
+      and not features.explicit_history
+      and not features.compare_requested
+      and (
+          summary_requested
+          or features.read_cue
+          or not tokens & _GENERIC_MUTATION_ACTIONS
+      )
+      and not tokens & {"performance", "roas", "clicks", "spend"}
+  )
+
+
+def _change_period_comparison(features: IntentFeatures) -> bool:
+  tokens = features.token_set
+  before_after = tokens.issuperset({"before", "after"})
+  comparison = features.compare_requested or before_after
+  boundary_requested = before_after or bool(tokens & {"around", "across"})
+  supported_subject = bool(
+      tokens
+      & {
+          "setting",
+          "settings",
+          "configuration",
+          "budget",
+          "budgets",
+          "bid",
+          "bids",
+          "bidding",
+          "target",
+          "targets",
+      }
+  )
+  return (
+      bool(tokens & {"campaign", "campaigns"})
+      and comparison
+      and boundary_requested
+      and features.has_change_noun
+      and supported_subject
+      and (features.metric_subject or features.performance_requested)
+      and _supports_daily_campaign_grain(features)
+      and not features.artifact_requested
+      and not tokens
+      & {
+          "goal",
+          "goals",
+          "lifecycle",
+          "acquisition",
+          "proposed",
+          "planned",
+          "future",
+          "upcoming",
+          "scheduled",
+          "hypothetical",
+      }
+      and features.domain
+      not in {Domain.CAMPAIGN_AUDIENCE, Domain.RECOMMENDATION}
+  )
 
 
 def _resolve_intent(query: str) -> RoutingDecision:
@@ -1360,6 +1606,22 @@ def _resolve_intent(query: str) -> RoutingDecision:
         reason="mutation",
     )
 
+  if _customer_match_job_read(features):
+    return RoutingDecision(
+        target=ROUTE_CATALOG["customer_match_jobs"],
+        excluded_tools=_MUTATION_TOOLS,
+        exclude_remote_mutations=True,
+        reason="customer_match_job_summary",
+    )
+
+  if _change_period_comparison(features):
+    return RoutingDecision(
+        target=ROUTE_CATALOG["change_period_comparison"],
+        excluded_tools=_MUTATION_TOOLS,
+        exclude_remote_mutations=True,
+        reason="retained_change_period_comparison",
+    )
+
   if features.prospective and not features.completed:
     excluded = (
         frozenset()
@@ -1370,6 +1632,46 @@ def _resolve_intent(query: str) -> RoutingDecision:
         excluded_tools=excluded,
         reason="prospective_change",
     )
+
+  # Fixed current-state reads must not replace history, writes, or other grains.
+  if (
+      bool(features.token_set & {"campaign", "campaigns"})
+      and not features.explicit_history
+      and not features.has_change_noun
+      and not features.artifact_requested
+      and not features.completed
+      and not features.token_set & _GENERIC_MUTATION_ACTIONS
+      and features.domain
+      in {Domain.UNKNOWN, Domain.REPORTING_METRIC, Domain.CHANGE_CONFIGURATION}
+  ):
+    if (
+        features.token_set & {"settings", "snapshot", "configuration"}
+        and not features.metric_subject
+        and not features.performance_requested
+        and not features.compare_requested
+        and not features.token_set
+        & {"keyword", "keywords", "adgroup", "adgroups"}
+        and not _contains_sequence(features.tokens, "ad", "group")
+        and not _contains_sequence(features.tokens, "ad", "groups")
+    ):
+      return RoutingDecision(
+          target=ROUTE_CATALOG["campaign_settings"],
+          excluded_tools=_MUTATION_TOOLS,
+          exclude_remote_mutations=True,
+          reason="current_campaign_settings",
+      )
+    if (
+        features.compare_requested
+        and features.token_set & {"period", "periods", "window", "windows"}
+        and (features.performance_requested or features.metric_subject)
+        and _supports_daily_campaign_grain(features)
+    ):
+      return RoutingDecision(
+          target=ROUTE_CATALOG["period_comparison"],
+          excluded_tools=_MUTATION_TOOLS,
+          exclude_remote_mutations=True,
+          reason="explicit_period_comparison",
+      )
 
   mixed_history_metric = (
       features.metric_subject
@@ -1584,7 +1886,11 @@ def _resolve_intent(query: str) -> RoutingDecision:
         reason="unrelated_history",
     )
 
-  if features.has_change_noun:
+  if features.has_change_noun or (
+      features.token_set & _GENERIC_MUTATION_ACTIONS
+      and not features.read_cue
+      and not features.remote_mutation_guarded
+  ):
     return RoutingDecision(
         excluded_tools=_HISTORY_AND_PRESSURE_TOOLS,
         reason="non_historical_change",
@@ -1597,6 +1903,25 @@ def resolve_intent(query: str) -> RoutingDecision:
   """Resolves intent and applies effect-level remote-mutation safety."""
   features = extract_intent_features(query)
   decision = _resolve_intent(query)
+  if (
+      features.token_set & _OTHER_LOCATION_ACTION_SUBJECTS
+      and features.token_set & {"campaign", "campaigns"}
+      and features.token_set
+      & {
+          "location",
+          "locations",
+          "country",
+          "countries",
+          "city",
+          "cities",
+          "geo",
+      }
+      and features.token_set & _GENERIC_MUTATION_ACTIONS
+  ):
+    decision = replace(
+        decision,
+        excluded_tools=decision.excluded_tools | _LOCATION_MUTATION_TOOLS,
+    )
   if not features.remote_mutation_guarded:
     return decision
   reason = decision.reason

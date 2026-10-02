@@ -21,6 +21,7 @@ attributes:
 - domain_category.language_code
 - domain_category.recommended_cpc_bid_micros
 - domain_category.resource_name
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -40,6 +41,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -135,6 +137,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -195,6 +198,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments: []

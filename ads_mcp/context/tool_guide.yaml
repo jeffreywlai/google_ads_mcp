@@ -1,4 +1,7 @@
 principles:
+  - The server selects the v25 RPC surface with v25.2 features from SDK 33.
+    Use current field metadata and native request schemas when migrating
+    saved v24 queries or requests.
   - Most Google Ads tools take customer_id and optional login_customer_id.
     Focus on the other args when selecting a tool.
   - Read/reporting and docs tools are directly visible. Call them directly
@@ -9,9 +12,16 @@ principles:
   - Use search_tools only when the right tool name is unclear.
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
-  - For execute_gaql, pass max_rows for exploratory reads. If an unbounded raw
-    query returns many rows, the tool includes a token-efficiency warning
-    without truncating the data.
+  - execute_gaql bounds inline data to 32 KiB and the logical response to
+    48 KiB. MCP text/structured duplication and framing can produce a larger
+    transport envelope. max_rows is an optional inline row cap; exact bulk_export_call
+    preserves every retrieved row. Query LIMIT and upstream API restrictions
+    still apply to the reported total. A subset without ORDER BY is in API
+    order and is not a ranked sample.
+  - GAQL preflight adds only required SELECT segments and reports
+    query_adjustments. Field alternatives are suggestions, not automatic
+    replacements. Empty resource-name predicates require an explicit fix;
+    ordinary empty-string text filters remain valid.
   - Use export_gaql_csv for bulk extracts that would be too large or noisy as
     JSON tool output.
   - For change history, preserve explicit requested dates. If the user asks
@@ -19,22 +29,64 @@ principles:
     export_change_history_csv for daily change_status slices across 90 days
     plus the 30-day granular change_event overlay; do not limit all history to
     30 days or imply that status rows are field-level events.
+  - execute_gaql, export_gaql_csv, and list_change_events default to
+    retention_policy=error for unavailable granular-history dates. Use
+    retention_policy=clamp only when explicitly accepting the available
+    intersection; inspect retention.unavailable_ranges. No overlap returns
+    no events, not a recent replacement period. LAST_30_DAYS excludes today,
+    unlike the inclusive-today lookback_days=30. Snapshot exports and
+    continuations preserve their original resolved calendar and coverage.
   - Start with the smallest dedicated tool that answers the question.
   - For list tools, check returned_count, total_count, total_page_count,
     truncated, and next_page_token before assuming you have the full result.
   - Inline rows are a presentation preview, capped at 100 rows. Source pages
     use 32 KiB, fan-out/derived sections share 40 KiB, and the complete
-    response targets 48 KiB. These are presentation budgets, never source-data
+    logical response targets 48 KiB. These are presentation budgets, never source-data
     caps; follow stable page tokens or call the exact bulk_export_call. If
     shared post-processing would make a continuation skip rows, the response
     suppresses that token and makes exact export the completeness path.
-  - Variable mutation receipts use the same bounded-preview principle. Every
-    requested operation is still applied, and omitted result details spill to
-    a CSV artifact. If that local artifact cannot be written, the response
-    states that the mutation completed and must not be retried.
-  - A tokenless read starts a fresh Google snapshot. page_token and
-    snapshot_token deliberately preserve the original snapshot and may expire
-    after 90 seconds; on expiry, restart the source tool without a token.
+  - Variable mutation receipts use bounded previews. Check validate_only,
+    executed, and partial-failure details; executed does not imply that every
+    operation succeeded. Some tools spill omitted details to a CSV artifact;
+    an artifact-write failure states whether the mutation completed and must
+    not be retried. Native service tools provide exact deferred export calls
+    without implicit file writes.
+  - A tokenless read starts a fresh Google snapshot. GAQL page_token and
+    snapshot_token, plus deferred report snapshots, preserve the original
+    result for up to 15 minutes. Bounded cache pressure can evict them earlier;
+    inspect snapshot_lifetime when returned. Accessible-account snapshots
+    expire after 90 seconds. On expiry, restart the source tool without a token.
+  - Use get_campaign_settings for a current campaign settings snapshot,
+    including unified lifecycle goals and resolved location names. v25 returns
+    account_goals at the top level and campaign_goal_configs within each
+    campaign. Several API reads may observe changes between reads. Legacy
+    customer_lifecycle_goal and campaign_lifecycle_goal queries need explicit
+    migration to goal and campaign_goal_config with their new nested fields.
+  - Use compare_performance_periods for explicit nonoverlapping inclusive
+    date windows. It sums complete daily data before bounding the response.
+    segment_by accepts DEVICE or physical-user COUNTRY; country names come
+    from the API, and geographic totals can differ from campaign totals.
+    It does not infer historical goal changes from conversion activity or
+    allocate daily metrics at an exact intra-day change timestamp.
+  - Use compare_performance_around_changes for complete days within retained
+    granular history. It uses supported Google-reported campaign/budget
+    boundaries and excludes every changed day. Capped change reads disable
+    the comparison. Today's budget link alone does not prove past campaign
+    association. Portfolio-strategy edits, goal switches, and causality are
+    not inferred; absence of events does not prove unchanged settings.
+  - Use summarize_customer_match_jobs for complete available job counts by
+    list, status, match-rate range, and failure reason. jobs_per_list only
+    limits highest-ID previews. Customer Match has no API job timestamp;
+    these previews do not prove latest uploads by time. Match-rate buckets
+    are not exact or volume-weighted rates; offline conversion health uses
+    the separate upload summary tools.
+  - Campaign location additions require explicit negative=false for targets
+    or true for exclusions. Removals use campaign criterion_ids from
+    get_campaign_settings, not geo_target_ids. Both support validate_only
+    and optional partial_failure; mutations are not retried.
+  - For campaign-specific history, pass campaign_id or ad_group_id and use
+    include_values=true for compact changed-field diffs. Scope follows Google's
+    campaign association; shared account resources may have no campaign link.
   - Date-range args accept native GAQL ranges plus LAST_90_DAYS,
     LAST_180_DAYS, LAST_365_DAYS, LAST_12_MONTHS, LAST_QUARTER, YTD,
     ALL_TIME, or {start_date, end_date}.
@@ -42,8 +94,19 @@ principles:
     search_google_ads_fields only when query construction is blocked. Pass
     patterns for multiple field-name searches; the server fans them out
     because GoogleAdsField queries do not support OR.
+  - Fixed native planning tools accept request objects or JSON strings. Use
+    get_planning_request_schema for exact nested fields, enums, and oneofs;
+    schema shape does not establish required business inputs or eligibility.
+    Missing share, percentile, creator-consent, or lift data stays unavailable.
+    The announced vertical_ads_item_bid field is absent from current SDK/RPC
+    and reporting metadata; native mutations reject it. The published
+    vertical_ads_item_group_rule_list is a separate field.
+  - New typed resource, goal, asset, and Smart draft mutations default to
+    validate_only=true. Apply account changes only with an explicit false.
+    apply_incentive and create_product_link_invitation have no validate-only
+    API; invoking them applies the operation. Mutation calls are never retried.
   - Mutation tools are hidden by default. Use unlock_mutation_tools only when
-    you intend to change account state.
+    you intend to validate or change account state.
 
 categories:
   discovery:
@@ -59,12 +122,16 @@ categories:
     summary: High-frequency performance and configuration reports.
     tools:
       list_device_performance: Campaign performance segmented by device.
-      list_geographic_performance: Campaign performance segmented by user or geographic location.
+      list_geographic_performance: Campaign performance segmented by user or geographic location, with API-resolved country names for the page.
       list_impression_share: Campaign impression share metrics.
-      get_campaign_performance: Core campaign performance with optional date, week, month, device, or network segmenting.
+      get_campaign_performance: Core campaign performance with DATE/WEEK/MONTH/DEVICE/NETWORK/LOYALTY_MEMBERSHIP segments; original unadjusted conversion value is included only with compatible segments and incompatible metrics are listed explicitly.
       analyze_customer_acquisition_performance: New-versus-returning conversion performance joined to total campaign traffic and cost using compatible split queries.
       get_competitive_pressure_report: Impression-share pressure, auction insights, and change history in one compact report.
       get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
+      get_campaign_settings: Current campaign settings, budget, targeting, shared lists, conversion goals, account_goals, and per-campaign campaign_goal_configs without client-side joins.
+      compare_performance_periods: Complete campaign metrics across explicit daily date windows, optionally split by DEVICE or physical-user COUNTRY with API names, without inferring goal switches or causality.
+      compare_performance_around_changes: Derive daily periods from complete supported retained campaign/budget change evidence, excluding boundary days without claiming causality or goal history.
+      list_lift_measurements: Available lift configurations, flights, brand-lift dimensions, or study-level conversion-lift metrics with measured windows and exact exports; availability and statistical significance require inspection.
       list_keyword_quality_scores: Keyword quality score diagnostics.
       summarize_keyword_quality_scores: Compact keyword quality score distributions without raw row dumps.
       list_rsa_ad_strength: Responsive search ad strength diagnostics.
@@ -74,7 +141,7 @@ categories:
       get_landing_page_performance: Landing-page or expanded landing-page performance with optional device split.
       get_ad_inventory: Ad creative inventory with optional text assets and recent performance.
       list_video_enhancements: Video Enhancement rows with source, title, duration, and video-view metrics.
-      summarize_cart_data_sales: Compact v24 cart-data revenue, profit, units-sold, and lead/cross-sell summary.
+      summarize_cart_data_sales: Compact cart-data revenue, profit, units-sold, and lead/cross-sell summary.
       compare_biddable_vs_all_cart_value: Compare biddable cart metrics with all cart metrics to find value outside optimization goals.
       list_cart_profit_outliers: Highest or lowest cart-data profit outliers by campaign, product, brand, or category.
       list_shopping_attribution_breakdown: Shopping product performance split by conversion attribution event type.
@@ -110,6 +177,9 @@ categories:
       get_reporting_view_doc: View names or detailed view metadata.
       get_reporting_fields_doc: Cached field metadata for known fields.
       search_google_ads_fields: Live field metadata search by raw query or multiple safe name patterns.
+      get_planning_request_schema: Installed native request fields, enums, and oneofs for one fixed planning tool.
+      get_resource_mutation_schema: Installed native schema and allowed resource mutation operation names.
+      get_account_service_request_schema: Native request schema for fetch_incentives, apply_incentive, or create_product_link_invitation.
       get_tool_visibility_profile: Check whether mutation tools are unlocked for the session.
       unlock_mutation_tools: Reveal mutation tools for the current session.
       lock_mutation_tools: Hide mutation tools again for the current session.
@@ -119,7 +189,7 @@ categories:
     tools:
       get_optimization_score_summary: Account optimization score and uplift by recommendation type.
       list_recommendations: Open recommendations filtered by type or campaign.
-      apply_recommendations: Apply existing recommendation resource names.
+      apply_recommendations: Apply existing recommendation resource names with native parameters, including v25.2 CPA/ROAS performance-bid multipliers.
       dismiss_recommendations: Dismiss existing recommendation resource names.
       list_recommendation_subscriptions: Current recommendation auto-apply subscriptions.
       create_recommendation_subscription: Create a paused or enabled subscription.
@@ -131,6 +201,8 @@ categories:
       set_campaign_status: Pause or enable a campaign.
       update_campaign_budget: Change daily budget amount.
       update_campaign_targeting_setting: Replace campaign targeting restrictions for dimensions like AUDIENCE or KEYWORD.
+      add_campaign_location_targets: Add explicit geo_target_ids as targets or exclusions using required negative, with optional validate_only and partial_failure.
+      remove_campaign_location_targets: Verify and remove campaign LOCATION criterion_ids, with optional validate_only and partial_failure.
       set_campaign_view_through_conversion_optimization: Enable or disable view-through conversion optimization on eligible campaigns.
       list_campaign_audiences: List campaign-level audience criteria with resource names ready for copying.
       diff_campaign_audiences: Compare two campaigns and return missing/common/target-only audiences.
@@ -139,9 +211,10 @@ categories:
       remove_campaign_audiences: Remove campaign audience criteria by criterion ID.
 
   audiences:
-    summary: Discover or create audience resources.
+    summary: Discover audiences, summarize Customer Match jobs, or create resources.
     tools:
       search_user_interests: Search affinity and in-market user-interest taxonomy nodes with add_campaign_audiences-ready resource names.
+      summarize_customer_match_jobs: Complete available jobs by list name, status, match-rate bucket, and failure reason, with highest-ID heuristic previews and exact exports.
       create_audience: Create a customer-scope audience resource with AND/OR include logic and optional user-list exclusions.
 
   ad_groups:
@@ -188,16 +261,28 @@ categories:
       manage_ad_group_labels: Attach or detach labels on ad groups.
 
   planning:
-    summary: Keyword ideation before build or expansion.
+    summary: Keyword ideas, benchmarks, creator insights, and reach forecasts.
     tools:
       generate_keyword_ideas: Keyword Planner ideas with search volume and bids.
+      list_benchmarks_available_dates: Native available dates, including the narrower supported_dates_for_all_metrics coverage.
+      list_benchmarks_sources: Native benchmark source and category discovery.
+      list_benchmarks_locations: Native benchmark location discovery.
+      list_benchmarks_products: Native benchmark product discovery.
+      generate_benchmarks_metrics: Native category, aggregate, share, rate, and percentile-tier metrics; unavailable values remain absent.
+      generate_creator_insights: Native creator insights by topics, channels, or handles, with optional brand sentiment and consent-dependent channel statistics.
+      generate_trending_insights: Native trending video and related-channel information, with optional supplemental and location data.
+      list_audience_insights_attributes: Native audience/topic attribute discovery for insight requests.
+      generate_reach_forecast: Native reach forecast with plannable_location_ids, cookie_frequency_cap_setting, and supported parental-status targeting.
+      list_plannable_products: Native supported products and targeting options for reach forecasts.
+      list_plannable_locations: Native supported reach-planning location discovery.
 
   smart_campaigns:
-    summary: Smart Campaign suggestion helpers.
+    summary: Smart Campaign suggestions and validation-default PMax drafts.
     tools:
       suggest_keyword_themes: Suggest Smart Campaign keyword themes.
       suggest_smart_campaign_ad: Suggest Smart Campaign ad copy.
       suggest_smart_campaign_budget: Suggest Smart Campaign budget.
+      generate_pmax_draft_campaign: Validate Smart-to-PMax conversion by default; explicit execution creates a PAUSED, INCOMPLETE draft and never enables it. GBP/image flags must be false.
 
   search_terms:
     summary: Search term insights and heuristic candidate generation.
@@ -210,8 +295,8 @@ categories:
   simulations:
     summary: Forecast bid and budget tradeoffs before changing settings.
     tools:
-      list_campaign_simulations: Campaign-level simulations. Add simulation_type for point lists.
-      list_ad_group_simulations: Ad-group-level simulations. Add simulation_type for point lists.
+      list_campaign_simulations: Campaign-level simulations with every supported point list by default; simulation_type narrows the output. Forecast calibration remains analyst judgment.
+      list_ad_group_simulations: Ad-group-level simulations with every supported point list by default; simulation_type narrows the output.
       list_ad_group_criterion_simulations: Keyword-level CPC bid simulations.
 
   change_history:
@@ -228,3 +313,29 @@ categories:
       list_asset_group_assets: Asset performance and serving diagnostics.
       list_asset_group_top_combinations: Top served asset combinations.
       list_performance_max_placements: Placement names and impression counts.
+
+  assets:
+    summary: Focused asset URL, automated video crawl, and advertiser attestations.
+    tools:
+      update_asset_group_url_options: Validate or update tracking_url_template, url_custom_parameters, and final_url_suffix; omitted fields are preserved and empty values clear.
+      update_campaign_video_crawl_settings: Validate or replace AUTOMATED_VIDEO_CRAWL sources after reading and preserving other campaign automation settings; concurrent edits require care.
+      update_ad_synthetic_content_info: Validate or update the advertiser attestation on an ad while preserving Google's system attestation.
+      update_asset_synthetic_content_info: Validate or update the advertiser attestation on an eligible asset while preserving Google's system attestation.
+
+  goals:
+    summary: Unified lifecycle goals and campaign configuration mutations.
+    tools:
+      mutate_goals: Validate by default, or create/update typed retention, NCA, and loyalty-retention goals with native value/multiplier oneofs and partial-failure support.
+      mutate_campaign_goal_configs: Validate by default, or create/update/remove typed campaign-goal settings and overrides; authorized conversion-owner goal references remain supported.
+
+  resources:
+    summary: Typed changes to the fixed native resource families.
+    tools:
+      mutate_ads_resources: Validate by default, or apply native asset/ad/ad-group/campaign/customer/conversion/experiment operations with masks, account ownership checks, and partial-failure details; unified goals use dedicated tools.
+
+  account_services:
+    summary: Incentive offers/redemption and product-link invitations.
+    tools:
+      fetch_incentives: Fetch native incentive offers with incentive_type; this request has no customer_id field.
+      apply_incentive: Redeem an explicit selected_incentive_id for customer_id; this API has no validate-only and is never retried.
+      create_product_link_invitation: Create an explicit native product-link invitation; advertising partners require allowed_domain. This API has no validate-only and is never retried.

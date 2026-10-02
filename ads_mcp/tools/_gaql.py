@@ -16,6 +16,7 @@
 
 from datetime import date
 from datetime import timedelta
+import difflib
 import functools
 import json
 import math
@@ -145,6 +146,59 @@ _ALLOWED_UNIQUE_USER_SEGMENTS = {
     "segments.date",
     "segments.device",
 }
+_REMOVED_FIELD_ALTERNATIVES = {
+    "local_services_lead.contact_details.email": (
+        "local_services_lead.contact_details",
+    ),
+    "campaign.start_date": ("campaign.start_date_time",),
+    "campaign.end_date": ("campaign.end_date_time",),
+    "campaign.url_expansion_opt_out": ("campaign.asset_automation_settings",),
+    "asset_group_asset.performance_label": (
+        "asset_group_asset.primary_status",
+        "asset_group_asset.primary_status_reasons",
+    ),
+}
+_REMOVED_RESOURCE_ALTERNATIVES = {
+    "campaign_lifecycle_goal": "campaign_goal_config",
+    "customer_lifecycle_goal": "goal",
+}
+_CONTEXT_FIELD_ALTERNATIVES = {
+    ("keyword_view", "segments.keyword.info.text"): (
+        "ad_group_criterion.keyword.text",
+    ),
+    ("campaign_simulation", "campaign_simulation.target_cpa_point_list"): (
+        "campaign_simulation.target_cpa_point_list.points",
+    ),
+}
+_VALIDATION_ERROR_BYTE_LIMIT = 16384
+
+
+def _raise_validation_errors(errors: list[str]) -> None:
+  """Reports independent known problems together with a bounded message."""
+  unique_errors = list(dict.fromkeys(errors))
+  if not unique_errors:
+    return
+  parts = []
+  used_bytes = 0
+  for index, error in enumerate(unique_errors):
+    error_bytes = error.encode("utf-8")
+    # Reserve space for an explicit omitted-diagnostic count.
+    if used_bytes + len(error_bytes) + 1 > _VALIDATION_ERROR_BYTE_LIMIT - 160:
+      if not parts:
+        parts.append(
+            error_bytes[: _VALIDATION_ERROR_BYTE_LIMIT - 160].decode(
+                "utf-8", errors="ignore"
+            )
+        )
+      parts.append(
+          f"{len(unique_errors) - index} additional validation diagnostics "
+          "were omitted to keep this error bounded. Correct the listed "
+          "problems and validate again."
+      )
+      break
+    parts.append(error)
+    used_bytes += len(error_bytes) + 1
+  raise ToolError("\n".join(parts))
 
 
 def gaql_quote_string(value: str) -> str:
@@ -219,6 +273,28 @@ def normalize_date_range_literal(date_range: str) -> str:
         f"Invalid date_range: {date_range}. Use a supported date range."
     )
   return normalized_date_range
+
+
+def validate_date_range_literal(date_range: str) -> str:
+  """Validates supported named ranges without resolving a calendar date."""
+  literal = normalize_date_range_literal(date_range)
+  match = re.fullmatch(r"LAST_(\d+)_DAYS", literal)
+  if match:
+    digits = match[1].lstrip("0") or "0"
+    if digits == "0":
+      raise ToolError("LAST_N_DAYS date ranges must be greater than 0.")
+    if len(digits) > 4 or int(digits) > _MAX_EXTENDED_LAST_N_DAYS:
+      raise ToolError(
+          "LAST_N_DAYS date ranges must be "
+          f"{_MAX_EXTENDED_LAST_N_DAYS} days or fewer."
+      )
+  elif literal not in ACCEPTED_DATE_RANGE_FUNCTIONS:
+    raise ToolError(
+        f"Invalid date_range: {date_range}. Use one of: "
+        + ", ".join(sorted(ACCEPTED_DATE_RANGE_FUNCTIONS))
+        + " or {'start_date': 'YYYY-MM-DD', 'end_date': 'YYYY-MM-DD'}."
+    )
+  return literal
 
 
 def normalize_list_arg(value: Any, field_name: str) -> list[Any]:
@@ -324,6 +400,7 @@ def _literal_date_bounds(
     date_range: str,
     today: date | None = None,
 ) -> tuple[date, date] | None:
+  date_range = validate_date_range_literal(date_range)
   today = today or date.today()
   yesterday = today - timedelta(days=1)
   if date_range == "TODAY":
@@ -332,14 +409,7 @@ def _literal_date_bounds(
     return yesterday, yesterday
   match = re.fullmatch(r"LAST_(\d+)_DAYS", date_range)
   if match:
-    days = int(match.group(1))
-    if days <= 0:
-      raise ToolError("LAST_N_DAYS date ranges must be greater than 0.")
-    if days > _MAX_EXTENDED_LAST_N_DAYS:
-      raise ToolError(
-          "LAST_N_DAYS date ranges must be "
-          f"{_MAX_EXTENDED_LAST_N_DAYS} days or fewer."
-      )
+    days = int(match.group(1).lstrip("0"))
     return today - timedelta(days=days), yesterday
   if date_range == "THIS_MONTH":
     return _month_start(today), today
@@ -549,7 +619,7 @@ def _order_by_body_span(query: str) -> tuple[int, int] | None:
 
 @functools.lru_cache(maxsize=1)
 def _load_enum_field_values() -> dict[str, tuple[str, ...]]:
-  """Loads field-level enum values from generated v24 field metadata."""
+  """Loads field-level enum values from generated v25 field metadata."""
   try:
     with open(_FIELDS_METADATA_PATH, "r", encoding="utf-8") as fields_file:
       fields = yaml.safe_load(fields_file) or {}
@@ -678,10 +748,16 @@ def _canonical_enum_filter_value(
     items = _split_gaql_list_items(stripped_value[1:-1])
     if not items:
       raise ToolError(f"{field_name} {operator} enum list cannot be empty.")
-    canonical_items = [
-        _canonical_enum_literal(field_name, item, allowed_values)
-        for item in items
-    ]
+    canonical_items = []
+    errors = []
+    for item in items:
+      try:
+        canonical_items.append(
+            _canonical_enum_literal(field_name, item, allowed_values)
+        )
+      except ToolError as error:
+        errors.append(str(error))
+    _raise_validation_errors(errors)
     canonical_list = ", ".join(canonical_items)
     return f"({canonical_list})"
   return _canonical_enum_literal(field_name, value, allowed_values)
@@ -693,15 +769,23 @@ def normalize_gaql_enum_literals(query: str) -> str:
   Unknown fields and non-enum fields are left untouched so custom valid GAQL is
   not blocked by incomplete local parsing.
   """
+  query, errors = _normalize_gaql_enum_literals(query)
+  _raise_validation_errors(errors)
+  return query
+
+
+def _normalize_gaql_enum_literals(query: str) -> tuple[str, list[str]]:
+  """Collects enum failures while preserving every valid canonicalization."""
   where_span = _where_body_span(query)
   if where_span is None:
-    return query
+    return query, []
 
   enum_fields = _load_enum_field_values()
   if not enum_fields:
-    return query
+    return query, []
 
   replacements = []
+  errors = []
   where_offset, where_end = where_span
   where_body = query[where_offset:where_end]
   string_spans = [
@@ -717,12 +801,16 @@ def normalize_gaql_enum_literals(query: str) -> str:
       continue
 
     value = enum_filter_match.group("value")
-    canonical_value = _canonical_enum_filter_value(
-        field_name,
-        enum_filter_match.group("operator"),
-        value,
-        allowed_values,
-    )
+    try:
+      canonical_value = _canonical_enum_filter_value(
+          field_name,
+          enum_filter_match.group("operator"),
+          value,
+          allowed_values,
+      )
+    except ToolError as error:
+      errors.append(str(error))
+      continue
     value_start = where_offset + enum_filter_match.start("value")
     value_end = where_offset + enum_filter_match.end("value")
     if canonical_value != value:
@@ -730,7 +818,7 @@ def normalize_gaql_enum_literals(query: str) -> str:
 
   for start, end, replacement in sorted(replacements, reverse=True):
     query = query[:start] + replacement + query[end:]
-  return query
+  return query, errors
 
 
 @functools.lru_cache(maxsize=None)
@@ -806,46 +894,186 @@ def _compatible_fields_text(
   metric_count = len(field_sets["metrics"])
   return (
       f"Use get_reporting_view_doc({resource_name!r}) for compatible fields. "
-      f"Local v24 metadata has {attribute_count} attributes, "
+      f"Local v25 metadata has {attribute_count} attributes, "
       f"{segment_count} segments, and {metric_count} metrics for this "
       "resource."
   )
 
 
+@functools.lru_cache(maxsize=1)
+def _load_field_metadata() -> dict[str, dict[str, Any]]:
+  """Loads canonical field names and types; absence is not invalidity."""
+  try:
+    with open(_FIELDS_METADATA_PATH, encoding="utf-8") as stream:
+      return yaml.safe_load(stream) or {}
+  except FileNotFoundError:
+    return {}
+
+
+def _field_recovery_hint(
+    field_name: str, compatible_fields: frozenset[str], resource_name: str
+) -> str:
+  """Suggests only verified alternatives, never an automatic substitution."""
+  alternatives = [
+      field
+      for field in (
+          _CONTEXT_FIELD_ALTERNATIVES.get((resource_name, field_name))
+          or _REMOVED_FIELD_ALTERNATIVES.get(field_name, ())
+      )
+      if field in compatible_fields
+  ]
+  if not alternatives:
+    prefix, _, leaf = field_name.rpartition(".")
+    candidates = sorted(
+        field
+        for field in compatible_fields
+        if field.rpartition(".")[0] == prefix
+        and set(leaf.split("_")) & set(field.rpartition(".")[2].split("_"))
+    )
+    alternatives = difflib.get_close_matches(
+        field_name, candidates, n=3, cutoff=0.72
+    )
+  hint = ""
+  if field_name in _REMOVED_FIELD_ALTERNATIVES:
+    hint += " This field is unavailable in v25."
+  if (resource_name, field_name) == (
+      "campaign_simulation",
+      "campaign_simulation.target_cpa_point_list",
+  ):
+    hint += " The parent message is not a selectable v25 field path."
+  if alternatives:
+    hint += (
+        " Selectable alternatives (not equivalent replacements): "
+        + ", ".join(alternatives[:3])
+        + "."
+    )
+  if field_name not in _REMOVED_FIELD_ALTERNATIVES:
+    # The field's own resource is the smallest useful verified alternative.
+    resource = field_name.split(".", 1)[0]
+    field_sets = _load_resource_field_sets(resource)
+    if field_sets and field_name in frozenset().union(*field_sets.values()):
+      hint += f" This exact field is selectable FROM {resource}."
+  return hint + " "
+
+
+def _validate_empty_resource_references(query: str) -> None:
+  """Rejects empty resource predicates without silently broadening queries."""
+  span = _where_body_span(query)
+  if span is None:
+    return
+  start, end = span
+  body = query[start:end]
+  masked_body = _blank_string_literals(body)
+  metadata = _load_field_metadata()
+  for match in _ENUM_FILTER_PATTERN.finditer(body):
+    field_name = match.group("field").lower()
+    if not masked_body[match.start() : match.end()].strip():
+      continue
+    if metadata.get(field_name, {}).get("data_type") != "RESOURCE_NAME":
+      continue
+    if match.group("operator") not in ("=", "!=", "<>"):
+      continue
+    if match.group("value") not in ("''", '""'):
+      continue
+    before, after = body[: match.start()], body[match.end() :]
+    # Only construct a candidate for a complete top-level AND predicate.
+    trailing_and = re.search(
+        r"\bAND\s*$", _blank_string_literals(before), re.I
+    )
+    leading_and = re.match(r"\s*AND\b", after, re.I)
+    if trailing_and:
+      candidate_body = before[: trailing_and.start()] + after
+    elif leading_and:
+      candidate_body = before + after[leading_and.end() :]
+    elif not before.strip() and not after.strip():
+      candidate_body = ""
+    else:
+      candidate_body = None
+    hint = " Remove that complete predicate explicitly and filter client-side."
+    if candidate_body is not None:
+      where_keyword_start = start - len("WHERE")
+      candidate = (
+          query[:where_keyword_start]
+          + (
+              "WHERE " + candidate_body.strip() + " "
+              if candidate_body.strip()
+              else ""
+          )
+          + query[end:]
+      ).strip()
+      if len(candidate) <= 2000:
+        hint += (
+            " Candidate query (broader results requiring client-side "
+            f"filtering): {candidate}"
+        )
+      else:
+        hint += (
+            " Removing it produces broader results; the candidate query "
+            "is too large to inline."
+        )
+    empty_literal = match.group("value")
+    raise ToolError(
+        f"{field_name} cannot be compared to an empty resource name "
+        f"({empty_literal})." + hint
+    )
+
+
 def validate_gaql_field_compatibility(query: str) -> None:
   """Validates selected, filtered, and sorted fields against FROM metadata.
 
-  The checked-in v24 view metadata is generated from Google Ads field metadata
+  The checked-in v25 view metadata is generated from Google Ads field metadata
   and encodes the attribute resources, segments, and metrics selectable with
   each FROM resource. Unknown FROM resources are left to Google Ads so custom
   future-valid GAQL is not blocked by local metadata gaps.
   """
+  _raise_validation_errors(_field_compatibility_errors(query))
+
+
+def _field_compatibility_errors(query: str) -> list[str]:
+  """Collects known field and pairwise problems without rejecting gaps."""
   resource_name = _query_from_resource(query)
   if not resource_name:
-    return
+    return []
 
   field_sets = _load_resource_field_sets(resource_name)
   if field_sets is None:
-    return
+    return []
 
   compatible_fields = frozenset().union(*field_sets.values())
   referenced_fields = _unique_field_order(
       _selected_fields(query) + _referenced_filter_and_order_fields(query)
   )
+  errors = []
+  metadata = _load_field_metadata()
   for field_name in referenced_fields:
     if field_name in compatible_fields:
       continue
-    raise ToolError(
+    if (
+        field_name not in metadata
+        and field_name not in _REMOVED_FIELD_ALTERNATIVES
+        and (resource_name, field_name) not in _CONTEXT_FIELD_ALTERNATIVES
+    ):
+      continue
+    errors.append(
         f"{field_name} is not compatible with FROM {resource_name}. "
-        + _compatible_fields_text(resource_name, field_sets)
+        + _field_recovery_hint(field_name, compatible_fields, resource_name)
     )
-  _validate_pairwise_field_compatibility(resource_name, referenced_fields)
+  if errors:
+    errors.append(_compatible_fields_text(resource_name, field_sets))
+  # Pairwise metadata cannot prove unknown future fields incompatible either.
+  errors.extend(
+      _pairwise_field_compatibility_errors(
+          resource_name,
+          [field for field in referenced_fields if field in compatible_fields],
+      )
+  )
+  return errors
 
 
-def _validate_pairwise_field_compatibility(
+def _pairwise_field_compatibility_errors(
     resource_name: str,
     referenced_fields: list[str],
-) -> None:
+) -> list[str]:
   """Validates generated and compact local pairwise compatibility rules."""
   metrics = [
       field for field in referenced_fields if field.startswith("metrics.")
@@ -854,6 +1082,7 @@ def _validate_pairwise_field_compatibility(
       field for field in referenced_fields if field.startswith("segments.")
   ]
   generated_compatibility = _load_segment_metric_compatibility()
+  errors = []
   for segment in segments:
     compatible_metrics = generated_compatibility.get(segment)
     if compatible_metrics is None:
@@ -867,7 +1096,7 @@ def _validate_pairwise_field_compatibility(
           if compatible_preview
           else ""
       )
-      raise ToolError(
+      errors.append(
           f"{metric} is not selectable with {segment}. Split the conflicting "
           f"fields into separate GAQL queries for FROM {resource_name} and "
           "join them on shared resource and date dimensions."
@@ -876,16 +1105,18 @@ def _validate_pairwise_field_compatibility(
 
   unique_user_metrics = sorted(set(metrics) & _UNIQUE_USER_METRICS)
   if not unique_user_metrics:
-    return
+    return errors
 
   incompatible_segments = sorted(set(segments) - _ALLOWED_UNIQUE_USER_SEGMENTS)
   if incompatible_segments:
-    raise ToolError(
-        f"{unique_user_metrics[0]} is not selectable with "
-        + ", ".join(incompatible_segments)
-        + ". Drop the incompatible segment or use get_reporting_view_doc for "
-        "compatible metric/segment combinations."
-    )
+    for metric in unique_user_metrics:
+      errors.append(
+          f"{metric} is not selectable with "
+          + ", ".join(incompatible_segments)
+          + ". Drop the incompatible segment or use get_reporting_view_doc "
+          "for compatible metric/segment combinations."
+      )
+  return errors
 
 
 def _referenced_filter_and_order_fields(query: str) -> list[str]:
@@ -959,10 +1190,15 @@ def _add_missing_referenced_select_fields(query: str) -> str:
     return query
 
   selected_fields = set(_split_select_fields(select_match.group("select")))
+  field_sets = _load_resource_field_sets(_query_from_resource(query) or "")
+  segments = field_sets["segments"] if field_sets is not None else frozenset()
   missing_fields = [
       field
       for field in _referenced_filter_and_order_fields(query)
-      if field.startswith("segments.")
+      if (
+          field in segments
+          or (field_sets is None and field.startswith("segments."))
+      )
       and field not in selected_fields
       and field not in _CORE_DATE_SEGMENTS
   ]
@@ -983,6 +1219,21 @@ def _preflight_gaql(query: str) -> str:
     raise ToolError("query must be a non-empty GAQL string.")
 
   query_without_literals = _query_without_string_literals(query)
+  resources = {
+      _query_from_resource(query),
+      *(
+          field.split(".", 1)[0]
+          for field in _FIELD_TOKEN_PATTERN.findall(query_without_literals)
+      ),
+  }
+  for resource, replacement in _REMOVED_RESOURCE_ALTERNATIVES.items():
+    if resource in resources:
+      raise ToolError(
+          f"{resource} was removed in Google Ads API v25. Use "
+          f"FROM {replacement} and its unified goal fields, or call "
+          "get_campaign_settings. The new schema requires different field "
+          "paths; the query is not rewritten automatically."
+      )
   if _AGGREGATE_PATTERN.search(query_without_literals):
     raise ToolError(
         "GAQL does not support aggregate functions or GROUP BY. Select raw "
@@ -991,9 +1242,15 @@ def _preflight_gaql(query: str) -> str:
   _validate_or_compatibility(query_without_literals)
 
   query = rewrite_gaql_date_ranges(query)
-  query = normalize_gaql_enum_literals(query)
-  validate_gaql_field_compatibility(query)
-  return _add_missing_referenced_select_fields(query)
+  query, errors = _normalize_gaql_enum_literals(query)
+  try:
+    _validate_empty_resource_references(query)
+  except ToolError as error:
+    errors.append(str(error))
+  query = _add_missing_referenced_select_fields(query)
+  errors.extend(_field_compatibility_errors(query))
+  _raise_validation_errors(errors)
+  return query
 
 
 def _append_omit_unselected_resource_names_parameter(query: str) -> str:
@@ -1014,6 +1271,34 @@ def preprocess_gaql_query(query: str) -> str:
   """Preprocesses GAQL for safer, lower-retry execution."""
   query = _preflight_gaql(query)
   return _append_omit_unselected_resource_names_parameter(query)
+
+
+def prepare_gaql_query(query: str) -> tuple[str, dict[str, Any]]:
+  """Preserves the string preprocessor contract while exposing SELECT fixes."""
+  executed_query = preprocess_gaql_query(query)
+  original_fields = set(_selected_fields(query))
+  additions = [
+      field
+      for field in _selected_fields(executed_query)
+      if field not in original_fields
+  ]
+  if not additions:
+    return executed_query, {}
+  return executed_query, {
+      "original_query": query,
+      "executed_query": executed_query,
+      "query_adjustments": [
+          {
+              "rule": "required_select_field",
+              "field": field,
+              "reason": (
+                  "Referenced segment required in SELECT by "
+                  "FROM-specific v25 metadata."
+              ),
+          }
+          for field in additions
+      ],
+  }
 
 
 def quote_int_values(values: list[str], field_name: str = "values") -> str:

@@ -23,6 +23,8 @@ import contextlib
 from contextvars import ContextVar
 import csv
 from copy import deepcopy
+from datetime import date
+from datetime import datetime
 import difflib
 import functools
 import hashlib
@@ -38,14 +40,16 @@ import threading
 import time
 from typing import Any
 import uuid
+from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfoNotFoundError
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.util import get_nested_attr
-from google.ads.googleads.v24.services.services.customer_service import CustomerServiceClient
-from google.ads.googleads.v24.services.services.google_ads_service import GoogleAdsServiceClient
+from google.ads.googleads.v25.services.services.customer_service import CustomerServiceClient
+from google.ads.googleads.v25.services.services.google_ads_service import GoogleAdsServiceClient
 from google.protobuf.field_mask_pb2 import FieldMask
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtobufMessage
@@ -55,9 +59,13 @@ import proto
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.api_version import API_VERSION
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_write_tool
+from ads_mcp.tools import _gaql
+from ads_mcp.tools import _history
 from ads_mcp.tools._gaql import gaql_quote_string as _gaql_quote_string
+from ads_mcp.tools._gaql import prepare_gaql_query
 from ads_mcp.tools._gaql import preprocess_gaql_query
 from ads_mcp.utils import MODULE_DIR
 from ads_mcp.utils import ROOT_DIR
@@ -70,7 +78,7 @@ _ADS_CLIENTS_MAX_ENTRIES = 8
 _ADS_CLIENTS_CREDENTIALS_MTIME: float | None = None
 _ADS_CLIENTS_CREDENTIALS_PATH: str | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_PAGED_QUERY_CACHE_TTL_SECONDS = 90.0
+_PAGED_QUERY_CACHE_TTL_SECONDS = 15 * 60.0
 _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _PAGED_QUERY_CACHE_MAX_ENTRIES = 16
 _PAGED_QUERY_CACHE_MAX_BYTES = 64 * 1024 * 1024
@@ -82,7 +90,9 @@ INLINE_RESPONSE_BYTE_LIMIT = 48 * 1024
 _MAX_INLINE_PAGE_BYTES = INLINE_PAGE_BYTE_LIMIT
 _SNAPSHOT_TOKEN_PREFIX = "gaql-snapshot-v1:"
 _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX = "materialized-snapshot-v1:"
-_MATERIALIZED_SNAPSHOT_CACHE_TTL_SECONDS = 90.0
+_PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX = "public-schema-snapshot-v1:"
+_PUBLIC_SCHEMA_SNAPSHOT_SCOPE = "public-native-schema"
+_MATERIALIZED_SNAPSHOT_CACHE_TTL_SECONDS = 15 * 60.0
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_ENTRIES = 16
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_BYTES = 32 * 1024 * 1024
@@ -157,6 +167,21 @@ _EXECUTE_GAQL_OUTPUT_SCHEMA = {
         "max_rows_applied": {"type": "integer"},
         "warning_row_threshold": {"type": "integer"},
         "token_efficiency_warning": {"type": "string"},
+        "complete_inline": {"type": "boolean"},
+        "inline_bytes": {"type": "integer"},
+        "inline_byte_limit": {"type": "integer"},
+        "inline_omitted_row_count": {"type": "integer"},
+        "represented_row_count": {"type": "integer"},
+        "bulk_export_call": {"type": "object"},
+        "export_row_count": {"type": "integer"},
+        "export_scope": {"type": "string"},
+        "snapshot_lifetime": {"type": "object"},
+        "ordering_warning": {"type": "string"},
+        "query_adjustments": {"type": ["array", "object"]},
+        "original_query": {"type": ["string", "object"]},
+        "executed_query": {"type": ["string", "null", "object"]},
+        "retention": {"type": "object"},
+        "warnings": {"type": ["array", "object"]},
     },
     "required": ["data"],
 }
@@ -174,6 +199,14 @@ _NON_RETRYABLE_GOOGLE_ADS_ERROR_MARKERS = (
     "RESOURCE_EXHAUSTED",
 )
 _GOOGLE_ADS_ERROR_HINTS = (
+    (
+        ("RESOURCE_NAME_MISSING",),
+        True,
+        "Inspect resource references for empty strings. If a resource-name "
+        "filter compares to '', remove that predicate explicitly and filter "
+        "client-side; removing it broadens results. This is one possible "
+        "cause, not a diagnosis of every RESOURCE_NAME_MISSING error.",
+    ),
     (
         ("PROHIBITED_RESOURCE_TYPE_IN_SELECT",),
         True,
@@ -255,6 +288,9 @@ def _default_ads_assistant() -> str | None:
 def _apply_ads_client_defaults(ads_config: dict[str, Any]) -> dict[str, Any]:
   """Applies compact default client settings for this MCP server."""
   normalized_config = dict(ads_config)
+  # The SDK removed this option in v32. Preserve old credential files while
+  # using the SDK's current authentication behavior.
+  normalized_config.pop("use_cloud_org_for_api_access", None)
   normalized_config["use_proto_plus"] = True
 
   ads_assistant = _default_ads_assistant()
@@ -319,7 +355,7 @@ def _build_ads_client(
   else:
     build_config["login_customer_id"] = key
   try:
-    return GoogleAdsClient.load_from_dict(build_config)
+    return GoogleAdsClient.load_from_dict(build_config, version=API_VERSION)
   except ValueError as exc:
     raise ToolError(f"Invalid Google Ads client config: {exc}") from exc
 
@@ -368,6 +404,7 @@ def get_ads_client(
         developer_token=ads_config.get("developer_token"),
         use_proto_plus=True,
         ads_assistant=ads_config.get("ads_assistant"),
+        version=API_VERSION,
     )
     if login_customer_id:
       client.login_customer_id = login_customer_id
@@ -678,6 +715,87 @@ def preprocess_gaql(query: str) -> str:
   return preprocess_gaql_query(query)
 
 
+@functools.lru_cache(maxsize=128)
+def customer_time_zone_for_credential(
+    credential_scope: str, customer_id: str, login_customer_id: str | None
+) -> ZoneInfo:
+  """Resolves reporting timezone, cached separately for each principal."""
+  del credential_scope
+  rows = run_gaql_query(
+      "SELECT customer.time_zone FROM customer LIMIT 1",
+      customer_id,
+      login_customer_id,
+  )
+  name = rows[0].get("customer.time_zone") if rows else None
+  if not isinstance(name, str) or not name:
+    raise ToolError(
+        "Unable to resolve customer.time_zone for change-history dates."
+    )
+  try:
+    return ZoneInfo(name)
+  except ZoneInfoNotFoundError as exc:
+    raise ToolError(f"Unsupported customer.time_zone: {name}.") from exc
+
+
+def get_customer_time_zone(
+    customer_id: str, login_customer_id: str | None
+) -> ZoneInfo:
+  return customer_time_zone_for_credential(
+      get_ads_credential_cache_scope(), customer_id, login_customer_id
+  )
+
+
+def get_account_calendar(
+    customer_id: str, login_customer_id: str | None
+) -> tuple[date, str]:
+  """Resolves one account-local calendar date, independent of host timezone."""
+  zone = get_customer_time_zone(customer_id, login_customer_id)
+  return datetime.now(zone).date(), zone.key
+
+
+def _prepare_public_gaql(
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+    retention_policy: _history.RetentionPolicy,
+) -> tuple[str | None, dict[str, Any]]:
+  """Combines pure query preparation with account-scoped date resolution."""
+  _history.validate_retention_policy(retention_policy)
+  history_metadata = {}
+  history_query = query
+  resource = (
+      _gaql._query_from_resource(query)  # pylint: disable=protected-access
+      if isinstance(query, str)
+      else None
+  )
+  if resource == "change_event":
+    _history.validate_change_event_query(query)
+    # This pass validates fields and syntax only. Discard its rewrites so named
+    # history dates are still resolved once using the account calendar below.
+    prepare_gaql_query(query)
+    today, zone = get_account_calendar(customer_id, login_customer_id)
+    history_query, history_metadata = _history.prepare_change_event_query(
+        query, today, zone, retention_policy
+    )
+  prepared, metadata = prepare_gaql_query(
+      history_query if history_query is not None else query
+  )
+  if history_metadata:
+    adjustments = history_metadata.get("query_adjustments", []) + metadata.get(
+        "query_adjustments", []
+    )
+    metadata = {
+        **history_metadata,
+        "original_query": query,
+        "executed_query": prepared if history_query is not None else None,
+    }
+    if adjustments:
+      metadata["query_adjustments"] = adjustments
+  return (
+      prepared if metadata else query
+  ) if history_query is not None else None, metadata
+
+
 def _load_known_gaql_field_names() -> tuple[str, ...]:
   """Loads local field metadata for lightweight error suggestions."""
   global _GAQL_FIELD_NAMES_CACHE
@@ -739,7 +857,7 @@ def _format_google_ads_error(error: GoogleAdsException) -> str:
     hints.append(
         "Add "
         f"{referenced_field_match.group(1)} to SELECT; GAQL requires "
-        "filtered or sorted fields to be selected, except core date "
+        "referenced segment fields to be selected, except core date "
         "segments."
     )
 
@@ -826,6 +944,8 @@ def _serialized_json_bytes(value: Any) -> int:
 def _inline_page_plan(
     rows: list[dict[str, Any]],
     page_size: int,
+    *,
+    first_page_only: bool = False,
 ) -> list[dict[str, Any]]:
   """Partitions rows by count and bytes without restricting snapshot export."""
   pages = []
@@ -874,6 +994,8 @@ def _inline_page_plan(
             "byte_limited": byte_limited,
         }
     )
+    if first_page_only:
+      break
   return pages
 
 
@@ -952,6 +1074,8 @@ def build_bounded_materialized_response(
     truncation_note: str,
     artifact_failure_is_error: bool = True,
     defer_artifact_write: bool = False,
+    max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
+    public_schema: bool = False,
 ) -> dict[str, Any]:
   """Bounds materialized arrays and preserves omitted values losslessly.
 
@@ -960,6 +1084,16 @@ def build_bounded_materialized_response(
   local/mutation callers write a temporary CSV; read finalizers defer that
   write and return an exact in-memory snapshot export call instead.
   """
+  if (
+      isinstance(max_bytes, bool)
+      or not isinstance(max_bytes, int)
+      or not 8 * 1024 <= max_bytes <= INLINE_RESPONSE_BYTE_LIMIT
+  ):
+    raise ValueError(
+        "max_bytes must be an integer between 8192 and "
+        f"{INLINE_RESPONSE_BYTE_LIMIT}."
+    )
+  section_byte_limit = min(INLINE_SECTION_BYTE_LIMIT, max_bytes - 8 * 1024)
   section_values = {}
   section_kinds = {}
   for section_key in section_keys:
@@ -979,10 +1113,12 @@ def build_bounded_materialized_response(
           "dict."
       )
 
-  delivery = bound_inline_sections(section_values)
+  delivery = bound_inline_sections(
+      section_values, max_bytes=section_byte_limit
+  )
   bounded_sections = delivery.pop("sections")
   whole_response_too_large = (
-      _serialized_json_bytes(materialized_result) > INLINE_RESPONSE_BYTE_LIMIT
+      _serialized_json_bytes(materialized_result) > max_bytes
   )
   if not delivery["limited"] and not whole_response_too_large:
     return materialized_result
@@ -1029,7 +1165,9 @@ def build_bounded_materialized_response(
     )
   artifact_columns = ["result_type", "result_index", "result"]
   if defer_artifact_write:
-    snapshot_token = _store_materialized_snapshot(artifact_rows)
+    snapshot_token = _store_materialized_snapshot(
+        artifact_rows, public_schema=public_schema
+    )
     artifact = {
         "available": True,
         "row_count": len(artifact_rows),
@@ -1152,13 +1290,10 @@ def build_bounded_materialized_response(
     }
 
   result = _assemble_result(delivery, bounded_sections)
-  section_byte_limit = INLINE_SECTION_BYTE_LIMIT
-  while _serialized_json_bytes(result) > INLINE_RESPONSE_BYTE_LIMIT and any(
+  while _serialized_json_bytes(result) > max_bytes and any(
       bounded_sections.values()
   ):
-    overflow_bytes = (
-        _serialized_json_bytes(result) - INLINE_RESPONSE_BYTE_LIMIT
-    )
+    overflow_bytes = _serialized_json_bytes(result) - max_bytes
     section_byte_limit = max(
         0,
         section_byte_limit - overflow_bytes - 256,
@@ -1175,6 +1310,9 @@ def build_bounded_materialized_response(
 def finalize_bounded_response(
     response: dict[str, Any],
     section_keys: tuple[str, ...],
+    *,
+    max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
+    public_schema: bool = False,
 ) -> dict[str, Any]:
   """Finalizes a variable-cardinality read under one whole-response budget.
 
@@ -1196,6 +1334,8 @@ def finalize_bounded_response(
           "metadata to CSV. Exact source export calls remain valid."
       ),
       defer_artifact_write=True,
+      max_bytes=max_bytes,
+      public_schema=public_schema,
   )
 
 
@@ -1243,6 +1383,40 @@ def format_value(value: Any) -> Any:
   return return_value
 
 
+_LIFT_METRIC_PREFIXES = (
+    "absolute_brand_lift",
+    "brand_lift_",
+    "conversion_lift_",
+    "cost_per_incremental_conversion",
+    "cost_per_lifted_cookie",
+    "fractional_lifted_cookies",
+    "headroom_brand_lift",
+    "incremental_conversion",
+    "relative_brand_lift",
+    "relative_conversion_lift",
+    "relative_conversion_value_lift",
+)
+
+
+def _extract_gaql_field_value(row: Any, field_name: str) -> Any:
+  """Keeps missing lift statistics distinct from zeros in native API rows."""
+  if field_name.startswith("metrics."):
+    metric_name = field_name.removeprefix("metrics.")
+    if metric_name.startswith(_LIFT_METRIC_PREFIXES):
+      native_row = (
+          proto.Message.pb(row) if isinstance(row, proto.Message) else row
+      )
+      metrics = getattr(native_row, "metrics", None)
+      if isinstance(metrics, ProtobufMessage):
+        field = metrics.DESCRIPTOR.fields_by_name.get(metric_name)
+        if field is not None and field.has_presence:
+          # Unavailable p-values must not become zero and imply significance.
+          # A present zero is a distinct API observation and remains zero.
+          if not metrics.HasField(metric_name):
+            return None
+  return format_value(get_nested_attr(row, field_name))
+
+
 def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
   """Converts a Google Ads search stream response into plain dict rows."""
   output = []
@@ -1250,7 +1424,7 @@ def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
     for row in batch.results:
       output.append(
           {
-              field_name: format_value(get_nested_attr(row, field_name))
+              field_name: _extract_gaql_field_value(row, field_name)
               for field_name in batch.field_mask.paths
           }
       )
@@ -1401,9 +1575,15 @@ def _prune_materialized_snapshot_cache_unlocked(now: float) -> None:
     _MATERIALIZED_SNAPSHOT_CACHE.pop(cache_key, None)
 
 
-def _store_materialized_snapshot(rows: list[dict[str, Any]]) -> str:
+def _store_materialized_snapshot(
+    rows: list[dict[str, Any]], *, public_schema: bool = False
+) -> str:
   """Stores one exact read result for a later explicit local-write export."""
-  credential_scope = get_ads_credential_cache_scope()
+  credential_scope = (
+      _PUBLIC_SCHEMA_SNAPSHOT_SCOPE
+      if public_schema
+      else get_ads_credential_cache_scope()
+  )
   snapshot_id = uuid.uuid4().hex
   cache_key = (credential_scope, snapshot_id)
   with _MATERIALIZED_SNAPSHOT_CACHE_LOCK:
@@ -1437,7 +1617,12 @@ def _store_materialized_snapshot(rows: list[dict[str, Any]]) -> str:
     ):
       _, removed_entry = _MATERIALIZED_SNAPSHOT_CACHE.popitem(last=False)
       retained_bytes -= removed_entry[2]
-  return f"{_MATERIALIZED_SNAPSHOT_TOKEN_PREFIX}{snapshot_id}"
+  prefix = (
+      _PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX
+      if public_schema
+      else _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX
+  )
+  return f"{prefix}{snapshot_id}"
 
 
 def _get_materialized_snapshot_rows(
@@ -1449,8 +1634,16 @@ def _get_materialized_snapshot_rows(
         "Invalid materialized snapshot_token. Use the exact export_call "
         "returned by the original read response."
     )
+  public_schema = snapshot_token.startswith(
+      _PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX
+  )
+  prefix = (
+      _PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX
+      if public_schema
+      else _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX
+  )
   match = re.fullmatch(
-      rf"{re.escape(_MATERIALIZED_SNAPSHOT_TOKEN_PREFIX)}([0-9a-f]{{32}})",
+      rf"{re.escape(prefix)}([0-9a-f]{{32}})",
       snapshot_token,
   )
   if not match:
@@ -1458,7 +1651,12 @@ def _get_materialized_snapshot_rows(
         "Invalid materialized snapshot_token. Use the exact export_call "
         "returned by the original read response."
     )
-  cache_key = (get_ads_credential_cache_scope(), match.group(1))
+  credential_scope = (
+      _PUBLIC_SCHEMA_SNAPSHOT_SCOPE
+      if public_schema
+      else get_ads_credential_cache_scope()
+  )
+  cache_key = (credential_scope, match.group(1))
   with _MATERIALIZED_SNAPSHOT_CACHE_LOCK:
     now = time.monotonic()
     _prune_materialized_snapshot_cache_unlocked(now)
@@ -1499,11 +1697,17 @@ class _SpooledGaqlSnapshot:
     self.row_count = row_count
     self.columns = columns
     self._plan_lock = threading.Lock()
+    self.query_metadata: dict[str, Any] = {}
+    self.preparation_metadata: dict[str, Any] = {}
 
   @property
   def serialized_bytes(self) -> int:
     """Returns the current spool size, including materialized page plans."""
-    return os.path.getsize(self.file_path)
+    return (
+        os.path.getsize(self.file_path)
+        + _serialized_json_bytes(self.query_metadata)
+        + _serialized_json_bytes(self.preparation_metadata)
+    )
 
   def __del__(self):
     with contextlib.suppress(OSError):
@@ -1706,6 +1910,16 @@ class _SpooledRows(Sequence[dict[str, Any]]):
   def __len__(self) -> int:
     return self._snapshot.row_count
 
+  @property
+  def query_metadata(self) -> dict[str, Any]:
+    """Returns captured preparation facts without resolving dates again."""
+    return deepcopy(
+        {
+            **self._snapshot.preparation_metadata,
+            **self._snapshot.query_metadata,
+        }
+    )
+
   def __iter__(self) -> Iterator[dict[str, Any]]:
     return self._snapshot.iter_rows()
 
@@ -1861,6 +2075,17 @@ def _get_export_snapshot_rows(snapshot_token: str) -> _SpooledRows:
       "Ads credentials. Call the original list or report tool again without "
       "page_token, then promptly use the new bulk_export_call it returns."
   )
+
+
+def get_gaql_page_metadata(page_token: str | None) -> dict[str, Any]:
+  """Reads bound calendar metadata from an authorized immutable snapshot."""
+  if page_token is None or not re.fullmatch(
+      r"[0-9a-f]{32}:\d+(?::\d+)?", page_token
+  ):
+    return {}
+  snapshot_id, _, _ = _decode_page_token(page_token)
+  rows = _get_export_snapshot_rows(_encode_snapshot_token(snapshot_id))
+  return deepcopy(rows._snapshot.query_metadata)  # pylint: disable=protected-access
 
 
 def _prune_page_cache_unlocked(now: float) -> None:
@@ -2564,7 +2789,7 @@ def _iter_gaql_query_attempt(
   for batch in query_res:
     for row in batch.results:
       yield {
-          field_name: format_value(get_nested_attr(row, field_name))
+          field_name: _extract_gaql_field_value(row, field_name)
           for field_name in batch.field_mask.paths
       }
 
@@ -2574,6 +2799,7 @@ def _build_spooled_gaql_snapshot(
     customer_id: str,
     login_customer_id: str | None,
     row_sort_fields: tuple[str, ...] | None,
+    source_rows: list[dict[str, Any]] | None = None,
 ) -> _SpooledGaqlSnapshot:
   """Streams one retry-safe exact GAQL snapshot into an internal SQLite DB."""
   descriptor, file_path = tempfile.mkstemp(
@@ -2623,11 +2849,16 @@ def _build_spooled_gaql_snapshot(
         columns.clear()
         seen_columns.clear()
         try:
-          for row in _iter_gaql_query_attempt(
-              query=query,
-              customer_id=customer_id,
-              login_customer_id=login_customer_id,
-          ):
+          rows = (
+              _iter_gaql_query_attempt(
+                  query=query,
+                  customer_id=customer_id,
+                  login_customer_id=login_customer_id,
+              )
+              if source_rows is None
+              else source_rows
+          )
+          for row in rows:
             for column in row:
               if column not in seen_columns:
                 seen_columns.add(column)
@@ -2667,7 +2898,13 @@ def _build_spooled_gaql_snapshot(
       ).fetchone()[0]
       connection.execute("DROP TABLE source_rows")
       connection.commit()
-    return _SpooledGaqlSnapshot(file_path, row_count, tuple(columns))
+    snapshot = _SpooledGaqlSnapshot(file_path, row_count, tuple(columns))
+    if source_rows is None:
+      prepared, metadata = prepare_gaql_query(query)
+      if _gaql._query_from_resource(query) == "change_event":  # pylint: disable=protected-access
+        metadata.update({"original_query": query, "executed_query": prepared})
+      snapshot.preparation_metadata = metadata
+    return snapshot
   except BaseException:
     with contextlib.suppress(OSError):
       os.remove(file_path)
@@ -2738,6 +2975,7 @@ def run_gaql_query_page(
     page_token: str | None = None,
     login_customer_id: str | None = None,
     row_sort_fields: tuple[str, ...] | None = None,
+    query_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   """Executes a GAQL query and slices the results into stable pages.
 
@@ -2745,7 +2983,7 @@ def run_gaql_query_page(
   provides a consistent cursor contract for MCP tools by applying client-side
   paging over the full result set. Inline pages are capped independently from
   full-data access. Continuation and export tokens refer to the same immutable
-  result snapshot. Tokens can expire after the cache TTL or normal bounded-LRU
+  result snapshot. Tokens expire after 15 minutes or normal bounded-LRU
   eviction; callers receive a restart hint rather than rows from a different
   result snapshot.
   """
@@ -2762,7 +3000,9 @@ def run_gaql_query_page(
         "page_token."
     )
   query_key = _page_cache_key(
-      query,
+      json.dumps([query, query_metadata], sort_keys=True)
+      if query_metadata
+      else query,
       customer_id,
       login_customer_id,
       row_sort_fields,
@@ -2800,6 +3040,8 @@ def run_gaql_query_page(
         row_sort_fields,
     )
   try:
+    if not requested_snapshot_id and query_metadata:
+      snapshot.query_metadata = deepcopy(query_metadata)
     planned_page = snapshot.page(page_size, offset)
     if planned_page is None:
       raise ToolError(
@@ -2940,6 +3182,7 @@ def build_paginated_list_response(
         "tool": "export_gaql_csv",
         "arguments": {"snapshot_token": snapshot_token},
     }
+    result["snapshot_lifetime"] = _snapshot_lifetime_metadata()
   return result
 
 
@@ -2969,6 +3212,131 @@ def _unbounded_gaql_response(
   return result
 
 
+def _finalize_gaql_response(response: dict[str, Any]) -> dict[str, Any]:
+  """Bounds large raw responses and their preparation metadata together."""
+  if _serialized_json_bytes(response) <= INLINE_RESPONSE_BYTE_LIMIT:
+    return response
+  result = finalize_bounded_response(response, ("data",))
+  result["returned_row_count"] = sum(
+      not is_inline_omission(row) for row in result["data"]
+  )
+  result.setdefault("total_row_count", len(response["data"]))
+  result["complete_inline"] = False
+  result["truncated"] = True
+  result["inline_bytes"] = _serialized_json_bytes(result["data"])
+  if "inline_omitted_row_count" in result:
+    result["inline_omitted_row_count"] = sum(
+        is_inline_omission(row) for row in result["data"]
+    )
+    result["represented_row_count"] = len(result["data"])
+  return result
+
+
+def _snapshot_lifetime_metadata() -> dict[str, Any]:
+  """Describes exact GAQL snapshot retention without promising capacity."""
+  return {
+      "expires_after_seconds": _PAGED_QUERY_CACHE_TTL_SECONDS,
+      "may_be_evicted_earlier": True,
+      "eviction_policy": "Credential-scoped bounded least-recently-used cache.",
+  }
+
+
+def _capture_gaql_response_snapshot(
+    rows: list[dict[str, Any]],
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+    query_metadata: dict[str, Any],
+) -> str:
+  """Captures already retrieved rows without rerunning the reporting query."""
+  snapshot = _build_spooled_gaql_snapshot(
+      query,
+      customer_id,
+      login_customer_id,
+      row_sort_fields=None,
+      source_rows=rows,
+  )
+  snapshot.query_metadata = deepcopy(query_metadata)
+  snapshot_id = uuid.uuid4().hex
+  query_key = _page_cache_key(query, customer_id, login_customer_id)
+  with _PAGED_QUERY_CACHE_LOCK:
+    _publish_page_snapshot_unlocked(query_key, snapshot_id, snapshot)
+  return _encode_snapshot_token(snapshot_id)
+
+
+def _bounded_gaql_response(
+    response: dict[str, Any],
+    rows: list[dict[str, Any]],
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+    query_metadata: dict[str, Any],
+    max_rows: int | None,
+) -> dict[str, Any]:
+  """Bounds inline rows while preserving every retrieved row for export."""
+  if rows:
+    page = _inline_page_plan(
+        rows, max_rows or len(rows), first_page_only=True
+    )[0]
+    inline_rows = page["rows"]
+  else:
+    inline_rows = []
+  incomplete_rows = len(inline_rows) < len(rows) or any(
+      is_inline_omission(row) for row in inline_rows
+  )
+  response["data"] = inline_rows
+  metadata_needs_bounding = (
+      _serialized_json_bytes(response) > INLINE_RESPONSE_BYTE_LIMIT
+  )
+  if incomplete_rows or metadata_needs_bounding:
+    token = _capture_gaql_response_snapshot(
+        rows, query, customer_id, login_customer_id, query_metadata
+    )
+    response.update(
+        {
+            "returned_row_count": sum(
+                not is_inline_omission(row) for row in inline_rows
+            ),
+            "total_row_count": len(rows),
+            "truncated": incomplete_rows,
+            "complete_inline": not incomplete_rows,
+            "inline_bytes": _serialized_json_bytes(inline_rows),
+            "inline_byte_limit": _MAX_INLINE_PAGE_BYTES,
+            "bulk_export_call": {
+                "tool": "export_gaql_csv",
+                "arguments": {"snapshot_token": token},
+            },
+            "export_row_count": len(rows),
+            "export_scope": (
+                "All rows returned by this GAQL query; its LIMIT and Google "
+                "Ads API restrictions still apply. max_rows only caps inline "
+                "rows."
+            ),
+            "snapshot_lifetime": _snapshot_lifetime_metadata(),
+        }
+    )
+    omitted_count = sum(is_inline_omission(row) for row in inline_rows)
+    if omitted_count:
+      response["inline_omitted_row_count"] = omitted_count
+      response["represented_row_count"] = len(inline_rows)
+    if (
+        incomplete_rows or (metadata_needs_bounding and rows)
+    ) and not re.search(
+        r"\bORDER\s+BY\b",
+        _gaql._query_without_string_literals(query),  # pylint: disable=protected-access
+        re.I,
+    ):
+      response["ordering_warning"] = (
+          "Inline rows are an incomplete subset in Google Ads API order. "
+          "Use bulk_export_call for all returned rows before account-wide "
+          "analysis, or add ORDER BY for a ranked subset."
+      )
+  result = _finalize_gaql_response(response)
+  if result.get("returned_row_count", len(rows)) == len(rows):
+    result.pop("ordering_warning", None)
+  return result
+
+
 @ads_read_tool(
     mcp,
     tags={"gaql", "reporting"},
@@ -2983,6 +3351,7 @@ def execute_gaql(
         _DEFAULT_EXECUTE_GAQL_WARNING_ROW_THRESHOLD
     ),
     login_customer_id: str | None = None,
+    retention_policy: _history.RetentionPolicy = "error",
 ) -> dict[str, Any]:
   """Executes a GAQL query to get reporting data.
 
@@ -2990,10 +3359,29 @@ def execute_gaql(
   tool is unclear, then use get_tool_guide, get_gaql_doc, and
   get_reporting_view_doc when a custom GAQL query is needed. Set max_rows to
   cap large result sets without changing the underlying GAQL query.
-  max_results is accepted as an alias for max_rows. Unbounded calls are not
-  truncated, but responses above warning_row_threshold include token-efficiency
-  metadata that recommends max_rows, dedicated paginated tools, or
-  export_gaql_csv.
+  max_results is accepted as an alias for max_rows. Required segment fields
+  are added to SELECT and recorded in query_adjustments. Filters and metrics
+  are never silently removed or replaced. Inline rows are bounded to 32 KiB;
+  incomplete responses provide bulk_export_call for every retrieved row.
+  max_rows does not limit that exact export. Query LIMIT and API restrictions
+  still apply. Snapshots expire after 15 minutes and may be evicted earlier
+  by the credential-scoped bounded cache. Oversized metadata remains available
+  through full_materialized_response_export.
+
+  Args:
+      query: GAQL reporting query.
+      customer_id: Google Ads customer ID.
+      max_rows: Optional explicit inline row cap.
+      max_results: Alias for max_rows.
+      warning_row_threshold: Row count above which to add efficiency guidance.
+      login_customer_id: Optional manager account ID.
+      retention_policy: For change_event, error rejects dates outside the
+          retained 30 account-local days; clamp explicitly intersects them
+          and reports unavailable coverage. A finite interval and LIMIT of
+          1..10000 are required. Unrelated performance queries are unaffected.
+
+  Returns:
+      Rows, applicable query adjustments, and explicit retention coverage.
   """
   _validate_optional_positive_int(max_rows, "max_rows")
   _validate_optional_positive_int(max_results, "max_results")
@@ -3010,22 +3398,42 @@ def execute_gaql(
   if max_rows is None:
     max_rows = max_results
 
-  rows = run_gaql_query(
-      query=query,
-      customer_id=customer_id,
-      login_customer_id=login_customer_id,
+  prepared_query, query_metadata = _prepare_public_gaql(
+      query, customer_id, login_customer_id, retention_policy
   )
+  rows = (
+      []
+      if prepared_query is None
+      else run_gaql_query(
+          query=prepared_query,
+          customer_id=customer_id,
+          login_customer_id=login_customer_id,
+      )
+  )
+  _history.add_result_coverage(query_metadata, len(rows))
   if max_rows is None:
-    return _unbounded_gaql_response(rows, warning_row_threshold)
-
-  returned_rows = rows[:max_rows]
-  return {
-      "data": returned_rows,
-      "returned_row_count": len(returned_rows),
-      "total_row_count": len(rows),
-      "truncated": len(rows) > max_rows,
-      "max_rows_applied": max_rows,
-  }
+    response = {
+        **_unbounded_gaql_response(rows, warning_row_threshold),
+        **query_metadata,
+    }
+  else:
+    response = {
+        "data": rows[:max_rows],
+        "returned_row_count": len(rows[:max_rows]),
+        "total_row_count": len(rows),
+        "truncated": len(rows) > max_rows,
+        "max_rows_applied": max_rows,
+        **query_metadata,
+    }
+  return _bounded_gaql_response(
+      response,
+      rows,
+      prepared_query or query,
+      customer_id,
+      login_customer_id,
+      query_metadata,
+      max_rows,
+  )
 
 
 @local_write_tool(
@@ -3045,7 +3453,8 @@ def export_materialized_response_csv(
   in a read response's full_materialized_response_export.export_call.
 
   Args:
-      snapshot_token: Credential-scoped token from a bounded read response.
+      snapshot_token: Exact token from a bounded response. Account snapshots
+          stay credential-scoped; public native schema tokens need no credentials.
       output_path: Optional destination inside GOOGLE_ADS_MCP_EXPORT_DIR.
       overwrite: Whether to replace an existing explicit output path.
 
@@ -3083,6 +3492,7 @@ def export_gaql_csv(
     max_rows: int | None = None,
     login_customer_id: str | None = None,
     snapshot_token: str | None = None,
+    retention_policy: _history.RetentionPolicy = "error",
 ) -> dict[str, Any]:
   """Exports GAQL query results to a CSV file for bulk extraction.
 
@@ -3103,34 +3513,50 @@ def export_gaql_csv(
           snapshot_token because snapshot exports are always complete.
       login_customer_id: Optional manager account ID.
       snapshot_token: Opaque credential-scoped token from bulk_export_call.
+      retention_policy: For raw change_event queries, error rejects unavailable
+          dates; clamp explicitly intersects them with retained account-local
+          history. Exact snapshot exports reuse captured dates and coverage,
+          never a new retention override.
 
   Returns:
       A dict with the CSV path and export metadata.
   """
   _validate_optional_positive_int(max_rows, "max_rows")
+  _history.validate_retention_policy(retention_policy)
   resolved_output_path = _resolve_export_path(output_path, overwrite)
+  query_metadata = {}
 
   if snapshot_token is not None:
-    if any(
+    if retention_policy != "error" or any(
         value is not None
         for value in (query, customer_id, max_rows, login_customer_id)
     ):
       raise ToolError(
           "Use snapshot_token by itself; query, customer_id, max_rows, and "
-          "login_customer_id are not accepted for exact snapshot exports."
+          "login_customer_id and retention overrides are not accepted for "
+          "exact snapshot exports."
       )
     rows = _get_export_snapshot_rows(snapshot_token)
+    query_metadata = rows.query_metadata
   else:
     if query is None or customer_id is None:
       raise ToolError(
           "query and customer_id are required unless snapshot_token is "
           "provided."
       )
-    rows = run_gaql_query(
-        query=query,
-        customer_id=customer_id,
-        login_customer_id=login_customer_id,
+    prepared_query, query_metadata = _prepare_public_gaql(
+        query, customer_id, login_customer_id, retention_policy
     )
+    rows = (
+        []
+        if prepared_query is None
+        else run_gaql_query(
+            query=prepared_query,
+            customer_id=customer_id,
+            login_customer_id=login_customer_id,
+        )
+    )
+    _history.add_result_coverage(query_metadata, len(rows))
   exported_rows = rows if max_rows is None else rows[:max_rows]
   file_path, columns, bytes_written = _write_csv_rows(
       exported_rows, resolved_output_path, overwrite
@@ -3143,7 +3569,8 @@ def export_gaql_csv(
       "truncated": len(exported_rows) < len(rows),
       "columns": columns,
       "bytes_written": bytes_written,
+      **query_metadata,
   }
   if max_rows is not None:
     result["max_rows_applied"] = max_rows
-  return result
+  return finalize_bounded_response(result, ())

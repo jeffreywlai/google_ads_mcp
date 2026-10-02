@@ -5,15 +5,15 @@ description: '<p>Describes the status of returned resource. ChangeStatus could h
 
   minutes delay to reflect a new change.</p>'
 attributed_views:
-- combined_audience
-- ad_group
-- asset
-- customer
 - campaign_budget
-- asset_group
 - asset_set
-- campaign
 - shared_set
+- campaign
+- combined_audience
+- asset
+- ad_group
+- asset_group
+- customer
 attributes:
 - change_status.ad_group
 - change_status.ad_group_ad
@@ -334,6 +334,7 @@ attributes:
 - asset_group.asset_coverage.ad_strength_action_items
 - asset_group.campaign
 - asset_group.final_mobile_urls
+- asset_group.final_url_suffix
 - asset_group.final_urls
 - asset_group.google_local_services_info.callouts
 - asset_group.google_local_services_info.category_id
@@ -345,6 +346,8 @@ attributes:
 - asset_group.primary_status_reasons
 - asset_group.resource_name
 - asset_group.status
+- asset_group.tracking_url_template
+- asset_group.url_custom_parameters
 - asset_set.business_profile_location_group.dynamic_business_profile_location_group_filter.business_name_filter.business_name
 - asset_set.business_profile_location_group.dynamic_business_profile_location_group_filter.business_name_filter.filter_type
 - asset_set.business_profile_location_group.dynamic_business_profile_location_group_filter.label_filters
@@ -369,6 +372,7 @@ attributes:
 - asset_set.travel_feed_data.subset_id
 - asset_set.travel_feed_data.travel_feed_vertical_type
 - asset_set.type
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -388,6 +392,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -483,6 +488,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -566,6 +572,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 - shared_set.id

@@ -78,7 +78,7 @@ def test_get_view_json_url():
   """Tests the get_view_json_url function."""
   assert (
       generate_views.get_view_json_url("campaign")
-      == "https://gaql-query-builder.uc.r.appspot.com/schemas/v24/campaign.json"
+      == "https://gaql-query-builder.uc.r.appspot.com/schemas/v25/campaign.json"
   )
 
 
@@ -265,7 +265,7 @@ async def test_update_views_yaml_regenerates_all_when_view_file_missing(
   assert (tmp_path / "views" / "ad_group.yaml").is_file()
   assert (tmp_path / "fields.yaml").is_file()
   assert (tmp_path / "segment_metric_compatibility.yaml").is_file()
-  assert (tmp_path / ".api-version").read_text() == "v24"
+  assert (tmp_path / ".api-version").read_text() == "v25"
   assert (
       tmp_path / ".mcp-server-version"
   ).read_text() == generate_views.MCP_SERVER_VERSION

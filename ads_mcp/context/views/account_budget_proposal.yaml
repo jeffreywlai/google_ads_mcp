@@ -14,8 +14,8 @@ description: '<p>An account-level budget proposal.</p>
 
   required and which must remain empty.</p>'
 attributed_views:
-- customer
 - billing_setup
+- customer
 attributes:
 - account_budget_proposal.account_budget
 - account_budget_proposal.approval_date_time
@@ -86,6 +86,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments: []

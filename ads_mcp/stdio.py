@@ -14,55 +14,22 @@
 
 """The server for the Google Ads API MCP."""
 from ads_mcp.coordinator import mcp_server
-from ads_mcp.scripts.generate_views import refresh_view_docs_for_startup
-from ads_mcp.tools import ad_groups
-from ads_mcp.tools import ads
+from ads_mcp.registry import TOOL_MODULES
 from ads_mcp.tools import api
-from ads_mcp.tools import audiences
-from ads_mcp.tools import campaigns
-from ads_mcp.tools import changes
-from ads_mcp.tools import conversions
-from ads_mcp.tools import docs
-from ads_mcp.tools import keyword_planner
-from ads_mcp.tools import keywords
-from ads_mcp.tools import labels
-from ads_mcp.tools import negatives
-from ads_mcp.tools import performance_max
-from ads_mcp.tools import reporting
-from ads_mcp.tools import recommendations
-from ads_mcp.tools import search_terms
-from ads_mcp.tools import simulations
-from ads_mcp.tools import smart_campaigns
+from ads_mcp.diagnostics import enable_diagnostics
+from ads_mcp.scripts.generate_views import refresh_view_docs_for_startup
 
 import dotenv
 
 dotenv.load_dotenv()
 
 
-tools = [
-    ad_groups,
-    ads,
-    api,
-    audiences,
-    campaigns,
-    changes,
-    conversions,
-    docs,
-    keyword_planner,
-    keywords,
-    labels,
-    negatives,
-    performance_max,
-    reporting,
-    recommendations,
-    search_terms,
-    simulations,
-    smart_campaigns,
-]
+tools = TOOL_MODULES
 
 
 def main():
   """Initializes and runs the MCP server."""
+  enable_diagnostics(mcp_server, "stdio")
   refresh_view_docs_for_startup()  # Check and update docs resource
   api.get_ads_client()  # Check Google Ads credentials
   mcp_server.run(

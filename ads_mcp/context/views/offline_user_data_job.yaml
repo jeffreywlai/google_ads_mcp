@@ -9,8 +9,8 @@ description: '<p>A job containing offline user data of store visitors, or user l
 
   GoogleAdsService.Search/SearchStream.</p>'
 attributed_views:
-- customer
 - user_list
+- customer
 attributes:
 - offline_user_data_job.customer_match_user_list_metadata.user_list
 - offline_user_data_job.external_id
@@ -64,6 +64,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 - user_list.access_reason

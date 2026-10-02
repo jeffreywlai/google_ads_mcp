@@ -2,10 +2,10 @@ display_name: Final Url Expansion Asset View
 name: final_url_expansion_asset_view
 description: <p>FinalUrlExpansionAssetView Resource.</p>
 attributed_views:
-- ad_group
-- asset
 - asset_group
+- asset
 - campaign
+- ad_group
 attributes:
 - final_url_expansion_asset_view.ad_group
 - final_url_expansion_asset_view.asset
@@ -313,6 +313,7 @@ attributes:
 - asset_group.asset_coverage.ad_strength_action_items
 - asset_group.campaign
 - asset_group.final_mobile_urls
+- asset_group.final_url_suffix
 - asset_group.final_urls
 - asset_group.google_local_services_info.callouts
 - asset_group.google_local_services_info.category_id
@@ -324,6 +325,9 @@ attributes:
 - asset_group.primary_status_reasons
 - asset_group.resource_name
 - asset_group.status
+- asset_group.tracking_url_template
+- asset_group.url_custom_parameters
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -343,6 +347,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -438,6 +443,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -470,6 +476,30 @@ segments:
 - segments.week
 - segments.year
 metrics:
+- metrics.all_conversions
+- metrics.all_conversions_from_interactions_rate
+- metrics.all_conversions_from_interactions_value_per_interaction
+- metrics.all_conversions_value
+- metrics.all_conversions_value_per_cost
+- metrics.average_cost
+- metrics.average_cpc
+- metrics.clicks
 - metrics.conversions
+- metrics.conversions_from_interactions_rate
+- metrics.conversions_from_interactions_value_per_interaction
 - metrics.conversions_value
+- metrics.conversions_value_per_cost
+- metrics.cost_micros
+- metrics.cost_per_all_conversions
+- metrics.cost_per_conversion
+- metrics.cross_device_conversions
+- metrics.cross_device_conversions_value
+- metrics.ctr
+- metrics.engagement_rate
+- metrics.engagements
 - metrics.impressions
+- metrics.interaction_rate
+- metrics.interactions
+- metrics.value_per_all_conversions
+- metrics.value_per_conversion
+- metrics.view_through_conversions

@@ -61,7 +61,6 @@ campaign_draft
 campaign_goal_config
 campaign_group
 campaign_label
-campaign_lifecycle_goal
 campaign_search_term_insight
 campaign_search_term_view
 campaign_shared_set
@@ -91,7 +90,6 @@ customer_client_link
 customer_conversion_goal
 customer_customizer
 customer_label
-customer_lifecycle_goal
 customer_manager_link
 customer_negative_criterion
 customer_search_term_insight
@@ -132,6 +130,13 @@ landing_page_view
 language_constant
 lead_form_submission_data
 life_event
+lift_measurement_age_range
+lift_measurement_campaign
+lift_measurement_config
+lift_measurement_device
+lift_measurement_flight
+lift_measurement_gender
+lift_measurement_video
 local_services_employee
 local_services_lead
 local_services_lead_conversation
@@ -143,6 +148,7 @@ matched_location_interest_view
 media_file
 mobile_app_category_constant
 mobile_device_constant
+multi_party_auth_review
 offline_conversion_upload_client_summary
 offline_conversion_upload_conversion_action_summary
 offline_user_data_job

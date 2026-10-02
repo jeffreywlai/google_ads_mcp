@@ -3,9 +3,16 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
-[![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
+[![Google Ads API v25.2](https://img.shields.io/badge/Google%20Ads%20API-v25.2-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 111 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 143 tools for querying, managing, and optimizing your ad accounts through natural language.**
+
+Targets Google Ads API **25.2** using the `v25` endpoint and Python SDK 33.
+New fields and enums use the existing query tools and strict native resource
+requests. Dedicated tools cover lifecycle goals, lift studies, planning,
+PMax draft conversion, video crawl, URL options and synthetic attestations.
+See the [migration coverage report](docs/reports/20261002_api_v25_2_migration.md)
+for breaking changes, validation, and the upstream `vertical_ads_item_bid` gap.
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +21,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **111 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **143 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -40,14 +47,35 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (111)
+## 📋 Available Tools (143)
+
+### API 25.2 workflows
+
+| Tools | Purpose |
+| --- | --- |
+| `mutate_ads_resources`, `get_resource_mutation_schema` | Strict native resource changes, including new conversion types, conversion value rules, Demand Gen automation and attribution partners; validates by default |
+| `mutate_goals`, `mutate_campaign_goal_configs` | Unified new-customer, retention and loyalty goals; validates by default |
+| `update_asset_group_url_options`, `update_campaign_video_crawl_settings` | PMax URL and crawl settings; validates by default |
+| `update_ad_synthetic_content_info`, `update_asset_synthetic_content_info` | Advertiser attestations; validates by default |
+| `generate_pmax_draft_campaign` | Validate Smart-to-PMax conversion or create a paused, incomplete draft |
+| `list_lift_measurements` | Study configuration, brand lift and conversion lift across supported dimensions |
+| `get_planning_request_schema` | Exact installed schemas for the planning tools below |
+| `list_benchmarks_available_dates`, `list_benchmarks_sources`, `list_benchmarks_locations`, `list_benchmarks_products`, `generate_benchmarks_metrics` | Benchmark categories, aggregate/share/percentile data and availability |
+| `generate_creator_insights`, `generate_trending_insights`, `list_audience_insights_attributes` | Handles, topics, sentiment, consent-gated creator data and capability discovery |
+| `generate_reach_forecast`, `list_plannable_products`, `list_plannable_locations` | Reach plans with parental status, multiple locations and current frequency caps |
+| `fetch_incentives`, `apply_incentive`, `create_product_link_invitation`, `get_account_service_request_schema` | Current incentive and invitation schemas; redemption and invitation apply directly because these services have no validate-only mode |
+
+`get_campaign_settings` now returns `campaign_goal_configs`, conversion-owner
+`account_goals` and `goal_owner_customer_id`. The removed lifecycle keys and
+resources cannot be used in v25. Incompatible reporting combinations state
+`omitted_metrics`; unavailable benchmark metrics are left absent.
 
 ### 🔍 Query & Discovery
 
 | Tool | Description |
 |------|-------------|
-| `execute_gaql` | Run any GAQL query with formatted results |
-| `export_gaql_csv` | Export GAQL query results to a CSV file for bulk extraction |
+| `execute_gaql` | Run GAQL with required-SELECT repairs, actionable errors, and explicit change-event retention policy |
+| `export_gaql_csv` | Export GAQL or an exact snapshot to CSV, preserving query adjustments and history coverage |
 | `export_materialized_response_csv` | Explicitly write an exact deferred oversized read response returned by another tool |
 | `list_accessible_accounts` | Page through a short-lived, exact in-memory snapshot of accessible accounts without writing files |
 | `export_accessible_accounts_csv` | Explicitly export the exact accessible-account snapshot to CSV |
@@ -56,6 +84,12 @@
 counts, continuation metadata, and an explicit export call instead of the
 legacy bare list. This keeps account discovery read-only while making every
 accessible account available without an unbounded model response.
+
+`execute_gaql` caps inline rows at 32 KiB and the logical response at 48 KiB.
+`max_rows` limits only the preview; `bulk_export_call` preserves all retrieved
+rows without rerunning the query. Query LIMIT and API restrictions still apply.
+MCP can serialize the result as both text and structured content, so the
+transport envelope can exceed the logical-response budget.
 
 ### 📖 Docs & Tool Guidance
 
@@ -102,8 +136,8 @@ accessible account available without an unbounded model response.
 
 | Tool | Description |
 |------|-------------|
-| `list_campaign_simulations` | Campaign-level bid/budget simulations |
-| `list_ad_group_simulations` | Ad-group-level simulations |
+| `list_campaign_simulations` | Campaign-level bid/budget simulations with supported point lists by default |
+| `list_ad_group_simulations` | Ad-group-level simulations with supported point lists by default |
 | `list_ad_group_criterion_simulations` | Keyword-level CPC bid simulations |
 
 ### 🕐 Change History
@@ -111,7 +145,7 @@ accessible account available without an unbounded model response.
 | Tool | Description |
 |------|-------------|
 | `list_change_statuses` | Changed resources and last change timestamps |
-| `list_change_events` | Granular change events with typed resource filters and an optional auto-clamped relative lookback |
+| `list_change_events` | Granular changes with typed filters, inclusive relative lookback, and opt-in clamping for explicit dates |
 | `export_change_history_csv` | Export maximum retrievable change data: daily status slices across 90 days plus a 30-day granular event overlay |
 | `get_change_history_extended` | Preview explicit dates, or 90-day latest-status data plus the 30-day event overlay when dates are omitted |
 
@@ -134,9 +168,12 @@ accessible account available without an unbounded model response.
 | `get_ad_inventory` | Ad creative inventory with optional recent performance |
 | `get_competitive_pressure_report` | Bundled impression-share pressure, auction insights, and change history |
 | `list_device_performance` | Campaign performance segmented by device |
-| `list_geographic_performance` | Campaign performance segmented by geography |
+| `list_geographic_performance` | Campaign performance by geography with API-resolved country names |
 | `list_impression_share` | Campaign impression share metrics |
 | `get_campaign_conversion_goals` | Conversion goals and custom goal config for a campaign |
+| `get_campaign_settings` | Campaign settings, budgets, location names, shared lists, conversion goals, and lifecycle goals in one snapshot |
+| `compare_performance_periods` | Compare explicit nonoverlapping date windows with complete summed metrics and optional DEVICE or physical-user COUNTRY breakdown |
+| `compare_performance_around_changes` | Compare complete retained daily periods around supported campaign/budget change evidence, excluding boundary days |
 | `list_keyword_quality_scores` | Keyword quality score diagnostics |
 | `summarize_keyword_quality_scores` | Quality score distribution summary across campaigns |
 | `list_rsa_ad_strength` | RSA ad strength diagnostics |
@@ -161,6 +198,17 @@ accessible account available without an unbounded model response.
 | `list_travel_feed_asset_sets` | Travel feed asset set configuration and linked feed IDs |
 | `list_retail_filter_shared_criteria` | Tag-based retail filter shared criteria |
 
+`compare_performance_periods(customer_id, campaign_id, periods,
+segment_by=None, login_customer_id=None)` accepts nonoverlapping inclusive
+account-local dates. COUNTRY uses physical-user location and API-resolved
+names; geographic totals can differ from campaign totals.
+`compare_performance_around_changes(customer_id, campaign_id, start_date,
+end_date, segment_by=None, login_customer_id=None)` requires complete days
+within retained granular history. It excludes every supported boundary day and
+disables comparison if change reads reach their cap. Current budget links alone
+do not prove historical association. Neither report establishes causal effects,
+edits inside portfolio strategies, or historical conversion-goal switches.
+
 ### 📢 Campaign Management
 
 | Tool | Description |
@@ -168,6 +216,8 @@ accessible account available without an unbounded model response.
 | `set_campaign_status` | Set a campaign to PAUSED or ENABLED |
 | `update_campaign_budget` | Change a campaign's daily budget |
 | `update_campaign_targeting_setting` | Replace campaign targeting restrictions such as AUDIENCE, KEYWORD, or PLACEMENT |
+| `add_campaign_location_targets` | Add `geo_target_ids` as targets or exclusions using required `negative`, with optional `validate_only` and `partial_failure` |
+| `remove_campaign_location_targets` | Verify and remove campaign LOCATION `criterion_ids`, with optional `validate_only` and `partial_failure` |
 | `set_campaign_view_through_conversion_optimization` | Enable or disable view-through conversion optimization |
 | `add_campaign_audiences` | Add supported campaign audience criteria with partial failure handling |
 | `remove_campaign_audiences` | Remove campaign audience criteria by criterion ID |
@@ -175,12 +225,25 @@ accessible account available without an unbounded model response.
 | `diff_campaign_audiences` | Compare two campaigns' audiences and return copy-ready differences |
 | `copy_audiences_between_campaigns` | Copy missing audiences from a source campaign to a target (dry-run by default) |
 
+Location removals take attachment criterion IDs from `get_campaign_settings`,
+not geo target IDs. Additions require `negative=false` for targets or `true`
+for exclusions. Both tools validate inputs and retain mutation visibility rules.
+
 ### 👥 Audience Management
 
 | Tool | Description |
 |------|-------------|
 | `create_audience` | Create a modern `audience` resource with AND/OR include logic and optional user-list exclusions |
 | `search_user_interests` | Search user-interest taxonomy nodes (AFFINITY, IN_MARKET, etc.) for audience targeting |
+| `summarize_customer_match_jobs` | Complete available job counts by list name, status, match-rate bucket, and failure reason, with highest-ID previews and exact exports |
+
+`summarize_customer_match_jobs(customer_id, user_list_ids=None,
+jobs_per_list=5, login_customer_id=None)` counts all matching jobs before
+selecting previews. v25.2 exposes no Customer Match creation/upload timestamp,
+so highest numeric IDs are a labeled recency heuristic. Match-rate buckets are
+not exact or volume-weighted rates. Offline conversion upload health uses the
+separate upload summary tools. Large summaries have a 32 KiB logical-response
+budget and exact deferred export; the source CSV includes every retrieved job.
 
 Note: `create_audience` creates the modern `audience` resource, not legacy `combined_audience` rows. The current campaign attachment tool still targets the campaign criterion types exposed by `CampaignCriterion`, so it does not accept `type="AUDIENCE"`.
 
@@ -343,6 +406,12 @@ control the new hardening and resumability behavior:
 - `GOOGLE_ADS_ADS_ASSISTANT`: Override the Google Ads request tag. By default,
   the server sends a compact `google-ads-mcp-<version>` tag automatically.
 
+For either transport, set `GOOGLE_ADS_MCP_DIAGNOSTICS=1` to record startup
+package versions/build fingerprint, tool timing, exception class, and result
+envelope bytes on stderr. These optional records omit arguments, payloads,
+credentials, and error messages. Result bytes include MCP text/structured
+duplication before transport framing; they are not the logical-response limit.
+
 ## 💬 Usage Examples
 
 Once connected, just talk naturally:
@@ -474,6 +543,10 @@ google_ads_mcp/
 │   │   ├── labels.py          # Label CRUD & assignment
 │   │   ├── keyword_planner.py # Keyword research
 │   │   ├── smart_campaigns.py # Smart campaign suggestions
+│   │   ├── planning.py        # Benchmarks, reach and creator insights
+│   │   ├── resources.py       # Strict native resource mutations
+│   │   ├── assets.py          # PMax options and attestations
+│   │   ├── goals.py           # Unified lifecycle goal mutations
 │   │   ├── recommendations.py # Optimization score & recommendations
 │   │   ├── search_terms.py    # Search term insights & analysis
 │   │   ├── simulations.py     # Bid & budget simulations
@@ -522,4 +595,4 @@ Questions, suggestions, or feedback? [Open an issue](../../issues).
 
 ---
 
-**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v24](https://developers.google.com/google-ads/api/docs/start)**
+**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v25.2](https://developers.google.com/google-ads/api/docs/start)**

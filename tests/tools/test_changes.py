@@ -68,20 +68,20 @@ def mock_account_today():
       return_value=(date.today(), "Etc/UTC"),
   ):
     yield
-  changes._customer_time_zone_for_credential.cache_clear()  # pylint: disable=protected-access
+  api.customer_time_zone_for_credential.cache_clear()
 
 
 def test_customer_time_zone_is_queried_and_validated():
-  changes._customer_time_zone_for_credential.cache_clear()  # pylint: disable=protected-access
+  api.customer_time_zone_for_credential.cache_clear()
   with mock.patch(
-      "ads_mcp.tools.changes.get_ads_credential_cache_scope",
+      "ads_mcp.tools.api.get_ads_credential_cache_scope",
       return_value="test-credentials",
   ):
     with mock.patch(
-        "ads_mcp.tools.changes.run_gaql_query",
+        "ads_mcp.tools.api.run_gaql_query",
         return_value=[{"customer.time_zone": "Pacific/Kiritimati"}],
     ) as mock_query:
-      customer_zone = changes._customer_time_zone(  # pylint: disable=protected-access
+      customer_zone = api.get_customer_time_zone(
           CUSTOMER_ID,
           None,
       )
@@ -91,23 +91,23 @@ def test_customer_time_zone_is_queried_and_validated():
 
 
 def test_customer_time_zone_cache_is_partitioned_by_principal():
-  changes._customer_time_zone_for_credential.cache_clear()  # pylint: disable=protected-access
+  api.customer_time_zone_for_credential.cache_clear()
   with mock.patch(
-      "ads_mcp.tools.changes.get_ads_credential_cache_scope",
+      "ads_mcp.tools.api.get_ads_credential_cache_scope",
       side_effect=["oauth:principal-a", "oauth:principal-b"],
   ):
     with mock.patch(
-        "ads_mcp.tools.changes.run_gaql_query",
+        "ads_mcp.tools.api.run_gaql_query",
         side_effect=[
             [{"customer.time_zone": "Etc/UTC"}],
             [{"customer.time_zone": "Pacific/Kiritimati"}],
         ],
     ) as mock_query:
-      principal_a_zone = changes._customer_time_zone(  # pylint: disable=protected-access
+      principal_a_zone = api.get_customer_time_zone(
           CUSTOMER_ID,
           None,
       )
-      principal_b_zone = changes._customer_time_zone(  # pylint: disable=protected-access
+      principal_b_zone = api.get_customer_time_zone(
           CUSTOMER_ID,
           None,
       )
@@ -847,7 +847,8 @@ def test_direct_change_pagination_keeps_omitted_dates_across_midnight(
   )
   assert second_page[item_key] == [{"row": "second"}]
   assert second_page["resolved_date_range"] == expected_range
-  assert second_page["account_today"] == next_day.isoformat()
+  expected_account_day = first_day if item_key == "change_events" else next_day
+  assert second_page["account_today"] == expected_account_day.isoformat()
   mock_query.assert_called_once()
 
 

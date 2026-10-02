@@ -2,17 +2,17 @@ display_name: Campaign Criterion
 name: campaign_criterion
 description: <p>A campaign criterion.</p>
 attributed_views:
-- carrier_constant
-- topic_constant
-- customer
-- mobile_app_category_constant
-- mobile_device_constant
-- user_interest
-- campaign
-- shared_set
-- operating_system_version_constant
-- language_constant
 - user_list
+- mobile_device_constant
+- campaign
+- language_constant
+- operating_system_version_constant
+- user_interest
+- topic_constant
+- shared_set
+- mobile_app_category_constant
+- customer
+- carrier_constant
 attributes:
 - campaign_criterion.ad_schedule.day_of_week
 - campaign_criterion.ad_schedule.end_hour
@@ -86,6 +86,7 @@ attributes:
 - campaign_criterion.webpage_list.shared_set
 - campaign_criterion.youtube_channel.channel_id
 - campaign_criterion.youtube_video.video_id
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -105,6 +106,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -200,6 +202,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -264,6 +267,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 - language_constant.code

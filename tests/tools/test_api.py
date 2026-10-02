@@ -438,34 +438,43 @@ def test_execute_gaql_applies_max_rows_and_returns_metadata():
   ]
 
   with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
-    assert api.execute_gaql(
+    result = api.execute_gaql(
         "SELECT campaign.id FROM campaign",
         "123",
         max_rows=2,
-    ) == {
+    )
+    expected = {
         "data": [{"campaign.id": "1"}, {"campaign.id": "2"}],
         "returned_row_count": 2,
         "total_row_count": 3,
         "truncated": True,
         "max_rows_applied": 2,
     }
+  assert {key: result[key] for key in expected} == expected
+  assert result["complete_inline"] is False
+  assert result["export_row_count"] == 3
+  assert result["bulk_export_call"]["tool"] == "export_gaql_csv"
 
 
 def test_execute_gaql_accepts_max_results_alias():
   rows = [{"campaign.id": "1"}, {"campaign.id": "2"}]
 
   with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
-    assert api.execute_gaql(
+    result = api.execute_gaql(
         "SELECT campaign.id FROM campaign",
         "123",
         max_results=1,
-    ) == {
+    )
+    expected = {
         "data": [{"campaign.id": "1"}],
         "returned_row_count": 1,
         "total_row_count": 2,
         "truncated": True,
         "max_rows_applied": 1,
     }
+  assert {key: result[key] for key in expected} == expected
+  assert result["complete_inline"] is False
+  assert result["export_row_count"] == 2
 
 
 def test_execute_gaql_warns_on_large_unbounded_result():
@@ -571,13 +580,15 @@ def test_execute_gaql_max_rows_suppresses_unbounded_warning():
     )
 
   assert "token_efficiency_warning" not in result
-  assert result == {
+  expected = {
       "data": [{"campaign.id": "1"}, {"campaign.id": "2"}],
       "returned_row_count": 2,
       "total_row_count": 3,
       "truncated": True,
       "max_rows_applied": 2,
   }
+  assert {key: result[key] for key in expected} == expected
+  assert result["bulk_export_call"]["tool"] == "export_gaql_csv"
 
 
 def test_execute_gaql_rejects_conflicting_row_caps():
@@ -880,6 +891,7 @@ def test_tokenless_page_refreshes_while_old_snapshot_tokens_stay_exact():
 
 def test_run_gaql_query_page_expires_cache_after_ttl():
   rows = [{"campaign.id": "1"}]
+  expired_at = 101.0 + api._PAGED_QUERY_CACHE_TTL_SECONDS
 
   with mock.patch(
       "ads_mcp.tools.api._iter_gaql_query_attempt",
@@ -887,7 +899,7 @@ def test_run_gaql_query_page_expires_cache_after_ttl():
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.api.time.monotonic",
-        side_effect=[100.0, 191.0, 191.0],
+        side_effect=[100.0, expired_at, expired_at],
     ):
       api.run_gaql_query_page(
           "SELECT campaign.id FROM campaign",
@@ -901,6 +913,7 @@ def test_run_gaql_query_page_expires_cache_after_ttl():
       )
 
   assert mock_run.call_count == 2
+  assert len(api._PAGED_QUERY_CACHE) == 1
 
 
 def test_run_gaql_query_page_rejects_expired_snapshot_token():
@@ -915,7 +928,7 @@ def test_run_gaql_query_page_rejects_expired_snapshot_token():
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.api.time.monotonic",
-        side_effect=[100.0, 100.0, 191.0],
+        side_effect=[100.0, 100.0, 101.0 + api._PAGED_QUERY_CACHE_TTL_SECONDS],
     ):
       first_page = api.run_gaql_query_page(
           query,
@@ -1404,6 +1417,13 @@ def test_build_paginated_list_response_returns_completeness_metadata():
           "arguments": {
               "snapshot_token": f"gaql-snapshot-v1:{snapshot_id}",
           },
+      },
+      "snapshot_lifetime": {
+          "expires_after_seconds": api._PAGED_QUERY_CACHE_TTL_SECONDS,
+          "may_be_evicted_earlier": True,
+          "eviction_policy": (
+              "Credential-scoped bounded least-recently-used cache."
+          ),
       },
   }
 
@@ -2249,7 +2269,7 @@ def test_snapshot_export_expiry_has_actionable_restart_guidance():
     with mock.patch.object(
         api.time,
         "monotonic",
-        side_effect=[100.0, 100.0, 191.0],
+        side_effect=[100.0, 100.0, 101.0 + api._PAGED_QUERY_CACHE_TTL_SECONDS],
     ):
       page = api.run_gaql_query_page(
           "SELECT campaign.id FROM campaign",
@@ -2783,6 +2803,7 @@ def test_get_ads_client_caches_yaml_config_for_access_token(
   assert mock_google_ads_client.call_count == 2
   constructor_kwargs = mock_google_ads_client.call_args.kwargs
   assert constructor_kwargs["developer_token"] == "dev-token"
+  assert constructor_kwargs["version"] == "v25"
   assert constructor_kwargs["use_proto_plus"] is True
   assert constructor_kwargs["ads_assistant"] == "assistant-tag"
 
@@ -2834,7 +2855,8 @@ def test_get_ads_client_coerces_yaml_login_id_and_forces_proto_plus(
           "use_proto_plus": True,
           "login_customer_id": "123456",
           "ads_assistant": "assistant-tag",
-      }
+      },
+      version="v25",
   )
   assert client.login_customer_id == "123456"
 
@@ -2880,14 +2902,16 @@ def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
           "use_proto_plus": True,
           "login_customer_id": "default-login",
           "ads_assistant": "assistant-tag",
-      }
+      },
+      version="v25",
   )
 
 
 def test_get_ads_client_isolates_concurrent_login_customer_ids():
   """Concurrent callers get immutable clients for their own manager IDs."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config.get("login_customer_id")
     return client
@@ -2921,7 +2945,8 @@ def test_get_ads_client_isolates_concurrent_login_customer_ids():
 def test_get_ads_client_invalidates_cache_when_credentials_change():
   """A credentials mtime change rebuilds the per-login client cache."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config["login_customer_id"]
     return client
@@ -2976,7 +3001,8 @@ def test_get_ads_client_omits_missing_default_login_customer_id():
 def test_get_ads_client_normalizes_dashed_login_id():
   """Dashed manager IDs share a cache entry with their plain form."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config.get("login_customer_id")
     return client
@@ -3059,7 +3085,8 @@ def test_get_ads_client_wraps_config_validation_errors():
 def test_get_ads_client_evicts_least_recently_used_clients():
   """The per-login client cache stays bounded under many manager IDs."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config.get("login_customer_id")
     return client
@@ -3115,3 +3142,12 @@ def test_default_ads_assistant_caches_package_lookup():
       assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
 
     mock_version.assert_called_once_with("google-ads-mcp")
+
+
+def test_removed_sdk_auth_option_is_ignored_without_mutating_credentials():
+  original = {"use_cloud_org_for_api_access": True, "developer_token": "test"}
+  with mock.patch.object(api, "_default_ads_assistant", return_value=None):
+    normalized = api._apply_ads_client_defaults(original)
+  assert "use_cloud_org_for_api_access" not in normalized
+  assert original["use_cloud_org_for_api_access"] is True
+  assert normalized["use_proto_plus"] is True

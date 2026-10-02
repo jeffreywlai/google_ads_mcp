@@ -2,12 +2,13 @@ display_name: Campaign
 name: campaign
 description: <p>A campaign.</p>
 attributed_views:
-- bidding_strategy
-- customer
 - campaign_budget
 - accessible_bidding_strategy
 - campaign_group
+- bidding_strategy
+- customer
 attributes:
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -27,6 +28,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -122,6 +124,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -249,17 +252,20 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments:
 - segments.ad_destination_type
 - segments.ad_format_type
 - segments.ad_network_type
+- segments.ad_sub_format_type
 - segments.ad_sub_network_type
 - segments.ad_using_product_data
 - segments.ad_using_video
 - segments.adjusted_age_range
 - segments.adjusted_gender
+- segments.advance_booking_window
 - segments.asset_interaction_target.asset
 - segments.asset_interaction_target.interaction_on_this_asset
 - segments.auction_insight_domain
@@ -277,6 +283,8 @@ segments:
 - segments.device
 - segments.external_conversion_source
 - segments.hour
+- segments.length_of_booking
+- segments.loyalty_membership
 - segments.mobile_device_platform
 - segments.month
 - segments.month_of_year
@@ -295,9 +303,12 @@ segments:
 - segments.sk_ad_network_user_type
 - segments.sk_ad_network_version
 - segments.slot
+- segments.start_date
+- segments.start_day_of_week
 - segments.travel_destination_city
 - segments.travel_destination_country
 - segments.travel_destination_region
+- segments.user_set_dates
 - segments.vertical_ads_event_participant_display_names
 - segments.vertical_ads_hotel_class
 - segments.vertical_ads_listing
@@ -308,6 +319,9 @@ segments:
 - segments.vertical_ads_listing_user_rating
 - segments.vertical_ads_listing_venue
 - segments.vertical_ads_partner_account
+- segments.vertical_ads_price_tier
+- segments.vertical_ads_rate_rule_id
+- segments.vertical_ads_rate_type
 - segments.vertical_ads_vertical
 - segments.week
 - segments.year
@@ -451,6 +465,7 @@ metrics:
 - metrics.optimization_score_uplift
 - metrics.optimization_score_url
 - metrics.orders
+- metrics.original_conversion_value
 - metrics.percent_new_visitors
 - metrics.phone_calls
 - metrics.phone_impressions
@@ -500,6 +515,9 @@ metrics:
 - metrics.value_per_current_model_attributed_conversion
 - metrics.value_per_platform_comparable_conversion
 - metrics.value_per_platform_comparable_conversions_by_conversion_date
+- metrics.vertical_ads_average_booking_value_micros
+- metrics.vertical_ads_potential_impressions
+- metrics.vertical_ads_price_difference_percentage
 - metrics.video_quartile_p100_rate
 - metrics.video_quartile_p25_rate
 - metrics.video_quartile_p50_rate
@@ -518,3 +536,6 @@ metrics:
 - metrics.view_through_conversions_from_location_asset_other_engagement
 - metrics.view_through_conversions_from_location_asset_store_visits
 - metrics.view_through_conversions_from_location_asset_website
+- metrics.youtube_comments
+- metrics.youtube_likes
+- metrics.youtube_shares
