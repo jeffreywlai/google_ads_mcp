@@ -5,7 +5,7 @@
 [![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 111 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 113 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +14,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **111 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **113 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -40,7 +40,7 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (111)
+## 📋 Available Tools (113)
 
 ### 🔍 Query & Discovery
 
@@ -137,6 +137,8 @@ accessible account available without an unbounded model response.
 | `list_geographic_performance` | Campaign performance segmented by geography |
 | `list_impression_share` | Campaign impression share metrics |
 | `get_campaign_conversion_goals` | Conversion goals and custom goal config for a campaign |
+| `get_campaign_settings` | Campaign settings, budgets, location names, shared lists, conversion goals, and lifecycle goals in one snapshot |
+| `compare_performance_periods` | Compare explicit nonoverlapping date windows with complete summed metrics and optional device breakdown |
 | `list_keyword_quality_scores` | Keyword quality score diagnostics |
 | `summarize_keyword_quality_scores` | Quality score distribution summary across campaigns |
 | `list_rsa_ad_strength` | RSA ad strength diagnostics |

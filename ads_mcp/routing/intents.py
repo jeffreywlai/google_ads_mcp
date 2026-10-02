@@ -26,6 +26,7 @@ class Domain(str, Enum):
 
   CHANGE_CONFIGURATION = "change_configuration"
   REPORTING_METRIC = "reporting_metric"
+  CAMPAIGN_SETTINGS = "campaign_settings"
   CAMPAIGN_AUDIENCE = "campaign_audience"
   RECOMMENDATION = "recommendation"
   DEMOGRAPHIC = "demographic"
@@ -149,6 +150,8 @@ ROUTE_CATALOG = MappingProxyType(
         "audience_remove": "remove_campaign_audiences",
         "campaign_budget_mutation": "update_campaign_budget",
         "campaign_status_mutation": "set_campaign_status",
+        "campaign_settings": "get_campaign_settings",
+        "period_comparison": "compare_performance_periods",
         "change_history_artifact": "export_change_history_csv",
         "change_history_events": "list_change_events",
         "change_history_preview": "get_change_history_extended",
@@ -163,6 +166,20 @@ ROUTE_CATALOG = MappingProxyType(
 )
 
 TOOL_CAPABILITIES = (
+    ToolCapability(
+        "get_campaign_settings",
+        Domain.CAMPAIGN_SETTINGS,
+        Operation.READ,
+        Delivery.INLINE,
+        Detail.CONFIGURATION,
+    ),
+    ToolCapability(
+        "compare_performance_periods",
+        Domain.REPORTING_METRIC,
+        Operation.COMPARE,
+        Delivery.INLINE,
+        Detail.PERFORMANCE,
+    ),
     ToolCapability(
         "get_optimization_score_summary",
         Domain.RECOMMENDATION,
@@ -1371,6 +1388,72 @@ def _resolve_intent(query: str) -> RoutingDecision:
         reason="prospective_change",
     )
 
+  # Fixed current-state reads must not replace history, writes, or other grains.
+  if (
+      bool(features.token_set & {"campaign", "campaigns"})
+      and not features.explicit_history
+      and not features.has_change_noun
+      and not features.artifact_requested
+      and not features.completed
+      and not features.token_set & _GENERIC_MUTATION_ACTIONS
+      and features.domain
+      in {Domain.UNKNOWN, Domain.REPORTING_METRIC, Domain.CHANGE_CONFIGURATION}
+  ):
+    if (
+        features.token_set & {"settings", "snapshot", "configuration"}
+        and not features.metric_subject
+        and not features.performance_requested
+        and not features.compare_requested
+        and not features.token_set
+        & {"keyword", "keywords", "adgroup", "adgroups"}
+        and not _contains_sequence(features.tokens, "ad", "group")
+        and not _contains_sequence(features.tokens, "ad", "groups")
+    ):
+      return RoutingDecision(
+          target=ROUTE_CATALOG["campaign_settings"],
+          excluded_tools=_MUTATION_TOOLS,
+          exclude_remote_mutations=True,
+          reason="current_campaign_settings",
+      )
+    if (
+        features.compare_requested
+        and features.token_set & {"period", "periods", "window", "windows"}
+        and (features.performance_requested or features.metric_subject)
+        and not features.token_set
+        & {
+            "keyword",
+            "keywords",
+            "term",
+            "terms",
+            "country",
+            "countries",
+            "ad",
+            "ads",
+            "adgroup",
+            "adgroups",
+            "product",
+            "products",
+            "geo",
+            "geographic",
+            "location",
+            "locations",
+            "hour",
+            "hourly",
+            "network",
+            "networks",
+        }
+        and not (
+            "conversion" in features.token_set
+            and features.token_set & {"action", "actions"}
+        )
+    ):
+      return RoutingDecision(
+          target=ROUTE_CATALOG["period_comparison"],
+          excluded_tools=_MUTATION_TOOLS,
+          exclude_remote_mutations=True,
+          reason="explicit_period_comparison",
+      )
+
   mixed_history_metric = (
       features.metric_subject
       and features.explicit_history
@@ -1584,7 +1667,11 @@ def _resolve_intent(query: str) -> RoutingDecision:
         reason="unrelated_history",
     )
 
-  if features.has_change_noun:
+  if features.has_change_noun or (
+      features.token_set & _GENERIC_MUTATION_ACTIONS
+      and not features.read_cue
+      and not features.remote_mutation_guarded
+  ):
     return RoutingDecision(
         excluded_tools=_HISTORY_AND_PRESSURE_TOOLS,
         reason="non_historical_change",

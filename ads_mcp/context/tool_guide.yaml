@@ -9,9 +9,11 @@ principles:
   - Use search_tools only when the right tool name is unclear.
   - Use execute_gaql only for custom read queries not covered by a dedicated
     tool.
-  - For execute_gaql, pass max_rows for exploratory reads. If an unbounded raw
-    query returns many rows, the tool includes a token-efficiency warning
-    and bounds oversized inline responses with an exact deferred export.
+  - execute_gaql bounds inline data to 32 KiB and the complete response to
+    48 KiB. max_rows is an optional inline row cap; exact bulk_export_call
+    preserves every retrieved row. Query LIMIT and upstream API restrictions
+    still apply to the reported total. A subset without ORDER BY is in API
+    order and is not a ranked sample.
   - GAQL preflight adds only required SELECT segments and reports
     query_adjustments. Field alternatives are suggestions, not automatic
     replacements. Empty resource-name predicates require an explicit fix;
@@ -43,9 +45,21 @@ principles:
     requested operation is still applied, and omitted result details spill to
     a CSV artifact. If that local artifact cannot be written, the response
     states that the mutation completed and must not be retried.
-  - A tokenless read starts a fresh Google snapshot. page_token and
-    snapshot_token deliberately preserve the original snapshot and may expire
-    after 90 seconds; on expiry, restart the source tool without a token.
+  - A tokenless read starts a fresh Google snapshot. GAQL page_token and
+    snapshot_token, plus deferred report snapshots, preserve the original
+    result for up to 15 minutes. Bounded cache pressure can evict them earlier;
+    inspect snapshot_lifetime when returned. Accessible-account snapshots
+    expire after 90 seconds. On expiry, restart the source tool without a token.
+  - Use get_campaign_settings for a current campaign settings snapshot,
+    including lifecycle goals and resolved location names. Several API reads
+    form the snapshot and may observe changes between reads.
+  - Use compare_performance_periods for explicit nonoverlapping inclusive
+    date windows. It sums complete daily data before bounding the response.
+    It does not infer historical goal changes from conversion activity or
+    allocate daily metrics at an exact intra-day change timestamp.
+  - For campaign-specific history, pass campaign_id or ad_group_id and use
+    include_values=true for compact changed-field diffs. Scope follows Google's
+    campaign association; shared account resources may have no campaign link.
   - Date-range args accept native GAQL ranges plus LAST_90_DAYS,
     LAST_180_DAYS, LAST_365_DAYS, LAST_12_MONTHS, LAST_QUARTER, YTD,
     ALL_TIME, or {start_date, end_date}.
@@ -76,6 +90,8 @@ categories:
       analyze_customer_acquisition_performance: New-versus-returning conversion performance joined to total campaign traffic and cost using compatible split queries.
       get_competitive_pressure_report: Impression-share pressure, auction insights, and change history in one compact report.
       get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
+      get_campaign_settings: Current campaign settings, budget, targeting, shared lists, conversion goals, and lifecycle goals without client-side joins.
+      compare_performance_periods: Complete campaign metrics across explicit daily date windows, optionally split by device, without inferring goal switches or causality.
       list_keyword_quality_scores: Keyword quality score diagnostics.
       summarize_keyword_quality_scores: Compact keyword quality score distributions without raw row dumps.
       list_rsa_ad_strength: Responsive search ad strength diagnostics.
