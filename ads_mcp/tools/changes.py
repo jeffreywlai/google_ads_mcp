@@ -39,6 +39,7 @@ from ads_mcp.tools._gaql import build_where_clause
 from ads_mcp.tools._gaql import gaql_quote_string
 from ads_mcp.tools._gaql import normalize_list_arg
 from ads_mcp.tools._gaql import quote_enum_values
+from ads_mcp.tools._gaql import quote_int_value
 from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
@@ -288,6 +289,104 @@ _CHANGE_EVENT_EXPORT_FIELDS = [
     "change_event.old_resource",
     "change_event.new_resource",
 ]
+
+
+def _scope_arguments(
+    campaign_id: str | None,
+    ad_group_id: str | None,
+) -> dict[str, str]:
+  """Validates optional entity IDs and preserves them in next-call hints."""
+  arguments = {}
+  for field, value in (
+      ("campaign_id", campaign_id),
+      ("ad_group_id", ad_group_id),
+  ):
+    if value is not None:
+      normalized = quote_int_value(value, field)
+      if int(normalized) <= 0:
+        raise ToolError(f"{field} must be a positive integer ID.")
+      arguments[field] = normalized
+  return arguments
+
+
+def _scope_conditions(
+    source: str,
+    customer_id: str,
+    scope: dict[str, str],
+) -> list[str]:
+  """Filters only changes Google associates with the requested entities."""
+  if not scope:
+    return []
+  customer_id = quote_int_value(customer_id.replace("-", ""), "customer_id")
+  return [
+      f"{source}.{field[:-3]} = "
+      + gaql_quote_string(
+          f"customers/{customer_id}/{collection}/{scope[field]}"
+      )
+      for field, collection in (
+          ("campaign_id", "campaigns"),
+          ("ad_group_id", "adGroups"),
+      )
+      if field in scope
+  ]
+
+
+def _entity_scope(scope: dict[str, str]) -> dict[str, str]:
+  return {
+      **scope,
+      "coverage_note": (
+          "Only changes with a Google-reported entity association are "
+          "included; account-level shared resources may be unassociated."
+      ),
+  }
+
+
+def _nested_change_value(resource: Any, path: str) -> tuple[Any, bool]:
+  """Reads snake_case field-mask paths from snake_case or camelCase JSON."""
+  value = resource
+  for component in path.split("."):
+    if not isinstance(value, dict):
+      return None, False
+    words = component.split("_")
+    camel_component = words[0] + "".join(word.title() for word in words[1:])
+    key = component if component in value else camel_component
+    if key not in value:
+      return None, False
+    value = value[key]
+  return value, True
+
+
+def _compact_change_values(row: dict[str, Any]) -> dict[str, Any]:
+  """Keeps an event atomic while displaying only fields in its field mask."""
+  row = dict(row)
+  old_resource = row.pop("change_event.old_resource", {})
+  new_resource = row.pop("change_event.new_resource", {})
+  resource_type = row.get("change_event.change_resource_type", "")
+  resource_field = str(resource_type).lower()
+  old_entity, _ = _nested_change_value(old_resource, resource_field)
+  new_entity, _ = _nested_change_value(new_resource, resource_field)
+  changed_fields = row.get("change_event.changed_fields", {})
+  paths = (
+      changed_fields.get("paths", [])
+      if isinstance(changed_fields, dict)
+      else []
+  )
+  values = []
+  for path in paths:
+    old_value, old_available = _nested_change_value(old_entity, path)
+    new_value, new_available = _nested_change_value(new_entity, path)
+    values.append(
+        {
+            "field": path,
+            "old_value": old_value,
+            "new_value": new_value,
+            "old_value_available": old_available,
+            "new_value_available": new_available,
+        }
+    )
+  if "change_event.change_resource_type" in row:
+    row["change_event.field_changes"] = values
+  return row
 
 
 def _account_today(
@@ -640,12 +739,25 @@ def _normalize_change_event_resource_types(
       if value not in _CHANGE_EVENT_RESOURCE_TYPES
   ]
   if unsupported_values:
+    status_only = [
+        value
+        for value in unsupported_values
+        if value in _CHANGE_STATUS_RESOURCE_TYPES
+    ]
     raise ToolError(
         "Unsupported change_resource_types: "
         + ", ".join(unsupported_values)
         + ". Use one of: "
         + ", ".join(sorted(_CHANGE_EVENT_RESOURCE_TYPES))
         + "."
+        + (
+            " For "
+            + ", ".join(status_only)
+            + ", use get_change_history_extended with resource_types; "
+            "those types have change_status coverage without old/new values."
+            if status_only
+            else ""
+        )
     )
   return normalized_values
 
@@ -1426,8 +1538,11 @@ def _preview_continuation_guidance(
     event_resource_types: list[str],
     limit: int,
     login_customer_id: str | None,
+    scope: dict[str, str] | None = None,
+    include_values: bool = False,
 ) -> dict[str, Any]:
   """Builds explicit next-call guidance for bounded history previews."""
+  scope = scope or {}
   guidance = {}
   status_token = statuses.get("next_page_token")
   status_shared_omission = bool(statuses.get("shared_inline_omitted_count"))
@@ -1566,6 +1681,15 @@ def _preview_continuation_guidance(
             "Call list_change_events with the arguments exactly as shown."
         ),
     }
+  for call in guidance.values():
+    if call["tool"] in {
+        "list_change_statuses",
+        "list_change_events",
+        "export_change_history_csv",
+    }:
+      call["arguments"].update(scope)
+      if call["tool"] == "list_change_events" and include_values:
+        call["arguments"]["include_values"] = True
   return guidance
 
 
@@ -1729,8 +1853,10 @@ def _execute_change_status_page(
     limit: int,
     page_token: str | None,
     login_customer_id: str | None,
+    scope: dict[str, str] | None = None,
 ) -> dict[str, Any]:
   """Executes one already-resolved change_status page plan."""
+  scope = scope or {}
   where_conditions = _datetime_range_conditions(
       "change_status.last_change_date_time",
       plan.start_date,
@@ -1741,12 +1867,12 @@ def _execute_change_status_page(
         "change_status.resource_type IN "
         f"({quote_enum_values(resource_types)})"
     )
+  where_conditions.extend(
+      _scope_conditions("change_status", customer_id, scope)
+  )
   query = f"""
       SELECT
-        change_status.resource_name,
-        change_status.resource_type,
-        change_status.resource_status,
-        change_status.last_change_date_time
+        {", ".join(_CHANGE_STATUS_EXPORT_FIELDS)}
       FROM change_status
       {build_where_clause(where_conditions)}
       ORDER BY change_status.last_change_date_time DESC
@@ -1788,6 +1914,7 @@ def _execute_change_status_page(
         "tool": "export_change_history_csv",
         "arguments": {
             "customer_id": customer_id,
+            **scope,
             "resource_types": resource_types,
             "start_date": plan.start_date,
             "end_date": plan.end_date,
@@ -1805,6 +1932,7 @@ def _execute_change_status_page(
         "tool": "list_change_statuses",
         "arguments": {
             "customer_id": customer_id,
+            **scope,
             "resource_types": resource_types,
             "start_date": plan.start_date,
             "end_date": plan.end_date,
@@ -1813,6 +1941,8 @@ def _execute_change_status_page(
             "login_customer_id": login_customer_id,
         },
     }
+  if scope:
+    result["entity_scope"] = _entity_scope(scope)
   return result
 
 
@@ -1826,8 +1956,11 @@ def _execute_change_event_page(
     page_token: str | None,
     login_customer_id: str | None,
     query_metadata: dict[str, Any] | None = None,
+    scope: dict[str, str] | None = None,
+    include_values: bool = False,
 ) -> dict[str, Any]:
   """Executes one already-resolved change_event page plan."""
+  scope = scope or {}
   where_conditions = _datetime_range_conditions(
       "change_event.change_date_time",
       plan.start_date,
@@ -1843,15 +1976,19 @@ def _execute_change_event_page(
         "change_event.change_resource_type IN "
         f"({quote_enum_values(change_resource_types)})"
     )
+  where_conditions.extend(
+      _scope_conditions("change_event", customer_id, scope)
+  )
+  select_fields = [
+      field
+      for field in _CHANGE_EVENT_EXPORT_FIELDS
+      if include_values
+      or field
+      not in {"change_event.old_resource", "change_event.new_resource"}
+  ]
   query = f"""
       SELECT
-        change_event.change_date_time,
-        change_event.change_resource_type,
-        change_event.resource_change_operation,
-        change_event.resource_name,
-        change_event.client_type,
-        change_event.user_email,
-        change_event.changed_fields
+        {", ".join(select_fields)}
       FROM change_event
       {build_where_clause(where_conditions)}
       ORDER BY change_event.change_date_time DESC
@@ -1865,7 +2002,19 @@ def _execute_change_event_page(
       login_customer_id=login_customer_id,
       **({"query_metadata": query_metadata} if query_metadata else {}),
   )
+  if include_values:
+    page = {
+        **page,
+        "rows": [_compact_change_values(row) for row in page["rows"]],
+    }
   result = _build_change_page_response("change_events", page, limit)
+  if include_values:
+    result["values_note"] = (
+        "field_changes contains only Google-reported changed_fields; a missing "
+        "snapshot value is marked unavailable, not inferred. Exact exports "
+        "retain raw old_resource/new_resource snapshots. Large events remain "
+        "atomic and may require the export hand-off."
+    )
   if query_metadata:
     result.update(query_metadata)
   result["next_page_token"] = _bind_change_page_token(
@@ -1896,6 +2045,7 @@ def _execute_change_event_page(
         "tool": "export_change_history_csv",
         "arguments": {
             "customer_id": customer_id,
+            **scope,
             "resource_types": change_resource_types,
             "resource_change_operations": resource_change_operations,
             "start_date": plan.start_date,
@@ -1913,7 +2063,9 @@ def _execute_change_event_page(
     result["continuation"] = {
         "tool": "list_change_events",
         "arguments": {
+            **({"include_values": True} if include_values else {}),
             "customer_id": customer_id,
+            **scope,
             "resource_change_operations": resource_change_operations,
             "change_resource_types": change_resource_types,
             "start_date": plan.start_date,
@@ -1928,6 +2080,8 @@ def _execute_change_event_page(
             ),
         },
     }
+  if scope:
+    result["entity_scope"] = _entity_scope(scope)
   return result
 
 
@@ -1947,6 +2101,8 @@ def list_change_statuses(
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
+    campaign_id: str | None = None,
+    ad_group_id: str | None = None,
 ) -> dict[str, Any]:
   """Lists changed resources from change_status.
 
@@ -1959,11 +2115,16 @@ def list_change_statuses(
       limit: Maximum number of rows to return.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
+      campaign_id: Optional campaign ID. Returns only rows Google
+          associates with that campaign; account-level shared changes may
+          have no campaign association.
+      ad_group_id: Optional ad-group ID; combined with campaign_id using AND.
 
   Returns:
       A dict containing change status rows plus completeness metadata.
   """
   validate_limit(limit)
+  scope = _scope_arguments(campaign_id, ad_group_id)
   resource_types = normalize_list_arg(resource_types, "resource_types")
   delegated_plan = _DELEGATED_SOURCE_PLAN.get()
   if delegated_plan is not None:
@@ -1976,6 +2137,7 @@ def list_change_statuses(
         limit=limit,
         page_token=page_token,
         login_customer_id=login_customer_id,
+        scope=scope,
     )
 
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
@@ -2015,6 +2177,7 @@ def list_change_statuses(
           limit=limit,
           page_token=page_token,
           login_customer_id=login_customer_id,
+          scope=scope,
       ),
   )
   result = read.response
@@ -2041,6 +2204,9 @@ def list_change_events(
     login_customer_id: str | None = None,
     lookback_days: StrictInt | None = None,
     retention_policy: _history.RetentionPolicy = "error",
+    campaign_id: str | None = None,
+    ad_group_id: str | None = None,
+    include_values: bool = False,
 ) -> dict[str, Any]:
   """Lists granular changes from change_event.
 
@@ -2065,11 +2231,19 @@ def list_change_events(
           requested/applied/unavailable ranges. An empty intersection returns
           no events, never a different period. Repeat this policy on subsequent
           pages; their original account calendar and coverage stay frozen.
+      campaign_id: Optional campaign ID. Returns only rows Google
+          associates with that campaign; account-level shared changes may
+          have no campaign association.
+      ad_group_id: Optional ad-group ID; combined with campaign_id using AND.
+      include_values: Include compact old/new values for changed fields.
+          Unavailable values are marked explicitly. Full raw snapshots remain
+          available through the exact export hand-off.
 
   Returns:
       A dict containing change event rows plus completeness metadata.
   """
   validate_limit(limit)
+  scope = _scope_arguments(campaign_id, ad_group_id)
   _history.validate_retention_policy(retention_policy)
   resource_change_operations = normalize_list_arg(
       resource_change_operations,
@@ -2095,6 +2269,8 @@ def list_change_events(
         limit=limit,
         page_token=page_token,
         login_customer_id=login_customer_id,
+        scope=scope,
+        include_values=include_values,
     )
 
   page_token, bound_start_date, bound_end_date = _decode_change_page_token(
@@ -2194,6 +2370,8 @@ def list_change_events(
         page_token=page_token,
         login_customer_id=login_customer_id,
         query_metadata=metadata,
+        scope=scope,
+        include_values=include_values,
     )
 
   read = _run_source_page_plan(
@@ -2239,6 +2417,8 @@ def export_change_history_csv(
     max_queries_per_resource: int = _DEFAULT_EXPORT_QUERY_BUDGET,
     login_customer_id: str | None = None,
     resource_change_operations: list[str] | str | None = None,
+    campaign_id: str | None = None,
+    ad_group_id: str | None = None,
 ) -> dict[str, Any]:
   """Exports maximum manageable history across available retention windows.
 
@@ -2269,12 +2449,17 @@ def export_change_history_csv(
       resource_change_operations: Optional CREATE, UPDATE, or REMOVE filter
           for granular change_event rows. change_status has no operation field
           and is unaffected by this filter.
+      campaign_id: Optional campaign ID. Returns only rows Google
+          associates with that campaign; account-level shared changes may
+          have no campaign association.
+      ad_group_id: Optional ad-group ID; combined with campaign_id using AND.
 
   Returns:
       A compact dict with CSV paths, row counts, query counts, and explicit
       completeness metadata for both Google Ads change resources.
   """
   _validate_query_budget(max_queries_per_resource)
+  scope = _scope_arguments(campaign_id, ad_group_id)
   start_date_omitted = start_date is None
   end_date_omitted = end_date is None
   account_today, account_time_zone = _account_today(
@@ -2331,6 +2516,7 @@ def export_change_history_csv(
         status_resource_types,
         window_start,
         window_end,
+        _scope_conditions("change_status", customer_id, scope),
     )
 
   status_query_builder = (
@@ -2503,7 +2689,9 @@ def export_change_history_csv(
       )
 
       def _event_query(window_start: datetime, window_end: datetime) -> str:
-        event_conditions = []
+        event_conditions = _scope_conditions(
+            "change_event", customer_id, scope
+        )
         if resource_change_operations:
           event_conditions.append(
               "change_event.resource_change_operation IN "
@@ -2799,6 +2987,8 @@ def export_change_history_csv(
           "Rerun export_change_history_csv for each unresolved window with a "
           "narrower date range or a higher max_queries_per_resource."
       )
+  if scope:
+    result["entity_scope"] = _entity_scope(scope)
   return result
 
 
@@ -2811,6 +3001,9 @@ def get_change_history_extended(
     include_recent_events: bool = True,
     limit: int = 100,
     login_customer_id: str | None = None,
+    campaign_id: str | None = None,
+    ad_group_id: str | None = None,
+    include_values: bool = False,
 ) -> dict[str, Any]:
   """Previews requested change history with token-safe bounded rows.
 
@@ -2834,12 +3027,20 @@ def get_change_history_extended(
           for the portion of the window available in Google Ads.
       limit: Maximum preview rows to return for each underlying section.
       login_customer_id: Optional manager account ID.
+      campaign_id: Optional campaign ID. Returns only rows Google
+          associates with that campaign; account-level shared changes may
+          have no campaign association.
+      ad_group_id: Optional ad-group ID; combined with campaign_id using AND.
+      include_values: Include compact old/new values for changed fields.
+          Unavailable values are marked explicitly. Full raw snapshots remain
+          available through the exact export hand-off.
 
   Returns:
       A bounded dict with status/event previews, pagination tokens, and
       explicit coverage/export guidance.
   """
   validate_limit(limit)
+  scope = _scope_arguments(campaign_id, ad_group_id)
   request = _HistoryDateIntent(
       start_date=start_date,
       end_date=end_date,
@@ -2876,6 +3077,7 @@ def get_change_history_extended(
           end_date=plan.end_date,
           limit=limit,
           login_customer_id=login_customer_id,
+          **scope,
       )
     finally:
       _DELEGATED_SOURCE_PLAN.reset(delegated_plan_token)
@@ -2890,6 +3092,8 @@ def get_change_history_extended(
           end_date=plan.end_date,
           limit=limit,
           login_customer_id=login_customer_id,
+          **scope,
+          **({"include_values": True} if include_values else {}),
       )
     finally:
       _DELEGATED_SOURCE_PLAN.reset(delegated_plan_token)
@@ -3123,6 +3327,8 @@ def get_change_history_extended(
           event_resource_types=event_resource_types,
           limit=limit,
           login_customer_id=login_customer_id,
+          scope=scope,
+          include_values=include_values,
       ),
       "bulk_export_tool": "export_change_history_csv",
   }
@@ -3130,4 +3336,6 @@ def get_change_history_extended(
     result["bulk_export_calls_by_source"] = bulk_export_calls_by_source
   if retention_refresh_notes:
     result["retention_refresh_note"] = " ".join(retention_refresh_notes)
+  if scope:
+    result["entity_scope"] = _entity_scope(scope)
   return result
