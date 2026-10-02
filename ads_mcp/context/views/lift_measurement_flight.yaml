@@ -1,14 +1,21 @@
-display_name: Campaign Lifecycle Goal
-name: campaign_lifecycle_goal
-description: <p>Campaign level customer lifecycle goal settings.</p>
+display_name: Lift Measurement Flight
+name: lift_measurement_flight
+description: <p>A brand lift measurement flight.</p>
 attributed_views:
 - customer
 attributes:
-- campaign_lifecycle_goal.campaign
-- campaign_lifecycle_goal.customer_acquisition_goal_settings.optimization_mode
-- campaign_lifecycle_goal.customer_acquisition_goal_settings.value_settings.high_lifetime_value
-- campaign_lifecycle_goal.customer_acquisition_goal_settings.value_settings.value
-- campaign_lifecycle_goal.resource_name
+- lift_measurement_flight.end_date
+- lift_measurement_flight.lift_measurement_config_id
+- lift_measurement_flight.lift_measurement_flight_id
+- lift_measurement_flight.lift_type
+- lift_measurement_flight.name
+- lift_measurement_flight.resource_name
+- lift_measurement_flight.start_date
+- lift_measurement_flight.status
+- lift_measurement_flight.survey_lift_info.target_response_mode
+- lift_measurement_flight.survey_lift_measurement.max_survey_response_date
+- lift_measurement_flight.survey_lift_measurement.min_survey_response_date
+- lift_measurement_flight.survey_lift_measurement.response_collection_ratio_micros
 - customer.auto_tagging_enabled
 - customer.call_reporting_setting.call_conversion_action
 - customer.call_reporting_setting.call_conversion_reporting_enabled
@@ -45,6 +52,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments: []

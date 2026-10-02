@@ -2,8 +2,8 @@ display_name: Asset Group Product Group View
 name: asset_group_product_group_view
 description: <p>An asset group product group view.</p>
 attributed_views:
-- asset_group_listing_group_filter
 - asset_group
+- asset_group_listing_group_filter
 - customer
 - campaign
 attributes:
@@ -14,6 +14,7 @@ attributes:
 - asset_group.asset_coverage.ad_strength_action_items
 - asset_group.campaign
 - asset_group.final_mobile_urls
+- asset_group.final_url_suffix
 - asset_group.final_urls
 - asset_group.google_local_services_info.callouts
 - asset_group.google_local_services_info.category_id
@@ -25,6 +26,8 @@ attributes:
 - asset_group.primary_status_reasons
 - asset_group.resource_name
 - asset_group.status
+- asset_group.tracking_url_template
+- asset_group.url_custom_parameters
 - asset_group_listing_group_filter.asset_group
 - asset_group_listing_group_filter.case_value.product_brand.value
 - asset_group_listing_group_filter.case_value.product_category.category_id
@@ -44,6 +47,7 @@ attributes:
 - asset_group_listing_group_filter.path
 - asset_group_listing_group_filter.resource_name
 - asset_group_listing_group_filter.type
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -63,6 +67,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -158,6 +163,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -218,6 +224,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments:

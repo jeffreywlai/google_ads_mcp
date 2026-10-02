@@ -559,7 +559,7 @@ wheels = [
 
 [[package]]
 name = "google-ads"
-version = "30.1.0"
+version = "33.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-api-core" },
@@ -571,14 +571,14 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/e0/7660c28100d5ef82d8e7348e2f38938c89547d80cd2984692cf7fcf2ee85/google_ads-30.1.0.tar.gz", hash = "sha256:beecd95690cbb5fff728d5455f67588f0af12aec1fb3c54ad373a5a57716e9f4", size = 12140520, upload-time = "2026-04-22T20:55:22.984Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/61/ff1d9cc3d3d077aa084a586f119072da431c4fccbc27d1e0392415ed5c5b/google_ads-33.0.0.tar.gz", hash = "sha256:d58309f22943b613f66250a231eba677af7963f3cec91e6d11620c7b402058ce", size = 7757994, upload-time = "2026-09-23T21:18:16.222Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/c6/d198458fb6fa09492f0ef066fcd64ab1f2e5188b369bcba278b4a686eb24/google_ads-30.1.0-py3-none-any.whl", hash = "sha256:ed58ecf23511009664a5628f6d615365459585d55d889a4ba5e98ee652fbef1b", size = 23076755, upload-time = "2026-04-22T20:55:18.936Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/2c/8517e36d4a8086f1a8dc4c2fcff936148d98be3eb2935050d2b5504f9fb4/google_ads-33.0.0-py3-none-any.whl", hash = "sha256:113a679e708779400e7318b202036f0aa0d02b665d78c9b940b58ade26504d63", size = 14720593, upload-time = "2026-09-23T21:18:12.542Z" },
 ]
 
 [[package]]
 name = "google-ads-mcp"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
@@ -604,7 +604,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.2.2,<3.3" },
-    { name = "google-ads", specifier = ">=30.1.0,<31.0.0" },
+    { name = "google-ads", specifier = ">=33.0.0,<34.0.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
     { name = "mcp", specifier = ">=1.27.0" },
     { name = "python-dotenv", specifier = ">=1.0" },

@@ -2803,6 +2803,7 @@ def test_get_ads_client_caches_yaml_config_for_access_token(
   assert mock_google_ads_client.call_count == 2
   constructor_kwargs = mock_google_ads_client.call_args.kwargs
   assert constructor_kwargs["developer_token"] == "dev-token"
+  assert constructor_kwargs["version"] == "v25"
   assert constructor_kwargs["use_proto_plus"] is True
   assert constructor_kwargs["ads_assistant"] == "assistant-tag"
 
@@ -2854,7 +2855,8 @@ def test_get_ads_client_coerces_yaml_login_id_and_forces_proto_plus(
           "use_proto_plus": True,
           "login_customer_id": "123456",
           "ads_assistant": "assistant-tag",
-      }
+      },
+      version="v25",
   )
   assert client.login_customer_id == "123456"
 
@@ -2900,14 +2902,16 @@ def test_get_ads_client_caches_storage_client_initialized_with_proto_plus(
           "use_proto_plus": True,
           "login_customer_id": "default-login",
           "ads_assistant": "assistant-tag",
-      }
+      },
+      version="v25",
   )
 
 
 def test_get_ads_client_isolates_concurrent_login_customer_ids():
   """Concurrent callers get immutable clients for their own manager IDs."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config.get("login_customer_id")
     return client
@@ -2941,7 +2945,8 @@ def test_get_ads_client_isolates_concurrent_login_customer_ids():
 def test_get_ads_client_invalidates_cache_when_credentials_change():
   """A credentials mtime change rebuilds the per-login client cache."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config["login_customer_id"]
     return client
@@ -2996,7 +3001,8 @@ def test_get_ads_client_omits_missing_default_login_customer_id():
 def test_get_ads_client_normalizes_dashed_login_id():
   """Dashed manager IDs share a cache entry with their plain form."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config.get("login_customer_id")
     return client
@@ -3079,7 +3085,8 @@ def test_get_ads_client_wraps_config_validation_errors():
 def test_get_ads_client_evicts_least_recently_used_clients():
   """The per-login client cache stays bounded under many manager IDs."""
 
-  def build_client(config):
+  def build_client(config, *, version):
+    assert version == "v25"
     client = mock.Mock()
     client.login_customer_id = config.get("login_customer_id")
     return client
@@ -3135,3 +3142,12 @@ def test_default_ads_assistant_caches_package_lookup():
       assert api._default_ads_assistant() == "google-ads-mcp-0.6.3"
 
     mock_version.assert_called_once_with("google-ads-mcp")
+
+
+def test_removed_sdk_auth_option_is_ignored_without_mutating_credentials():
+  original = {"use_cloud_org_for_api_access": True, "developer_token": "test"}
+  with mock.patch.object(api, "_default_ads_assistant", return_value=None):
+    normalized = api._apply_ads_client_defaults(original)
+  assert "use_cloud_org_for_api_access" not in normalized
+  assert original["use_cloud_org_for_api_access"] is True
+  assert normalized["use_proto_plus"] is True

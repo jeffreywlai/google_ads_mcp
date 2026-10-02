@@ -492,7 +492,7 @@ class TestDocsEdgeCases:
             name
         ), f"View '{name}' doesn't match ResourceName pattern"
 
-  def test_views_yaml_includes_v24_query_builder_manifest_additions(self):
+  def test_views_yaml_includes_v25_query_builder_manifest_additions(self):
     result = docs._get_views_list()
     expected_resources = [
         "ai_max_search_term_ad_combination_view",
@@ -508,9 +508,19 @@ class TestDocsEdgeCases:
         "matched_location_interest_view",
         "targeting_expansion_view",
         "you_tube_video_upload",
+        "lift_measurement_config",
+        "lift_measurement_flight",
+        "lift_measurement_age_range",
+        "lift_measurement_campaign",
+        "lift_measurement_device",
+        "lift_measurement_gender",
+        "lift_measurement_video",
+        "multi_party_auth_review",
     ]
     for resource in expected_resources:
       assert f"- {resource}" in result
+    assert "- campaign_lifecycle_goal" not in result
+    assert "- customer_lifecycle_goal" not in result
 
 
 # ===================================================================

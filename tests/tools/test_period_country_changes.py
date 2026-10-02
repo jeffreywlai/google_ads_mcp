@@ -22,7 +22,7 @@ import re
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v24.services.types.google_ads_service import GoogleAdsRow
+from google.ads.googleads.v25.services.types.google_ads_service import GoogleAdsRow
 import pytest
 import yaml
 
@@ -58,7 +58,7 @@ def _mock_credential_scope():
 
 
 def _validate_query(query):
-  """Exercises actual GAQL preflight and installed v24 message fields."""
+  """Exercises actual GAQL preflight and installed v25 message fields."""
   api.preprocess_gaql(query)
   fields = re.search(r"SELECT (.*?) FROM", query, re.I | re.S)[1].split(",")
   for field in fields:

@@ -20,6 +20,9 @@ _CASES = json.loads(
     )
 )
 
+# Preserve the historical v24 corpus. These resources were removed in v25.
+_REMOVED_GOAL_QUERIES = {"q018", "q019", "q022", "q027"}
+
 
 def test_corpus_matches_report_counts():
   assert len(_CASES) == 122
@@ -38,9 +41,12 @@ def test_recorded_gaql_preflight(case):
           api, "get_account_calendar", return_value=(today, zone.key)
       ),
   ):
-    if case["expected_local_error"]:
-      with pytest.raises(ToolError):
+    if case["expected_local_error"] or case["case"] in _REMOVED_GOAL_QUERIES:
+      with pytest.raises(ToolError) as caught:
         api._prepare_public_gaql(case["query"], "123", None, "error")
+      if case["case"] in _REMOVED_GOAL_QUERIES:
+        assert "removed in Google Ads API v25" in str(caught.value)
+        assert "unified goal fields" in str(caught.value)
     else:
       prepared, metadata = api._prepare_public_gaql(
           case["query"], "123", None, "error"

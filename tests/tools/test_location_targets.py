@@ -22,12 +22,12 @@ from unittest import mock
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v24.errors.types.errors import GoogleAdsError
-from google.ads.googleads.v24.errors.types.errors import GoogleAdsFailure
-from google.ads.googleads.v24.resources.types.campaign_criterion import (
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsError
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.ads.googleads.v25.resources.types.campaign_criterion import (
     CampaignCriterion,
 )
-from google.ads.googleads.v24.services.types.campaign_criterion_service import (
+from google.ads.googleads.v25.services.types.campaign_criterion_service import (
     CampaignCriterionOperation,
     MutateCampaignCriteriaRequest,
     MutateCampaignCriteriaResponse,

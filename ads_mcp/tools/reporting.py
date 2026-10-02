@@ -44,6 +44,7 @@ from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import get_account_calendar
+from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import INLINE_PAGE_BYTE_LIMIT
 from ads_mcp.tools.api import INLINE_RESPONSE_BYTE_LIMIT
 from ads_mcp.tools.api import is_inline_omission
@@ -369,7 +370,168 @@ _VERTICAL_ADS_FIELDS = {
     "COUNTRY": "segments.vertical_ads_listing_country",
     "REGION": "segments.vertical_ads_listing_region",
     "PARTNER_ACCOUNT": "segments.vertical_ads_partner_account",
+    "ADVANCE_BOOKING_WINDOW": "segments.advance_booking_window",
+    "LENGTH_OF_BOOKING": "segments.length_of_booking",
+    "START_DATE": "segments.start_date",
+    "START_DAY_OF_WEEK": "segments.start_day_of_week",
+    "USER_SET_DATES": "segments.user_set_dates",
+    "PRICE_TIER": "segments.vertical_ads_price_tier",
+    "RATE_RULE_ID": "segments.vertical_ads_rate_rule_id",
+    "RATE_TYPE": "segments.vertical_ads_rate_type",
 }
+_VERTICAL_ADS_ITINERARY_SEGMENTS = {
+    "ADVANCE_BOOKING_WINDOW",
+    "LENGTH_OF_BOOKING",
+    "START_DATE",
+    "START_DAY_OF_WEEK",
+    "USER_SET_DATES",
+}
+_VERTICAL_ADS_BOOKING_METRICS = [
+    "metrics.vertical_ads_average_booking_value_micros",
+    "metrics.vertical_ads_potential_impressions",
+    "metrics.vertical_ads_price_difference_percentage",
+]
+_LIFT_MEASUREMENT_FIELDS = {
+    "CONFIG": (
+        "lift_measurement_config",
+        [
+            "resource_name",
+            "lift_measurement_config_id",
+            "name",
+            "conversion_actions",
+            "survey_language",
+            "conversion_lift_holdback_ratio_micros",
+            "single_measurement_question_set.advertiser_preferred_choice",
+            "single_measurement_question_set.competitor_choices",
+            "single_measurement_question_set.question_measurements",
+            "single_measurement_question_set.question_text_intended_action",
+            "single_measurement_question_set.question_text_subject_type",
+        ],
+    ),
+    "FLIGHT": (
+        "lift_measurement_flight",
+        [
+            "resource_name",
+            "lift_measurement_config_id",
+            "lift_measurement_flight_id",
+            "name",
+            "status",
+            "lift_type",
+            "start_date",
+            "end_date",
+            "survey_lift_info.target_response_mode",
+            "survey_lift_measurement.min_survey_response_date",
+            "survey_lift_measurement.max_survey_response_date",
+            "survey_lift_measurement.response_collection_ratio_micros",
+        ],
+    ),
+    "CAMPAIGN": (
+        "lift_measurement_campaign",
+        ["resource_name", "lift_measurement_config_id", "campaign"],
+    ),
+    "AGE_RANGE": (
+        "lift_measurement_age_range",
+        [
+            "resource_name",
+            "lift_measurement_config_id",
+            "campaign",
+            "age_range",
+        ],
+    ),
+    "DEVICE": (
+        "lift_measurement_device",
+        ["resource_name", "lift_measurement_config_id", "campaign", "device"],
+    ),
+    "GENDER": (
+        "lift_measurement_gender",
+        ["resource_name", "lift_measurement_config_id", "campaign", "gender"],
+    ),
+    "VIDEO": (
+        "lift_measurement_video",
+        ["resource_name", "lift_measurement_config_id", "campaign", "video"],
+    ),
+}
+_BRAND_LIFT_METRICS = [
+    f"metrics.{field}"
+    for field in (
+        "absolute_brand_lift",
+        "absolute_brand_lift_p90_lower_bound",
+        "absolute_brand_lift_p90_upper_bound",
+        "absolute_brand_lift_p_value",
+        "brand_lift_baseline_positive_response_rate",
+        "brand_lift_baseline_positive_response_rate_p90_lower_bound",
+        "brand_lift_baseline_positive_response_rate_p90_upper_bound",
+        "brand_lift_exposed_positive_responder_fractional_cookies",
+        (
+            "brand_lift_exposed_positive_responder_fractional_cookies"
+            "_p90_lower_bound"
+        ),
+        (
+            "brand_lift_exposed_positive_responder_fractional_cookies"
+            "_p90_upper_bound"
+        ),
+        "brand_lift_exposed_positive_response_rate",
+        "brand_lift_exposed_positive_response_rate_p90_lower_bound",
+        "brand_lift_exposed_positive_response_rate_p90_upper_bound",
+        "brand_lift_responses_exposed",
+        "brand_lift_responses_suppressed",
+        "brand_lift_suppressed_positive_responder_fractional_cookies",
+        (
+            "brand_lift_suppressed_positive_responder_fractional_cookies"
+            "_p90_lower_bound"
+        ),
+        (
+            "brand_lift_suppressed_positive_responder_fractional_cookies"
+            "_p90_upper_bound"
+        ),
+        "brand_lift_total_responses",
+        "cost_per_lifted_cookie",
+        "cost_per_lifted_cookie_p90_lower_bound",
+        "cost_per_lifted_cookie_p90_upper_bound",
+        "fractional_lifted_cookies",
+        "fractional_lifted_cookies_p90_lower_bound",
+        "fractional_lifted_cookies_p90_upper_bound",
+        "headroom_brand_lift",
+        "headroom_brand_lift_p90_lower_bound",
+        "headroom_brand_lift_p90_upper_bound",
+        "relative_brand_lift",
+        "relative_brand_lift_p90_lower_bound",
+        "relative_brand_lift_p90_upper_bound",
+    )
+]
+_CONVERSION_LIFT_METRICS = [
+    f"metrics.{field}"
+    for field in (
+        "conversion_lift_baseline_conversion_value",
+        "conversion_lift_baseline_conversions",
+        "conversion_lift_exposed_conversion_value",
+        "conversion_lift_exposed_conversions",
+        "cost_per_incremental_conversion",
+        "cost_per_incremental_conversion_p90_lower_bound",
+        "cost_per_incremental_conversion_p90_upper_bound",
+        "cost_per_incremental_conversion_winner_score",
+        "incremental_conversion_value",
+        "incremental_conversion_value_p90_lower_bound",
+        "incremental_conversion_value_p90_upper_bound",
+        "incremental_conversion_value_p_value",
+        "incremental_conversion_value_per_cost",
+        "incremental_conversion_value_per_cost_p90_lower_bound",
+        "incremental_conversion_value_per_cost_p90_upper_bound",
+        "incremental_conversion_value_per_cost_winner_score",
+        "incremental_conversion_value_winner_score",
+        "incremental_conversions",
+        "incremental_conversions_p90_lower_bound",
+        "incremental_conversions_p90_upper_bound",
+        "incremental_conversions_p_value",
+        "incremental_conversions_winner_score",
+        "relative_conversion_lift",
+        "relative_conversion_lift_p90_lower_bound",
+        "relative_conversion_lift_p90_upper_bound",
+        "relative_conversion_value_lift",
+        "relative_conversion_value_lift_p90_lower_bound",
+        "relative_conversion_value_lift_p90_upper_bound",
+    )
+]
 _CONTENT_SUITABILITY_VIEW_FIELDS = {
     "DETAIL": (
         "detail_content_suitability_placement_view",
@@ -449,7 +611,14 @@ _CAMPAIGN_PERFORMANCE_SEGMENTS = {
     "MONTH": "segments.month",
     "NETWORK": "segments.ad_network_type",
     "WEEK": "segments.week",
+    "LOYALTY_MEMBERSHIP": "segments.loyalty_membership",
 }
+_ORIGINAL_VALUE_INCOMPATIBLE_SEGMENTS = {"DEVICE", "LOYALTY_MEMBERSHIP"}
+_VIDEO_SOCIAL_METRICS = [
+    "metrics.youtube_comments",
+    "metrics.youtube_likes",
+    "metrics.youtube_shares",
+]
 _CUSTOMER_ACQUISITION_GRANULARITIES = {
     "DAY": "segments.date",
     "MONTH": "segments.month",
@@ -913,13 +1082,19 @@ def get_campaign_performance(
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists core campaign performance with optional common segments.
+  """Lists campaign performance and unadjusted biddable conversion value.
+
+  Original conversion value precedes value-rule and lifecycle-goal adjustments;
+  conversions_value includes those adjustments. The API cannot combine original
+  conversion value with DEVICE or LOYALTY_MEMBERSHIP. Those segments return core
+  metrics and explicitly list the unavailable metric in omitted_metrics.
 
   Args:
       customer_id: Google Ads customer ID.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range or {start_date, end_date}.
-      segment_by: Optional DATE, WEEK, MONTH, DEVICE, or NETWORK segments.
+      segment_by: Optional DATE, WEEK, MONTH, DEVICE, NETWORK, or
+          LOYALTY_MEMBERSHIP segments.
       limit: Maximum number of rows to return.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
@@ -928,6 +1103,7 @@ def get_campaign_performance(
       A paginated dict containing campaign performance rows.
   """
   validate_limit(limit)
+  customer_id = _report_customer_id(customer_id)
   segment_names = (
       _normalize_choices(
           segment_by,
@@ -941,6 +1117,12 @@ def get_campaign_performance(
       _CAMPAIGN_PERFORMANCE_SEGMENTS[segment_name]
       for segment_name in segment_names
   ]
+  original_value_available = not (
+      set(segment_names) & _ORIGINAL_VALUE_INCOMPATIBLE_SEGMENTS
+  )
+  metrics = list(_CORE_PERFORMANCE_METRICS)
+  if original_value_available:
+    metrics.append("metrics.original_conversion_value")
 
   where_conditions = [segments_date_condition(date_range)]
   _append_campaign_ad_group_filters(where_conditions, campaign_ids)
@@ -950,7 +1132,7 @@ def get_campaign_performance(
       "campaign.status",
       "campaign.advertising_channel_type",
       *segment_fields,
-      *_CORE_PERFORMANCE_METRICS,
+      *metrics,
   ]
   order_by = "metrics.cost_micros DESC"
   if segment_fields:
@@ -964,13 +1146,14 @@ def get_campaign_performance(
       {build_where_clause(where_conditions)}
       ORDER BY {order_by}
   """
-  page = run_gaql_query_page(
-      query=query,
-      customer_id=customer_id,
-      page_size=limit,
-      page_token=page_token,
-      login_customer_id=login_customer_id,
-  )
+  with handle_google_ads_errors():
+    page = run_gaql_query_page(
+        query=query,
+        customer_id=customer_id,
+        page_size=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+    )
   result = build_paginated_list_response(
       "campaign_performance",
       page["rows"],
@@ -980,6 +1163,9 @@ def get_campaign_performance(
       snapshot_token=page.get("snapshot_token"),
   )
   result["segment_by"] = segment_names
+  result["omitted_metrics"] = (
+      [] if original_value_available else ["metrics.original_conversion_value"]
+  )
   return result
 
 
@@ -2508,7 +2694,7 @@ def summarize_cart_data_sales(
     login_customer_id: str | None = None,
     page_token: str | None = None,
 ) -> dict[str, Any]:
-  """Summarizes v24 cart-data sales and profit metrics.
+  """Summarizes cart-data sales and profit metrics.
 
   This uses `cart_data_sales_view`, which only returns useful rows when
   conversions with cart data are implemented. Prefer this summary before
@@ -2953,8 +3139,9 @@ def list_video_audibility_performance(
     limit: int = 100,
     page_token: str | None = None,
     login_customer_id: str | None = None,
+    segment_by: str | None = None,
 ) -> dict[str, Any]:
-  """Lists video audibility and watch-time metrics by campaign.
+  """Lists video audibility, watch time, and Shorts social interactions.
 
   Args:
       customer_id: Google Ads customer ID.
@@ -2963,11 +3150,26 @@ def list_video_audibility_performance(
       limit: Maximum rows to return.
       page_token: Token for the next page of results.
       login_customer_id: Optional manager account ID.
+      segment_by: Optional AD_FORMAT or AD_SUB_FORMAT. AD_SUB_FORMAT also
+          selects the mandatory AD_FORMAT parent. Social metrics are not
+          selectable with AD_SUB_FORMAT and are listed in omitted_metrics.
 
   Returns:
       A paginated dict containing video audibility rows.
   """
   validate_limit(limit)
+  customer_id = _report_customer_id(customer_id)
+  segment_fields = []
+  if segment_by is not None:
+    segment_by = _normalize_choice(
+        segment_by, "segment_by", {"AD_FORMAT", "AD_SUB_FORMAT"}
+    )
+    segment_fields.append("segments.ad_format_type")
+    if segment_by == "AD_SUB_FORMAT":
+      segment_fields.append("segments.ad_sub_format_type")
+  social_metrics = (
+      [] if segment_by == "AD_SUB_FORMAT" else _VIDEO_SOCIAL_METRICS
+  )
 
   where_conditions = [segments_date_condition(date_range)]
   _append_int_list_filter(
@@ -2977,37 +3179,42 @@ def list_video_audibility_performance(
       "campaign_ids",
   )
 
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      "campaign.status",
+      "campaign.advertising_channel_type",
+      *segment_fields,
+      "metrics.impressions",
+      "metrics.video_trueview_views",
+      "metrics.video_trueview_view_rate",
+      "metrics.video_watch_time_duration_millis",
+      "metrics.average_video_watch_time_duration_millis",
+      "metrics.active_view_audibility_measurable_impressions",
+      "metrics.active_view_audibility_measurable_impressions_rate",
+      "metrics.active_view_audible_impressions",
+      "metrics.active_view_audible_impressions_rate",
+      "metrics.active_view_audible_two_seconds_impressions",
+      "metrics.active_view_audible_two_seconds_impressions_rate",
+      "metrics.active_view_audible_thirty_seconds_impressions",
+      "metrics.active_view_audible_thirty_seconds_impressions_rate",
+      *social_metrics,
+  ]
   query = f"""
-      SELECT
-        campaign.id,
-        campaign.name,
-        campaign.status,
-        campaign.advertising_channel_type,
-        metrics.impressions,
-        metrics.video_trueview_views,
-        metrics.video_trueview_view_rate,
-        metrics.video_watch_time_duration_millis,
-        metrics.average_video_watch_time_duration_millis,
-        metrics.active_view_audibility_measurable_impressions,
-        metrics.active_view_audibility_measurable_impressions_rate,
-        metrics.active_view_audible_impressions,
-        metrics.active_view_audible_impressions_rate,
-        metrics.active_view_audible_two_seconds_impressions,
-        metrics.active_view_audible_two_seconds_impressions_rate,
-        metrics.active_view_audible_thirty_seconds_impressions,
-        metrics.active_view_audible_thirty_seconds_impressions_rate
+      SELECT {", ".join(select_fields)}
       FROM campaign
       {build_where_clause(where_conditions)}
       ORDER BY metrics.impressions DESC
   """
-  page = run_gaql_query_page(
-      query=query,
-      customer_id=customer_id,
-      page_size=limit,
-      page_token=page_token,
-      login_customer_id=login_customer_id,
-  )
-  return build_paginated_list_response(
+  with handle_google_ads_errors():
+    page = run_gaql_query_page(
+        query=query,
+        customer_id=customer_id,
+        page_size=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+    )
+  result = build_paginated_list_response(
       "video_audibility_performance",
       page["rows"],
       total_count=page["total_results_count"],
@@ -3015,6 +3222,152 @@ def list_video_audibility_performance(
       next_page_token=page["next_page_token"],
       snapshot_token=page.get("snapshot_token"),
   )
+  result["segment_by"] = segment_by
+  result["omitted_metrics"] = (
+      [] if social_metrics else list(_VIDEO_SOCIAL_METRICS)
+  )
+  return result
+
+
+@reporting_tool
+def list_lift_measurements(
+    customer_id: str,
+    dimension: str = "CONFIG",
+    measurement_type: str = "CONFIGURATION",
+    lift_measurement_config_ids: list[str] | str | None = None,
+    date_range: str | dict[str, str] | None = None,
+    limit: int = 100,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists lift studies, flights, and measured brand or conversion lift.
+
+  CONFIGURATION returns current resource attributes. BRAND returns available
+  brand-lift metrics and statistical bounds by measurement type. CONVERSION
+  returns study-level conversion-lift metrics, bounds, and winner scores by
+  measurement window and conversion category. Winner scores cannot be combined
+  with conversion-action segmentation. These API observations do not
+  establish that a study or a statistically significant result is available.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      dimension: CONFIG, FLIGHT, CAMPAIGN, AGE_RANGE, DEVICE, GENDER, or VIDEO.
+      measurement_type: CONFIGURATION, BRAND, or CONVERSION. FLIGHT supports
+          CONFIGURATION only; CONVERSION supports CONFIG only.
+      lift_measurement_config_ids: Optional positive numeric study IDs;
+          accepts an array or JSON array string.
+      date_range: Optional GAQL date range or {start_date, end_date} for BRAND
+          metrics only. Omit for all available results. Conversion lift uses
+          measured study windows, which are returned as start/end segments.
+      limit: Maximum rows to return on this presentation page.
+      page_token: Token for the next page of the same immutable result.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      A bounded paginated dict of raw lift observations with dimension and
+      measurement type, total count, and exact retained CSV export access.
+      CONFIG identifies its omitted campaign-associations field and directs
+      callers to CAMPAIGN for those associations.
+  """
+  validate_limit(limit)
+  customer_id = _report_customer_id(customer_id)
+  dimension = _normalize_choice(
+      dimension, "dimension", set(_LIFT_MEASUREMENT_FIELDS)
+  )
+  measurement_type = _normalize_choice(
+      measurement_type,
+      "measurement_type",
+      {"CONFIGURATION", "BRAND", "CONVERSION"},
+  )
+  if dimension == "FLIGHT" and measurement_type != "CONFIGURATION":
+    raise ToolError("FLIGHT supports CONFIGURATION only.")
+  if measurement_type == "CONVERSION" and dimension != "CONFIG":
+    raise ToolError("CONVERSION lift supports the CONFIG dimension only.")
+  if date_range is not None and measurement_type != "BRAND":
+    raise ToolError(
+        "date_range filters BRAND metrics only. Conversion lift returns "
+        "its measured start/end windows; configuration reads have no "
+        "reporting date filter."
+    )
+  resource, fields = _LIFT_MEASUREMENT_FIELDS[dimension]
+  select_fields = [f"{resource}.{field}" for field in fields]
+  where_conditions = []
+  if lift_measurement_config_ids is not None:
+    ids = list(
+        dict.fromkeys(
+            _positive_report_id(value, "lift_measurement_config_ids")
+            for value in normalize_list_arg(
+                lift_measurement_config_ids, "lift_measurement_config_ids"
+            )
+        )
+    )
+    if not ids:
+      raise ToolError("lift_measurement_config_ids must not be empty.")
+    ids_csv = ", ".join(ids)
+    where_conditions.append(
+        f"{resource}.lift_measurement_config_id IN ({ids_csv})"
+    )
+  order_fields = [f"{resource}.lift_measurement_config_id"]
+  if measurement_type == "BRAND":
+    select_fields.extend(
+        ["segments.brand_lift_measurement_type", *_BRAND_LIFT_METRICS]
+    )
+    order_fields.append("segments.brand_lift_measurement_type")
+    if date_range is not None:
+      where_conditions.append(segments_date_condition(date_range))
+  elif measurement_type == "CONVERSION":
+    select_fields.extend(
+        [
+            "segments.conversion_lift_start_date",
+            "segments.conversion_lift_end_date",
+            "segments.conversion_lift_conversion_category",
+            "segments.conversion_lift_included_conversion_action_types",
+            *_CONVERSION_LIFT_METRICS,
+        ]
+    )
+    order_fields.extend(
+        [
+            "segments.conversion_lift_start_date",
+            "segments.conversion_lift_end_date",
+        ]
+    )
+  fields_csv = ", ".join(select_fields)
+  order_csv = ", ".join(order_fields)
+  query = (
+      f"SELECT {fields_csv} FROM {resource}"
+      + build_where_clause(where_conditions)
+      + f" ORDER BY {order_csv}"
+  )
+  with handle_google_ads_errors():
+    page = run_gaql_query_page(
+        query=query,
+        customer_id=customer_id,
+        page_size=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+    )
+  result = build_paginated_list_response(
+      "lift_measurements",
+      page["rows"],
+      total_count=page["total_results_count"],
+      page_size=limit,
+      next_page_token=page["next_page_token"],
+      snapshot_token=page.get("snapshot_token"),
+  )
+  result["dimension"] = dimension
+  result["measurement_type"] = measurement_type
+  result["omitted_fields"] = (
+      ["lift_measurement_config.campaigns"] if dimension == "CONFIG" else []
+  )
+  if dimension == "CONFIG":
+    result["configuration_note"] = (
+        "Campaign associations are omitted after a Google Ads API internal "
+        "error observed on 2026-10-02. Use dimension='CAMPAIGN' to read "
+        "campaign associations."
+    )
+  if date_range is not None:
+    result["date_range"] = date_range_label(date_range)
+  return result
 
 
 @reporting_tool
@@ -3027,12 +3380,14 @@ def list_vertical_ads_performance(
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists vertical-ads performance for travel and local inventory.
+  """Lists vertical-ads performance, booking value, and price competitiveness.
 
   Args:
       customer_id: Google Ads customer ID.
       segment_by: VERTICAL, LISTING, BRAND, CITY, COUNTRY, REGION, or
-          PARTNER_ACCOUNT.
+          PARTNER_ACCOUNT; hotel/travel selectors ADVANCE_BOOKING_WINDOW,
+          LENGTH_OF_BOOKING, START_DATE, START_DAY_OF_WEEK, USER_SET_DATES,
+          PRICE_TIER, RATE_RULE_ID, or RATE_TYPE.
       campaign_ids: Optional campaign IDs to filter to.
       date_range: GAQL date range such as LAST_30_DAYS.
       limit: Maximum rows to return.
@@ -3041,8 +3396,13 @@ def list_vertical_ads_performance(
 
   Returns:
       A paginated dict containing vertical-ads performance rows.
+      Average booking value is the click-weighted average daily rate in micros
+      including taxes/fees, over the total stay, rather than conversion revenue.
+      Itinerary selectors cannot include booking/price metrics; omitted_metrics
+      explicitly identifies those unavailable combinations.
   """
   validate_limit(limit)
+  customer_id = _report_customer_id(customer_id)
   normalized_segment_by = _normalize_choice(
       segment_by,
       "segment_by",
@@ -3056,29 +3416,39 @@ def list_vertical_ads_performance(
       campaign_ids,
       "campaign_ids",
   )
+  booking_metrics = (
+      []
+      if normalized_segment_by in _VERTICAL_ADS_ITINERARY_SEGMENTS
+      else _VERTICAL_ADS_BOOKING_METRICS
+  )
+  select_fields = [
+      "campaign.id",
+      "campaign.name",
+      _VERTICAL_ADS_FIELDS[normalized_segment_by],
+      "metrics.impressions",
+      "metrics.clicks",
+      "metrics.ctr",
+      "metrics.cost_micros",
+      "metrics.conversions",
+      "metrics.conversions_value",
+      *booking_metrics,
+  ]
 
   query = f"""
       SELECT
-        campaign.id,
-        campaign.name,
-        {_VERTICAL_ADS_FIELDS[normalized_segment_by]},
-        metrics.impressions,
-        metrics.clicks,
-        metrics.ctr,
-        metrics.cost_micros,
-        metrics.conversions,
-        metrics.conversions_value
+        {", ".join(select_fields)}
       FROM campaign
       {build_where_clause(where_conditions)}
       ORDER BY metrics.conversions_value DESC
   """
-  page = run_gaql_query_page(
-      query=query,
-      customer_id=customer_id,
-      page_size=limit,
-      page_token=page_token,
-      login_customer_id=login_customer_id,
-  )
+  with handle_google_ads_errors():
+    page = run_gaql_query_page(
+        query=query,
+        customer_id=customer_id,
+        page_size=limit,
+        page_token=page_token,
+        login_customer_id=login_customer_id,
+    )
   result = build_paginated_list_response(
       "vertical_ads_performance",
       page["rows"],
@@ -3088,6 +3458,9 @@ def list_vertical_ads_performance(
       snapshot_token=page.get("snapshot_token"),
   )
   result["segment_by"] = normalized_segment_by
+  result["omitted_metrics"] = (
+      [] if booking_metrics else list(_VERTICAL_ADS_BOOKING_METRICS)
+  )
   return result
 
 
@@ -3862,7 +4235,7 @@ def list_travel_feed_asset_sets(
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists v24 travel feed asset sets and their linked feed IDs.
+  """Lists travel feed asset sets and their linked feed IDs.
 
   Args:
       customer_id: Google Ads customer ID.
@@ -3924,7 +4297,7 @@ def list_retail_filter_shared_criteria(
     page_token: str | None = None,
     login_customer_id: str | None = None,
 ) -> dict[str, Any]:
-  """Lists v24 tag-based retail filter shared criteria.
+  """Lists tag-based retail filter shared criteria.
 
   Args:
       customer_id: Google Ads customer ID.
@@ -3997,6 +4370,22 @@ _CAMPAIGN_SETTINGS_FIELDS = [
     "campaign.end_date_time",
     "campaign.ai_max_setting.enable_ai_max",
     "campaign.ai_max_setting.bundling_required",
+    "campaign.aca_migration_date_time",
+    "campaign.broad_match_migration_date_time",
+    "campaign.shopping_setting.ignore_brand_exclusion_in_shopping_ads",
+    "campaign.pmax_campaign_settings.brand_targeting_overrides."
+    "ignore_exclusions_for_shopping_ads",
+    "campaign.pmax_campaign_settings.local_services_enabled",
+    "campaign.pmax_campaign_settings.local_services_pmax_campaign_settings."
+    "navigational_query_leads_enabled",
+    "campaign.pmax_campaign_settings.local_services_pmax_campaign_settings."
+    "founding_year",
+    "campaign.pmax_campaign_settings.local_services_pmax_campaign_settings."
+    "country_code",
+    "campaign.pmax_campaign_settings.local_services_pmax_campaign_settings."
+    "phone_numbers",
+    "campaign.third_party_integration_partners."
+    "conversion_attribution_integration_partners",
     "campaign.geo_target_type_setting.positive_geo_target_type",
     "campaign.geo_target_type_setting.negative_geo_target_type",
     "campaign.asset_automation_settings",
@@ -4018,12 +4407,57 @@ _PORTFOLIO_TARGET_FIELDS = [
     "accessible_bidding_strategy.maximize_conversion_value.target_roas",
     "accessible_bidding_strategy.maximize_conversions.target_cpa_micros",
 ]
+_GOAL_VALUE_FIELDS = (
+    "additional_value",
+    "value_multiplier",
+    "additional_high_lifetime_value",
+    "high_lifetime_value_multiplier",
+)
+_GOAL_FIELDS = [
+    "goal.resource_name",
+    "goal.goal_id",
+    "goal.goal_type",
+    "goal.owner_customer",
+    "goal.optimization_eligibility",
+    *[
+        f"goal.{settings}.value_settings.{field}"
+        for settings in (
+            "new_customer_acquisition_goal_settings",
+            "retention_goal_settings",
+        )
+        for field in _GOAL_VALUE_FIELDS
+    ],
+    "goal.loyalty_retention_goal_settings.value_settings.value_multiplier",
+]
+_CAMPAIGN_GOAL_CONFIG_FIELDS = [
+    "campaign_goal_config.resource_name",
+    "campaign_goal_config.campaign",
+    "campaign_goal_config.goal",
+    "campaign_goal_config.goal_type",
+    *[
+        f"campaign_goal_config.{settings}.value_settings_override.{field}"
+        for settings in (
+            "campaign_new_customer_acquisition_settings",
+            "campaign_retention_settings",
+        )
+        for field in _GOAL_VALUE_FIELDS
+    ],
+    "campaign_goal_config.campaign_new_customer_acquisition_settings."
+    "target_option",
+    "campaign_goal_config.campaign_retention_settings.target_option",
+    "campaign_goal_config.campaign_loyalty_retention_settings."
+    "enable_bid_adjustments_for_loyalty_members",
+    "campaign_goal_config.campaign_loyalty_retention_settings."
+    "show_targeted_loyalty_member_benefits_in_pla",
+    "campaign_goal_config.campaign_loyalty_retention_settings."
+    "value_settings_override.value_multiplier",
+]
 
 
 def _positive_report_id(value: Any, field_name: str) -> str:
   normalized = quote_int_value(value, field_name)
-  if int(normalized) <= 0:
-    raise ToolError(f"{field_name} must be a positive integer.")
+  if not 0 < int(normalized) < 2**63:
+    raise ToolError(f"{field_name} must be a positive int64 integer.")
   return normalized
 
 
@@ -4050,7 +4484,8 @@ def _settings_rows(
   query = f"SELECT {fields_csv} FROM {resource}" + build_where_clause(
       [condition]
   )
-  return run_gaql_query(query, customer_id, login_customer_id)
+  with handle_google_ads_errors():
+    return run_gaql_query(query, customer_id, login_customer_id)
 
 
 def _settings_by_key(
@@ -4117,9 +4552,11 @@ def get_campaign_settings(
   """Returns a complete current settings snapshot for requested campaigns.
 
   Joins uncapped settings reads before bounding the response. Includes budget
-  period/type, standard and portfolio bidding targets, v24 start/end times,
-  AI Max, geo settings, resolved location targets, and attached shared sets.
-  Includes standard/custom conversion goals and acquisition lifecycle goals.
+  period/type, bidding targets, start/end times, AI Max migration dates, geo
+  settings, location targets, shared sets, and asset automation (including
+  automated video crawl). Includes Shopping brand exclusions, PMax Local
+  Services settings, third-party attribution integrations, standard/custom
+  conversion goals, and unified acquisition, retention, and loyalty goals.
   Values are current API observations, not historical settings or a transaction.
 
   Args:
@@ -4131,6 +4568,7 @@ def get_campaign_settings(
       Campaign snapshots, account time zone/currency, missing IDs, and an exact
       materialized export call if the assembled response exceeds inline limits.
       Missing source rows are null or empty, rather than invented zero settings.
+      account_goals_read is false when no requested campaign was returned.
   """
   customer_id = _report_customer_id(customer_id)
   ids = list(
@@ -4149,6 +4587,8 @@ def get_campaign_settings(
           "customer.time_zone",
           "customer.currency_code",
           "customer.conversion_tracking_setting.google_ads_conversion_customer",
+          "customer.video_customer.third_party_integration_partners."
+          "conversion_attribution_integration_partners",
       ],
       "",
       login_customer_id,
@@ -4156,6 +4596,17 @@ def get_campaign_settings(
   if not account_rows:
     raise ToolError("No customer settings were returned.")
   account = account_rows[0]
+  conversion_owner = account.get(
+      "customer.conversion_tracking_setting.google_ads_conversion_customer"
+  )
+  conversion_customer_id = customer_id
+  if conversion_owner:
+    match = re.fullmatch(r"customers/([0-9]+)", conversion_owner)
+    if not match:
+      raise ToolError("Invalid conversion customer resource returned.")
+    conversion_customer_id = _positive_report_id(
+        match[1], "conversion customer"
+    )
   ids_csv = ", ".join(ids)
   campaign_condition = f"campaign.id IN ({ids_csv})"
   campaigns = _settings_rows(
@@ -4173,18 +4624,28 @@ def get_campaign_settings(
           value for value in ids if value not in returned_ids
       ],
       "snapshot_complete": True,
+      "goal_owner_customer_id": conversion_customer_id,
+      "account_goals": [],
+      "account_goals_read": False,
       "snapshot_note": (
           "Current settings from sequential API reads; changes during this "
           "call can affect consistency. Raw scalar API defaults do not prove "
-          "a bidding target or lifecycle value override is explicitly set. "
-          "No returned lifecycle row means unavailable, not zero."
+          "a bidding target or goal value override is explicitly set, or "
+          "identify the active value-adjustment oneof. No returned goal row "
+          "means unavailable, not zero. Campaign goal configs are read from "
+          "the serving account; account goals from its conversion owner."
       ),
       "campaigns": [],
   }
   if not campaigns:
     return finalize_bounded_response(
         result,
-        ("campaigns", "requested_campaign_ids", "missing_campaign_ids"),
+        (
+            "campaigns",
+            "account_goals",
+            "requested_campaign_ids",
+            "missing_campaign_ids",
+        ),
         max_bytes=INLINE_PAGE_BYTE_LIMIT,
     )
 
@@ -4276,47 +4737,23 @@ def get_campaign_settings(
       login_customer_id,
   )
   campaign_resources = [row["campaign.resource_name"] for row in campaigns]
-  lifecycle_rows = _settings_rows(
+  campaign_goal_configs = _settings_rows(
       customer_id,
-      "campaign_lifecycle_goal",
-      [
-          "campaign_lifecycle_goal.resource_name",
-          "campaign_lifecycle_goal.campaign",
-          "campaign_lifecycle_goal.customer_acquisition_goal_settings."
-          "optimization_mode",
-          "campaign_lifecycle_goal.customer_acquisition_goal_settings."
-          "value_settings.value",
-          "campaign_lifecycle_goal.customer_acquisition_goal_settings."
-          "value_settings.high_lifetime_value",
-      ],
+      "campaign_goal_config",
+      _CAMPAIGN_GOAL_CONFIG_FIELDS,
       _settings_resource_condition(
-          "campaign_lifecycle_goal.campaign", campaign_resources
+          "campaign_goal_config.campaign", campaign_resources
       ),
       login_customer_id,
   )
-  conversion_owner = account.get(
-      "customer.conversion_tracking_setting.google_ads_conversion_customer"
-  )
-  conversion_customer_id = customer_id
-  if conversion_owner:
-    match = re.fullmatch(r"customers/(\d+)", conversion_owner)
-    if not match:
-      raise ToolError("Invalid conversion customer resource returned.")
-    conversion_customer_id = match[1]
-  customer_lifecycle_rows = _settings_rows(
+  result["account_goals"] = _settings_rows(
       conversion_customer_id,
-      "customer_lifecycle_goal",
-      [
-          "customer_lifecycle_goal.resource_name",
-          "customer_lifecycle_goal.owner_customer",
-          "customer_lifecycle_goal."
-          "customer_acquisition_goal_value_settings.value",
-          "customer_lifecycle_goal."
-          "customer_acquisition_goal_value_settings.high_lifetime_value",
-      ],
+      "goal",
+      _GOAL_FIELDS,
       "",
       login_customer_id,
   )
+  result["account_goals_read"] = True
   portfolios = sorted(
       {
           row["campaign.accessible_bidding_strategy"]
@@ -4346,8 +4783,8 @@ def get_campaign_settings(
   standards_by_id = _settings_by_key(standard_goals, "campaign.id")
   locations_by_id = _settings_by_key(locations, "campaign.id")
   shared_sets_by_id = _settings_by_key(shared_sets, "campaign.id")
-  lifecycle_by_campaign = _settings_by_key(
-      lifecycle_rows, "campaign_lifecycle_goal.campaign"
+  goals_by_campaign = _settings_by_key(
+      campaign_goal_configs, "campaign_goal_config.campaign"
   )
   for campaign in sorted(campaigns, key=lambda row: int(row["campaign.id"])):
     campaign_id = str(campaign["campaign.id"])
@@ -4368,15 +4805,19 @@ def get_campaign_settings(
                 "standard": standards_by_id.get(campaign_id, []),
                 "custom": custom_goals.get(custom_resource),
             },
-            "campaign_lifecycle_goals": lifecycle_by_campaign.get(
+            "campaign_goal_configs": goals_by_campaign.get(
                 campaign["campaign.resource_name"], []
             ),
-            "customer_lifecycle_goals": customer_lifecycle_rows,
         }
     )
   return finalize_bounded_response(
       result,
-      ("campaigns", "requested_campaign_ids", "missing_campaign_ids"),
+      (
+          "campaigns",
+          "account_goals",
+          "requested_campaign_ids",
+          "missing_campaign_ids",
+      ),
       max_bytes=INLINE_PAGE_BYTE_LIMIT,
   )
 
@@ -4776,7 +5217,7 @@ def compare_performance_around_changes(
       "current_budget_association_scope": "current settings only",
       "budget_change_query_scope": (
           "all account CAMPAIGN_BUDGET events, then scoped locally; "
-          "change_resource_name is not filterable in v24"
+          "change_resource_name is not filterable in v25"
       ),
       "change_source_export_calls": [
           _snapshot_export_call(source["snapshot_token"]) for source in sources

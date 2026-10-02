@@ -11,7 +11,7 @@ from unittest import mock
 from ads_mcp.tools import api
 from ads_mcp.tools import changes
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v24.resources.types.change_event import ChangeEvent
+from google.ads.googleads.v25.resources.types.change_event import ChangeEvent
 from google.protobuf.field_mask_pb2 import FieldMask
 import pytest
 

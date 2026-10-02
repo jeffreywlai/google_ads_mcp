@@ -25,7 +25,7 @@ from unittest import mock
 from ads_mcp.tools import api
 from ads_mcp.tools import docs
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v24.resources.types.google_ads_field import GoogleAdsField
+from google.ads.googleads.v25.resources.types.google_ads_field import GoogleAdsField
 import pytest
 import yaml
 

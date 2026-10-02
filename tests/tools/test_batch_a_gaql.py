@@ -78,7 +78,7 @@ def test_removed_fields_have_inline_non_equivalent_alternatives(
     _gaql.preprocess_gaql_query(f"SELECT {field} FROM {resource}")
   assert alternative in str(error.value)
   assert "not equivalent" in str(error.value)
-  assert "v24" in str(error.value)
+  assert "v25" in str(error.value)
 
 
 def test_unknown_future_field_passes_but_known_invalid_fields_do_not():
@@ -135,7 +135,7 @@ def test_unknown_pairwise_fields_reach_service_unchanged(
             "not selectable",
         ),
         ("metrics.unique_users, segments.conversion_action", "not selectable"),
-        ("campaign.url_expansion_opt_out", "unavailable in v24"),
+        ("campaign.url_expansion_opt_out", "unavailable in v25"),
     ],
 )
 def test_unknown_fields_do_not_bypass_known_invalid_checks(

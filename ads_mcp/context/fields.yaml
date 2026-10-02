@@ -2250,7 +2250,7 @@ ad_group.excluded_parent_asset_field_types:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: true
   sortable: false
@@ -4086,7 +4086,7 @@ ad_group_ad_asset_view.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -4107,7 +4107,7 @@ ad_group_ad_asset_view.pinned_field:
     HEADLINE_AS_SITELINK_POSITION_TWO, HEADLINE_IN_PORTRAIT, LANDSCAPE_LOGO, LEAD_FORM,
     LOGO, LONG_HEADLINE, MARKETING_IMAGE, MARKETING_IMAGE_IN_PORTRAIT, MOBILE_APP,
     PORTRAIT_MARKETING_IMAGE, PRICE, PROMOTION, SITELINK, SQUARE_MARKETING_IMAGE,
-    STRUCTURED_SNIPPET, UNKNOWN, UNSPECIFIED, YOU_TUBE_VIDEO
+    STRUCTURED_SNIPPET, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, YOU_TUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -4180,7 +4180,7 @@ ad_group_asset.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -4571,6 +4571,13 @@ ad_group_criterion.effective_percent_cpc_bid_source:
   filterable: true
   is_repeated: false
   sortable: true
+ad_group_criterion.entity_bid.item_code:
+  data_type: STRING
+  description: <p>The ID specifying a particular travel entity, such as a hotel, a
+    thing to do, or an event.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
 ad_group_criterion.extended_demographic.extended_demographic_id:
   data_type: INT64
   description: <p>Taxonomy id of the extended demographic group.</p>
@@ -4949,7 +4956,8 @@ ad_group_criterion.quality_info.quality_score:
   sortable: true
 ad_group_criterion.quality_info.search_predicted_ctr:
   data_type: ENUM
-  description: <p>Output only. The click-through rate compared to that of other advertisers.</p>
+  description: <p>Output only. The clickthrough rate (CTR) compared to that of other
+    advertisers.</p>
   enum_values: ABOVE_AVERAGE, AVERAGE, BELOW_AVERAGE, UNKNOWN, UNSPECIFIED
   filterable: true
   is_repeated: false
@@ -5030,9 +5038,9 @@ ad_group_criterion.type:
     LISTING_GROUP, LISTING_SCOPE, LOCAL_SERVICE_ID, LOCATION, LOCATION_GROUP, MOBILE_APPLICATION,
     MOBILE_APP_CATEGORY, MOBILE_DEVICE, NEGATIVE_KEYWORD_LIST, OPERATING_SYSTEM_VERSION,
     PARENTAL_STATUS, PLACEMENT, PLACEMENT_LIST, PROXIMITY, RETAIL_FILTER, RETAIL_FILTER_BUNDLE,
-    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_GROUP_RULE,
-    VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP, WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL,
-    YOUTUBE_VIDEO
+    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_BID,
+    VERTICAL_ADS_ITEM_GROUP_RULE, VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP,
+    WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -5819,8 +5827,8 @@ applied_incentive.reward_grant_date_time:
   sortable: true
 asset.app_deep_link_asset.app_deep_link_uri:
   data_type: STRING
-  description: <p>The uri for the app deep link, The uri can be either a custom scheme
-    uri (e.g. mystore://shoes) or universal uri (e.g. <a href="http://www.mystore.com/shoes">http://www.mystore.com/shoes</a>).</p>
+  description: <p>The uri for the app deep link. The uri can be either a custom scheme
+    uri (e.g., <code>mystore://shoes</code>) or universal uri (e.g., <code><a href="http://www.mystore.com/shoes">http://www.mystore.com/shoes</a></code>).</p>
   filterable: true
   is_repeated: false
   sortable: true
@@ -5984,21 +5992,24 @@ asset.demand_gen_carousel_card_asset.headline:
   sortable: true
 asset.demand_gen_carousel_card_asset.marketing_image_asset:
   data_type: RESOURCE_NAME
-  description: <p>Asset resource name of the associated 1.91:1 marketing image. This
-    and/or square marketing image asset is required.</p>
+  description: <p>Asset resource name of the associated 1.91:1 marketing image. Either
+    this image, or the square marketing image, or both, is required. Temporary IDs
+    are not supported. Only existing image assets can be referenced.</p>
   filterable: true
   is_repeated: false
   sortable: true
 asset.demand_gen_carousel_card_asset.portrait_marketing_image_asset:
   data_type: RESOURCE_NAME
-  description: <p>Asset resource name of the associated 4:5 portrait marketing image.</p>
+  description: <p>Asset resource name of the associated 4:5 portrait marketing image.
+    Temporary IDs are not supported. Only existing image assets can be referenced.</p>
   filterable: true
   is_repeated: false
   sortable: true
 asset.demand_gen_carousel_card_asset.square_marketing_image_asset:
   data_type: RESOURCE_NAME
-  description: <p>Asset resource name of the associated square marketing image. This
-    and/or a marketing image asset is required.</p>
+  description: <p>Asset resource name of the associated square marketing image. Either
+    this image, or the 1.91:1 marketing image, or both, is required. Temporary IDs
+    are not supported. Only existing image assets can be referenced.</p>
   filterable: true
   is_repeated: false
   sortable: true
@@ -7505,7 +7516,7 @@ asset_field_type_view.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -7551,6 +7562,15 @@ asset_group.final_mobile_urls:
   filterable: true
   is_repeated: true
   sortable: false
+asset_group.final_url_suffix:
+  data_type: STRING
+  description: '<p>URL template for appending params to landing page URLs served with
+    parallel
+
+    tracking.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 asset_group.final_urls:
   data_type: STRING
   description: '<p>A list of final URLs after all cross domain redirects. In performance
@@ -7649,6 +7669,21 @@ asset_group.status:
   filterable: true
   is_repeated: false
   sortable: true
+asset_group.tracking_url_template:
+  data_type: STRING
+  description: <p>URL template for constructing a tracking URL.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+asset_group.url_custom_parameters:
+  data_type: MESSAGE
+  description: '<p>A list of mappings to be used for substituting URL custom parameter
+    tags in
+
+    the <code>tracking_url_template</code>, <code>final_urls</code>, and/or <code>final_mobile_urls</code>.</p>'
+  filterable: false
+  is_repeated: true
+  sortable: false
 asset_group_asset.asset:
   data_type: RESOURCE_NAME
   description: <p>Immutable. The asset which this asset group asset is linking.</p>
@@ -7673,7 +7708,7 @@ asset_group_asset.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -9213,6 +9248,17 @@ call_view.type:
   filterable: true
   is_repeated: false
   sortable: true
+campaign.aca_migration_date_time:
+  data_type: DATE
+  description: '<p>Output only. The timestamp when the ACA campaign was migrated to
+    AI Max.
+
+    The timestamp is in the customer''s timezone and in "yyyy-MM-dd HH:mm:ss"
+
+    format.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 campaign.accessible_bidding_strategy:
   data_type: RESOURCE_NAME
   description: '<p>Output only. Resource name of AccessibleBiddingStrategy, a read-only
@@ -9449,6 +9495,17 @@ campaign.brand_guidelines_enabled:
   filterable: true
   is_repeated: false
   sortable: false
+campaign.broad_match_migration_date_time:
+  data_type: DATE
+  description: '<p>Output only. The timestamp when the Broad Match campaign was migrated
+    to AI
+
+    Max. The timestamp is in the customer''s timezone and in "yyyy-MM-dd
+
+    HH:mm:ss" format.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 campaign.campaign_budget:
   data_type: RESOURCE_NAME
   description: <p>The resource name of the campaign budget of the campaign.</p>
@@ -9540,7 +9597,7 @@ campaign.excluded_parent_asset_field_types:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: true
   sortable: false
@@ -10272,6 +10329,13 @@ campaign.third_party_integration_partners.brand_safety_integration_partners:
   filterable: false
   is_repeated: true
   sortable: false
+campaign.third_party_integration_partners.conversion_attribution_integration_partners:
+  data_type: MESSAGE
+  description: <p>Third party integration partners for YouTube conversion attribution
+    verification for this Campaign.</p>
+  filterable: false
+  is_repeated: true
+  sortable: false
 campaign.third_party_integration_partners.reach_integration_partners:
   data_type: MESSAGE
   description: <p>Third party integration partners for reach verification for this
@@ -10478,7 +10542,7 @@ campaign_aggregate_asset_view.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -10516,7 +10580,7 @@ campaign_asset.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -10929,9 +10993,10 @@ campaign_conversion_goal.category:
   data_type: ENUM
   description: <p>The conversion category of this campaign conversion goal.</p>
   enum_values: ADD_TO_CART, BEGIN_CHECKOUT, BOOK_APPOINTMENT, CONTACT, CONVERTED_LEAD,
-    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, OUTBOUND_CLICK,
-    PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE, SIGNUP, STORE_SALE,
-    STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED, YOUTUBE_FOLLOW_ON_VIEWS
+    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, IN_APP_AD_REVENUE,
+    OUTBOUND_CLICK, PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE,
+    SIGNUP, STORE_SALE, STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED,
+    YOUTUBE_FOLLOW_ON_VIEWS
   filterable: true
   is_repeated: false
   sortable: true
@@ -11394,9 +11459,9 @@ campaign_criterion.type:
     LISTING_GROUP, LISTING_SCOPE, LOCAL_SERVICE_ID, LOCATION, LOCATION_GROUP, MOBILE_APPLICATION,
     MOBILE_APP_CATEGORY, MOBILE_DEVICE, NEGATIVE_KEYWORD_LIST, OPERATING_SYSTEM_VERSION,
     PARENTAL_STATUS, PLACEMENT, PLACEMENT_LIST, PROXIMITY, RETAIL_FILTER, RETAIL_FILTER_BUNDLE,
-    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_GROUP_RULE,
-    VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP, WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL,
-    YOUTUBE_VIDEO
+    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_BID,
+    VERTICAL_ADS_ITEM_GROUP_RULE, VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP,
+    WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -11604,6 +11669,57 @@ campaign_goal_config.campaign:
   filterable: true
   is_repeated: false
   sortable: false
+campaign_goal_config.campaign_loyalty_retention_settings.enable_bid_adjustments_for_loyalty_members:
+  data_type: BOOLEAN
+  description: <p>Whether to adjust bids for loyalty members.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_loyalty_retention_settings.show_targeted_loyalty_member_benefits_in_pla:
+  data_type: BOOLEAN
+  description: <p>Whether to show targeted loyalty member benefits in PLA format in
+    eligible countries.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_loyalty_retention_settings.value_settings_override.value_multiplier:
+  data_type: DOUBLE
+  description: <p>Conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_new_customer_acquisition_settings.target_option:
+  data_type: ENUM
+  description: <p>New Customer Acquisition goal optimization mode for this campaign.
+    Defaults to TARGET_ALL. Whether the campaign is targeting new customers only.</p>
+  enum_values: TARGET_ALL, TARGET_SPECIFIC, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_new_customer_acquisition_settings.value_settings_override.additional_high_lifetime_value:
+  data_type: DOUBLE
+  description: <p>Incremental high lifetime conversion value.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_new_customer_acquisition_settings.value_settings_override.additional_value:
+  data_type: DOUBLE
+  description: <p>Incremental conversion value.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_new_customer_acquisition_settings.value_settings_override.high_lifetime_value_multiplier:
+  data_type: DOUBLE
+  description: <p>High lifetime conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_new_customer_acquisition_settings.value_settings_override.value_multiplier:
+  data_type: DOUBLE
+  description: <p>Conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
 campaign_goal_config.campaign_retention_settings.target_option:
   data_type: ENUM
   description: <p>Retention goal optimization mode for this campaign. Defaults to
@@ -11614,17 +11730,25 @@ campaign_goal_config.campaign_retention_settings.target_option:
   sortable: true
 campaign_goal_config.campaign_retention_settings.value_settings_override.additional_high_lifetime_value:
   data_type: DOUBLE
-  description: <p>High lifetime value of the lifecycle goal. For example, for customer
-    acquisition goals, high lifetime value is the incremental conversion value for
-    lapsed customers who are of high value. High lifetime value should be greater
-    than value, if set.</p>
+  description: <p>Incremental high lifetime conversion value.</p>
   filterable: true
   is_repeated: false
   sortable: true
 campaign_goal_config.campaign_retention_settings.value_settings_override.additional_value:
   data_type: DOUBLE
-  description: <p>Value of the lifecycle goal. For example, for retention goals, value
-    is the incremental conversion value for lapsed customers who are not of high value.</p>
+  description: <p>Incremental conversion value.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_retention_settings.value_settings_override.high_lifetime_value_multiplier:
+  data_type: DOUBLE
+  description: <p>High lifetime conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+campaign_goal_config.campaign_retention_settings.value_settings_override.value_multiplier:
+  data_type: DOUBLE
+  description: <p>Conversion value multiplier.</p>
   filterable: true
   is_repeated: false
   sortable: true
@@ -11637,7 +11761,8 @@ campaign_goal_config.goal:
 campaign_goal_config.goal_type:
   data_type: ENUM
   description: <p>Output only. The goal type this link is attached to.</p>
-  enum_values: CUSTOMER_RETENTION, UNKNOWN, UNSPECIFIED
+  enum_values: CUSTOMER_RETENTION, LOYALTY_RETENTION, NEW_CUSTOMER_ACQUISITION, UNKNOWN,
+    UNSPECIFIED
   filterable: true
   is_repeated: false
   sortable: true
@@ -11709,46 +11834,6 @@ campaign_label.resource_name:
     Campaign label resource names have the form:
 
     <code>customers/{customer_id}/campaignLabels/{campaign_id}~{label_id}</code></p>'
-  filterable: true
-  is_repeated: false
-  sortable: false
-campaign_lifecycle_goal.campaign:
-  data_type: RESOURCE_NAME
-  description: <p>Output only. The campaign where the goal is attached.</p>
-  filterable: true
-  is_repeated: false
-  sortable: true
-campaign_lifecycle_goal.customer_acquisition_goal_settings.optimization_mode:
-  data_type: ENUM
-  description: <p>Output only. Customer acquisition optimization mode of this campaign.</p>
-  enum_values: BID_HIGHER_FOR_NEW_CUSTOMER, TARGET_ALL_EQUALLY, TARGET_NEW_CUSTOMER,
-    UNKNOWN, UNSPECIFIED
-  filterable: true
-  is_repeated: false
-  sortable: true
-campaign_lifecycle_goal.customer_acquisition_goal_settings.value_settings.high_lifetime_value:
-  data_type: DOUBLE
-  description: <p>High lifetime value of the lifecycle goal. For example, for customer
-    acquisition goal, high lifetime value is the incremental conversion value for
-    new customers who are of high value. High lifetime value should be greater than
-    value, if set.</p>
-  filterable: true
-  is_repeated: false
-  sortable: true
-campaign_lifecycle_goal.customer_acquisition_goal_settings.value_settings.value:
-  data_type: DOUBLE
-  description: <p>Value of the lifecycle goal. For example, for customer acquisition
-    goal, value is the incremental conversion value for new customers who are not
-    of high value.</p>
-  filterable: true
-  is_repeated: false
-  sortable: true
-campaign_lifecycle_goal.resource_name:
-  data_type: RESOURCE_NAME
-  description: '<p>Immutable. The resource name of the customer lifecycle goal of
-    a campaign.</p>
-
-    <p><code>customers/{customer_id}/campaignLifecycleGoals/{campaign_id}</code></p>'
   filterable: true
   is_repeated: false
   sortable: false
@@ -12237,7 +12322,7 @@ channel_aggregate_asset_view.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -12399,7 +12484,7 @@ combined_audience.resource_name:
 
     Combined audience names have the form:</p>
 
-    <p><code>customers/{customer_id}/combinedAudience/{combined_audience_id}</code></p>'
+    <p><code>customers/{customer_id}/combinedAudiences/{combined_audience_id}</code></p>'
   filterable: true
   is_repeated: false
   sortable: false
@@ -12450,9 +12535,10 @@ conversion_action.category:
   data_type: ENUM
   description: <p>The category of conversions reported for this conversion action.</p>
   enum_values: ADD_TO_CART, BEGIN_CHECKOUT, BOOK_APPOINTMENT, CONTACT, CONVERTED_LEAD,
-    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, OUTBOUND_CLICK,
-    PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE, SIGNUP, STORE_SALE,
-    STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED, YOUTUBE_FOLLOW_ON_VIEWS
+    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, IN_APP_AD_REVENUE,
+    OUTBOUND_CLICK, PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE,
+    SIGNUP, STORE_SALE, STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED,
+    YOUTUBE_FOLLOW_ON_VIEWS
   filterable: true
   is_repeated: false
   sortable: true
@@ -12635,8 +12721,9 @@ conversion_action.type:
   data_type: ENUM
   description: <p>Immutable. The type of this conversion action.</p>
   enum_values: AD_CALL, ANDROID_APP_PRE_REGISTRATION, ANDROID_INSTALLS_ALL_OTHER_APPS,
-    CLICK_TO_CALL, FIREBASE_ANDROID_CLOSE_CONVERT_LEAD, FIREBASE_ANDROID_CUSTOM, FIREBASE_ANDROID_FIRST_OPEN,
-    FIREBASE_ANDROID_GENERATE_LEAD, FIREBASE_ANDROID_IN_APP_PURCHASE, FIREBASE_ANDROID_QUALIFY_LEAD,
+    CLICK_TO_CALL, FIREBASE_ANDROID_APP_AD_IMPRESSION, FIREBASE_ANDROID_CLOSE_CONVERT_LEAD,
+    FIREBASE_ANDROID_CUSTOM, FIREBASE_ANDROID_FIRST_OPEN, FIREBASE_ANDROID_GENERATE_LEAD,
+    FIREBASE_ANDROID_IN_APP_PURCHASE, FIREBASE_ANDROID_QUALIFY_LEAD, FIREBASE_IOS_APP_AD_IMPRESSION,
     FIREBASE_IOS_CLOSE_CONVERT_LEAD, FIREBASE_IOS_CUSTOM, FIREBASE_IOS_FIRST_OPEN,
     FIREBASE_IOS_GENERATE_LEAD, FIREBASE_IOS_IN_APP_PURCHASE, FIREBASE_IOS_QUALIFY_LEAD,
     FLOODLIGHT_ACTION, FLOODLIGHT_TRANSACTION, GOOGLE_ANALYTICS_4_CLOSE_CONVERT_LEAD,
@@ -12968,9 +13055,10 @@ conversion_value_rule_set.conversion_action_categories:
 
     set.</p>'
   enum_values: ADD_TO_CART, BEGIN_CHECKOUT, BOOK_APPOINTMENT, CONTACT, CONVERTED_LEAD,
-    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, OUTBOUND_CLICK,
-    PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE, SIGNUP, STORE_SALE,
-    STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED, YOUTUBE_FOLLOW_ON_VIEWS
+    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, IN_APP_AD_REVENUE,
+    OUTBOUND_CLICK, PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE,
+    SIGNUP, STORE_SALE, STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED,
+    YOUTUBE_FOLLOW_ON_VIEWS
   filterable: false
   is_repeated: true
   sortable: false
@@ -13327,9 +13415,9 @@ customer.conversion_tracking_setting.cross_account_conversion_tracking_id:
   sortable: true
 customer.conversion_tracking_setting.enhanced_conversions_for_leads_enabled:
   data_type: BOOLEAN
-  description: <p>Output only. Whether the customer is opted-in for enhanced conversions
-    for leads. If using cross-account conversion tracking, this value is inherited
-    from the manager. This field is read-only.</p>
+  description: '<p>Output only. Deprecated: Use enablement_setting instead. Whether
+    the customer is opted-in for enhanced conversions for leads. If using cross-account
+    conversion tracking, this value is inherited from the manager. This field is read-only.</p>'
   filterable: false
   is_repeated: false
   sortable: false
@@ -13563,6 +13651,13 @@ customer.video_customer.third_party_integration_partners.brand_safety_integratio
   filterable: false
   is_repeated: true
   sortable: false
+customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners:
+  data_type: MESSAGE
+  description: <p>Allowed third party integration partners for YouTube conversion
+    attribution verification.</p>
+  filterable: false
+  is_repeated: true
+  sortable: false
 customer.video_customer.third_party_integration_partners.reach_integration_partners:
   data_type: MESSAGE
   description: <p>Allowed third party integration partners for reach verification.</p>
@@ -13592,7 +13687,7 @@ customer_asset.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -13839,9 +13934,10 @@ customer_conversion_goal.category:
 
     conversion actions that have this category will be included in this goal.</p>'
   enum_values: ADD_TO_CART, BEGIN_CHECKOUT, BOOK_APPOINTMENT, CONTACT, CONVERTED_LEAD,
-    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, OUTBOUND_CLICK,
-    PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE, SIGNUP, STORE_SALE,
-    STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED, YOUTUBE_FOLLOW_ON_VIEWS
+    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, IN_APP_AD_REVENUE,
+    OUTBOUND_CLICK, PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE,
+    SIGNUP, STORE_SALE, STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED,
+    YOUTUBE_FOLLOW_ON_VIEWS
   filterable: true
   is_repeated: false
   sortable: true
@@ -13937,41 +14033,6 @@ customer_label.resource_name:
     Customer label resource names have the form:
 
     <code>customers/{customer_id}/customerLabels/{label_id}</code></p>'
-  filterable: true
-  is_repeated: false
-  sortable: false
-customer_lifecycle_goal.customer_acquisition_goal_value_settings.high_lifetime_value:
-  data_type: DOUBLE
-  description: <p>High lifetime value of the lifecycle goal. For example, for customer
-    acquisition goal, high lifetime value is the incremental conversion value for
-    new customers who are of high value. High lifetime value should be greater than
-    value, if set.</p>
-  filterable: true
-  is_repeated: false
-  sortable: true
-customer_lifecycle_goal.customer_acquisition_goal_value_settings.value:
-  data_type: DOUBLE
-  description: <p>Value of the lifecycle goal. For example, for customer acquisition
-    goal, value is the incremental conversion value for new customers who are not
-    of high value.</p>
-  filterable: true
-  is_repeated: false
-  sortable: true
-customer_lifecycle_goal.owner_customer:
-  data_type: RESOURCE_NAME
-  description: '<p>Output only. The resource name of the customer which owns the lifecycle
-
-    goal.</p>'
-  filterable: true
-  is_repeated: false
-  sortable: true
-customer_lifecycle_goal.resource_name:
-  data_type: RESOURCE_NAME
-  description: '<p>Immutable. The resource name of the customer lifecycle goal.
-
-    Customer lifecycle resource names have the form:</p>
-
-    <p><code>customers/{customer_id}/customerLifecycleGoal</code></p>'
   filterable: true
   is_repeated: false
   sortable: false
@@ -14096,9 +14157,9 @@ customer_negative_criterion.type:
     LISTING_GROUP, LISTING_SCOPE, LOCAL_SERVICE_ID, LOCATION, LOCATION_GROUP, MOBILE_APPLICATION,
     MOBILE_APP_CATEGORY, MOBILE_DEVICE, NEGATIVE_KEYWORD_LIST, OPERATING_SYSTEM_VERSION,
     PARENTAL_STATUS, PLACEMENT, PLACEMENT_LIST, PROXIMITY, RETAIL_FILTER, RETAIL_FILTER_BUNDLE,
-    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_GROUP_RULE,
-    VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP, WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL,
-    YOUTUBE_VIDEO
+    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_BID,
+    VERTICAL_ADS_ITEM_GROUP_RULE, VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP,
+    WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -14327,7 +14388,7 @@ data_link.resource_name:
 
     DataLink resource names have the form:</p>
 
-    <p>`customers/{customer_id}/datalinks/{product_link_id}~{data_link_id}</p>'
+    <p><code>customers/{customer_id}/dataLinks/{product_link_id}~{data_link_id}</code></p>'
   filterable: true
   is_repeated: false
   sortable: false
@@ -14755,6 +14816,12 @@ experiment.goals:
   filterable: false
   is_repeated: true
   sortable: false
+experiment.lift_measurement_config:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The lift measurement configuration.</p>
+  filterable: true
+  is_repeated: false
+  sortable: false
 experiment.long_running_operation:
   data_type: STRING
   description: '<p>Output only. The resource name of the long-running operation that
@@ -14985,7 +15052,7 @@ final_url_expansion_asset_view.field_type:
     LANDING_PAGE_PREVIEW, LANDSCAPE_LOGO, LEAD_FORM, LOGO, LONG_DESCRIPTION, LONG_HEADLINE,
     MANDATORY_AD_TEXT, MARKETING_IMAGE, MEDIA_BUNDLE, MOBILE_APP, PORTRAIT_MARKETING_IMAGE,
     PRICE, PROMOTION, RELATED_YOUTUBE_VIDEOS, SITELINK, SQUARE_MARKETING_IMAGE, STRUCTURED_SNIPPET,
-    TALL_PORTRAIT_MARKETING_IMAGE, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
+    TALL_PORTRAIT_MARKETING_IMAGE, TEXT_DISCLAIMER, UNKNOWN, UNSPECIFIED, VIDEO, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -15113,7 +15180,38 @@ goal.goal_id:
 goal.goal_type:
   data_type: ENUM
   description: <p>Output only. The type of this goal.</p>
-  enum_values: CUSTOMER_RETENTION, UNKNOWN, UNSPECIFIED
+  enum_values: CUSTOMER_RETENTION, LOYALTY_RETENTION, NEW_CUSTOMER_ACQUISITION, UNKNOWN,
+    UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.loyalty_retention_goal_settings.value_settings.value_multiplier:
+  data_type: DOUBLE
+  description: <p>Conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.new_customer_acquisition_goal_settings.value_settings.additional_high_lifetime_value:
+  data_type: DOUBLE
+  description: <p>Incremental high lifetime conversion value.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.new_customer_acquisition_goal_settings.value_settings.additional_value:
+  data_type: DOUBLE
+  description: <p>Incremental conversion value.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.new_customer_acquisition_goal_settings.value_settings.high_lifetime_value_multiplier:
+  data_type: DOUBLE
+  description: <p>High lifetime conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.new_customer_acquisition_goal_settings.value_settings.value_multiplier:
+  data_type: DOUBLE
+  description: <p>Conversion value multiplier.</p>
   filterable: true
   is_repeated: false
   sortable: true
@@ -15142,17 +15240,25 @@ goal.resource_name:
   sortable: false
 goal.retention_goal_settings.value_settings.additional_high_lifetime_value:
   data_type: DOUBLE
-  description: <p>High lifetime value of the lifecycle goal. For example, for customer
-    acquisition goals, high lifetime value is the incremental conversion value for
-    lapsed customers who are of high value. High lifetime value should be greater
-    than value, if set.</p>
+  description: <p>Incremental high lifetime conversion value.</p>
   filterable: true
   is_repeated: false
   sortable: true
 goal.retention_goal_settings.value_settings.additional_value:
   data_type: DOUBLE
-  description: <p>Value of the lifecycle goal. For example, for retention goals, value
-    is the incremental conversion value for lapsed customers who are not of high value.</p>
+  description: <p>Incremental conversion value.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.retention_goal_settings.value_settings.high_lifetime_value_multiplier:
+  data_type: DOUBLE
+  description: <p>High lifetime conversion value multiplier.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+goal.retention_goal_settings.value_settings.value_multiplier:
+  data_type: DOUBLE
+  description: <p>Conversion value multiplier.</p>
   filterable: true
   is_repeated: false
   sortable: true
@@ -15926,6 +16032,389 @@ life_event.resource_name:
   filterable: true
   is_repeated: false
   sortable: false
+lift_measurement_age_range.age_range:
+  data_type: ENUM
+  description: <p>Output only. The age range type.</p>
+  enum_values: AGE_RANGE_18_24, AGE_RANGE_25_34, AGE_RANGE_35_44, AGE_RANGE_45_54,
+    AGE_RANGE_55_64, AGE_RANGE_65_UP, AGE_RANGE_UNDETERMINED, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_age_range.campaign:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The campaign resource name.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_age_range.lift_measurement_config_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement config ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_age_range.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The resource name of the lift measurement age range.
+
+    Lift measurement age range resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementAgeRanges/{lift_measurement_config_id}~{campaign_id}~{criterion_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_campaign.campaign:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The campaign resource name.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_campaign.lift_measurement_config_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement config ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_campaign.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The resource name of the lift measurement campaign.
+
+    Lift measurement campaign resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementCampaigns/{lift_measurement_config_id}~{campaign_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_config.campaigns:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The resource names of campaigns associated with this
+    lift
+
+    measurement config. These are the ones currently linked, not historical.</p>'
+  filterable: true
+  is_repeated: true
+  sortable: false
+lift_measurement_config.conversion_actions:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The list of conversion action resource names associated
+    with
+
+    this lift measurement configuration.</p>'
+  filterable: true
+  is_repeated: true
+  sortable: false
+lift_measurement_config.conversion_lift_holdback_ratio_micros:
+  data_type: INT64
+  description: <p>Output only. The holdback ratio for Conversion Lift.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_config.lift_measurement_config_id:
+  data_type: INT64
+  description: '<p>Output only. The unique identifier for the Lift Measurement Configuration
+
+    (LMC).</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_config.name:
+  data_type: STRING
+  description: <p>Output only. The name of the lift study.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_config.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Immutable. The resource name of the lift measurement config. Lift
+
+    measurement config resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementConfigs/{lift_measurement_config_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_config.single_measurement_question_set.advertiser_preferred_choice:
+  data_type: STRING
+  description: <p>Output only. The advertiser preferred choice.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_config.single_measurement_question_set.competitor_choices:
+  data_type: STRING
+  description: <p>Output only. The competitor choices.</p>
+  filterable: true
+  is_repeated: true
+  sortable: false
+lift_measurement_config.single_measurement_question_set.question_measurements:
+  data_type: ENUM
+  description: <p>Output only. The brand measurement types for the question.</p>
+  enum_values: ASSOCIATION, AWARENESS, CONSIDERATION, CUSTOM, FAVORABILITY, PURCHASE_INTENT,
+    RECALL, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: true
+  sortable: false
+lift_measurement_config.single_measurement_question_set.question_text_intended_action:
+  data_type: ENUM
+  description: <p>Output only. The intended action for the question text.</p>
+  enum_values: APPLY_FOR, APPLY_TO_WORK_FOR, ATTEND, BOOK, BOOK_WITH, BUY, BUY_CONTENT_FROM,
+    BUY_TICKETS_FOR, CARE_ABOUT, CHOOSE, DONATE_TO, DOWNLOAD, DOWNLOAD_FROM, EAT,
+    EAT_AT, HAVE_UNFAVORABLE_OPINION_OF, JOIN, LEARN, LISTEN_TO, NONE, ORDER_FROM,
+    PARTICIPATE_IN, PLAY, PLAY_AT, PLAY_ON, RENT, SEE, SEE_IN_THEATERS, SHOP, SIGN_UP_FOR,
+    SUBSCRIBE_TO, TAKE_ACTION_ON, UNKNOWN, UNSPECIFIED, USE, VISIT, VOTE_FOR, WATCH,
+    WATCH_IN_THEATERS
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_config.single_measurement_question_set.question_text_subject_type:
+  data_type: ENUM
+  description: <p>Output only. The subject type for the question text.</p>
+  enum_values: APP, APPS_DATING_SERVICES, APPS_DIGITAL_COMICS, APPS_PODCASTS, AUTOMOTIVE_BATTERY,
+    AUTOMOTIVE_BRAND, AUTOMOTIVE_CAR_RENTAL, AUTOMOTIVE_CAR_SERVICE, AUTOMOTIVE_ELECTRIC_CAR_BRAND,
+    AUTOMOTIVE_GAS_STATIONS, AUTOMOTIVE_MOTORCYCLE, AUTOMOTIVE_OIL, AUTOMOTIVE_PRODUCT,
+    AUTOMOTIVE_TIRES_BRAND, BIM_COMPANY, BIM_ENTERPRISE_SERVICES_COMPANY, BIM_JOB,
+    BIM_MARKETING_COMPANY, BIM_RECRUITING, BIM_SHIPPING, CPG_BABY_CARE_BRAND, CPG_BABY_CARE_PRODUCT,
+    CPG_BEAUTY_AND_PERSONAL_CARE_BRAND, CPG_BEAUTY_AND_PERSONAL_CARE_PRODUCT, CPG_BEAUTY_BRAND,
+    CPG_BEAUTY_PRODUCT, CPG_BODY_WASH_BRAND, CPG_BODY_WASH_PRODUCT, CPG_DRAIN_CLEANERS,
+    CPG_FRAGRANCE_BRAND, CPG_FRAGRANCE_PRODUCT, CPG_HAIR_CARE_BRAND, CPG_HAIR_CARE_PRODUCT,
+    CPG_HOUSEHOLD_CLEANING_BRAND, CPG_HOUSEHOLD_CLEANING_PRODUCT, CPG_LAUNDRY_BRAND,
+    CPG_MAKE_UP_BRAND, CPG_MAKE_UP_PRODUCT, CPG_MOUTHWASH_BRAND, CPG_OFFICE_SUPPLIES_BRAND,
+    CPG_OFFICE_SUPPLIES_PRODUCT, CPG_ORAL_CARE_BRAND, CPG_PERSONAL_CARE_BRAND, CPG_PERSONAL_CARE_PRODUCT,
+    CPG_SKIN_CARE_BRAND, CPG_SKIN_CARE_PRODUCT, EDUCATION_BUSINESS_PROGRAMS, EDUCATION_IT_PROGRAMS,
+    EDUCATION_MASTERS_PROGRAMS, EDUCATION_NURSING_PROGRAMS, EDUCATION_OFFLINE, EDUCATION_ONLINE,
+    EDUCATION_PROGRAM, EDUCATION_TEST_PREPARATION, FBR_BEER_BRAND, FBR_BEVERAGE_BRAND,
+    FBR_BEVERAGE_PRODUCT, FBR_BREAKFAST_FOOD_BRAND, FBR_BREAKFAST_FOOD_PRODUCT, FBR_CANDY,
+    FBR_CHEESE, FBR_CHIPS_BRAND, FBR_CHIPS_PRODUCT, FBR_CHOCOLATE_BRAND, FBR_CHOCOLATE_PRODUCT,
+    FBR_COFFEE_BRAND, FBR_COFFEE_PRODUCT, FBR_COLD_DRINK_BRAND, FBR_COLD_DRINK_PRODUCT,
+    FBR_COOKIES, FBR_DOGFOOD_BRAND, FBR_DOGFOOD_PRODUCT, FBR_DOG_TREATS_BRAND, FBR_FOOD_BRAND,
+    FBR_FOOD_DELIVERY_BRAND, FBR_FOOD_PRODUCT, FBR_ICE_CREAM_BRAND, FBR_ICE_CREAM_PRODUCT,
+    FBR_PET_FOOD_BRAND, FBR_PET_FOOD_PRODUCT, FBR_PET_SUPPLY_BRAND, FBR_PET_SUPPLY_PRODUCT,
+    FBR_RESTAURANT, FBR_RESTAURANT_DELIVERY_SERVICE_BRAND, FBR_RESTAURANT_DELIVERY_SERVICE_PRODUCT,
+    FBR_SNACKS_BRAND, FBR_SNACKS_PRODUCT, FBR_SODA_BRAND, FBR_SODA_PRODUCT, FBR_SPIRIT_BRAND,
+    FBR_SPIRIT_PRODUCT, FBR_WHEY_PROTEIN_BRAND, FBR_WINE, FINANCE_ACCOUNTING_BRAND,
+    FINANCE_BANK, FINANCE_CREDIT_CARD_BRAND, FINANCE_CREDIT_CARD_PRODUCT, FINANCE_FINANCIAL_SERVICES,
+    FINANCE_INSURANCE, FINANCE_INVESTMENT_SERVICES, FINANCE_LOAN_PROVIDER, FINANCE_MORTGAGE_COMPANY,
+    FINANCE_PAYMENTS_PROCESSING, FINANCE_PAYMENTS_SYSTEMS, FINANCE_TAXES_BRAND, FINANCE_TAXES_PRODUCT,
+    GAMBLING_CASINO, GAMBLING_DAILY_FANTASY_SPORT, GAMBLING_GAMBLING_SITE, GAMBLING_LOTTERY,
+    GAMBLING_SPORTS_BETTING_SITE, GENERIC_BRAND, GENERIC_PRODUCT, GENERIC_SERVICE,
+    GOVERNMENT_ANTI_SMOKING, GOVERNMENT_MILITARY, GOVERNMENT_ORGANIZATION, GOVERNMENT_PROGRAM,
+    GOVERNMENT_PUBLIC_HEALTH_BEHAVIORS, GOVERNMENT_PUBLIC_HEALTH_ISSUE, GOVERNMENT_PUBLIC_HEALTH_TOPIC,
+    GOVERNMENT_SERVICE, HEALTHCARE_GYMS, HEALTHCARE_HEALTH_INSURANCE_BRAND, HEALTHCARE_MULTIVITAMINS,
+    HEALTHCARE_SPORTS_SUPPLEMENTS, HEALTHCARE_WEIGHT_LOSS_BRAND, HEALTHCARE_WEIGHT_LOSS_PRODUCT,
+    HOME_SERVICES_CABLE_TV, HOME_SERVICES_ENERGY_BRAND, HOME_SERVICES_HOUSEHOLD_SERVICES_COMPANY,
+    HOME_SERVICES_INTERNET_SERVICE, HOME_SERVICES_MOBILE_PHONE, HOME_SERVICES_PAY_TV_CHANNEL,
+    HOME_SERVICES_PAY_TV_NETWORK, LOCAL_CHARITY, LOCAL_CLASSIFIEDS_SITE, LOCAL_FLOWER_BRAND,
+    LOCAL_JOB_CLASSIFIEDS_SITE, LOCAL_LAW_FIRMS, LOCAL_REAL_ESTATE_SITE, MEDIA_AND_ENTERTAINMENT_DOWNLOAD_SITE,
+    MEDIA_AND_ENTERTAINMENT_DVD, MEDIA_AND_ENTERTAINMENT_EVENT, MEDIA_AND_ENTERTAINMENT_GAME,
+    MEDIA_AND_ENTERTAINMENT_GAMING_PRODUCTS, MEDIA_AND_ENTERTAINMENT_LIVE_EVENT, MEDIA_AND_ENTERTAINMENT_MOBILE_GAME,
+    MEDIA_AND_ENTERTAINMENT_MOVIE, MEDIA_AND_ENTERTAINMENT_MOVIE_DIGITAL_DOWNLOAD,
+    MEDIA_AND_ENTERTAINMENT_MUSIC_ARTIST, MEDIA_AND_ENTERTAINMENT_MUSIC_RELEASES,
+    MEDIA_AND_ENTERTAINMENT_PLAYLISTS, MEDIA_AND_ENTERTAINMENT_SHOW, MEDIA_AND_ENTERTAINMENT_SHOW_DIGITAL_DOWNLOAD,
+    MEDIA_AND_ENTERTAINMENT_SPORTS, MEDIA_AND_ENTERTAINMENT_STREAMING_SITE, MEDIA_AND_ENTERTAINMENT_TITLE_DIGITAL_DOWNLOAD,
+    MEDIA_AND_ENTERTAINMENT_TV_CHANNEL, MEDIA_AND_ENTERTAINMENT_TV_SHOW, MEDIA_AND_ENTERTAINMENT_TV_SHOW_DIGITAL_DOWNLOAD,
+    MEDIA_AND_ENTERTAINMENT_VIDEO_GAME, MEDIA_AND_ENTERTAINMENT_VIDEO_GAME_DLC, MEDIA_AND_ENTERTAINMENT_WEB_SERIES,
+    OFFER, PHARMA_NON_MEDICAL_CONDITION_OTC_DRUG, POLITICS_CANDIDATE, POLITICS_GET_OUT_THE_VOTE_NOVEMBER_ELECTIONS,
+    POLITICS_GET_OUT_THE_VOTE_PRIMARY_ELECTIONS, POLITICS_ISSUE, POLITICS_UNFAVORABLE_CANDIDATE,
+    RETAIL_APPAREL, RETAIL_BRICK_AND_MORTAR, RETAIL_FURNITURE_BRAND, RETAIL_FURNITURE_PRODUCT,
+    RETAIL_GIFTS_BRAND, RETAIL_GIFTS_PRODUCT, RETAIL_HOME_GOODS, RETAIL_JEWELRY_BRAND,
+    RETAIL_ONLINE_RETAILERS, RETAIL_SHOE_BRAND, RETAIL_STORE, RETAIL_TOY_SHOP, TECHNOLOGY_ARTIFICIAL_INTELLIGENCE_BRAND,
+    TECHNOLOGY_ARTIFICIAL_INTELLIGENCE_PRODUCT, TECHNOLOGY_BRAND, TECHNOLOGY_CAMERA_BRAND,
+    TECHNOLOGY_CAMERA_PRODUCT, TECHNOLOGY_CONTROL_PLANS, TECHNOLOGY_FEATURE, TECHNOLOGY_GAMING_BRAND,
+    TECHNOLOGY_HOME_APPLIANCE_BRAND, TECHNOLOGY_HOME_APPLIANCE_PRODUCT, TECHNOLOGY_LAPTOP_BRAND,
+    TECHNOLOGY_LAPTOP_PRODUCT, TECHNOLOGY_MOBILE_PHONE_PLANS, TECHNOLOGY_ONLINE_SAFETY_BRAND,
+    TECHNOLOGY_ONLINE_SAFETY_PRODUCT, TECHNOLOGY_OPERATING_SYSTEM, TECHNOLOGY_POSTPAID_TELCO_PLAN,
+    TECHNOLOGY_PREPAID_TELCO_PLAN, TECHNOLOGY_PRINTER_BRAND, TECHNOLOGY_PRODUCT, TECHNOLOGY_SEARCH_ENGINE,
+    TECHNOLOGY_SMALL_HOME_APPLIANCE_BRAND, TECHNOLOGY_SMALL_HOME_APPLIANCE_PRODUCT,
+    TECHNOLOGY_SMARTPHONE_BRAND, TECHNOLOGY_SMARTPHONE_PRODUCT, TECHNOLOGY_SMART_HOME_DEVICE,
+    TECHNOLOGY_SOCIAL_MEDIA, TECHNOLOGY_TABLET_BRAND, TECHNOLOGY_TABLET_PRODUCT, TECHNOLOGY_TELCO_NETWORK,
+    TECHNOLOGY_TELECOM_FIBER_OPTIC_INTERNET, TECHNOLOGY_TELECOM_SERVICE_PACK, TECHNOLOGY_TV_BRAND,
+    TECHNOLOGY_TV_PRODUCT, TECHNOLOGY_VIDEO_ON_DEMAND, TECHNOLOGY_WEARABLES_BRAND,
+    TECHNOLOGY_WEBSITE, TRAVEL_ACCOMMODATIONS, TRAVEL_AIRLINE, TRAVEL_BOOKING_SERVICE,
+    TRAVEL_CRUISES, TRAVEL_DESTINATION, TRAVEL_HOTEL, TRAVEL_OPTION, TRAVEL_VACATION_RENTAL_SERVICE,
+    UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_config.survey_language:
+  data_type: STRING
+  description: <p>Output only. The survey language.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_device.campaign:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The campaign resource name.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_device.device:
+  data_type: ENUM
+  description: <p>Output only. The device type.</p>
+  enum_values: CONNECTED_TV, DESKTOP, MOBILE, OTHER, TABLET, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_device.lift_measurement_config_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement config ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_device.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The resource name of the lift measurement device.
+
+    Lift measurement device resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementDevices/{lift_measurement_config_id}~{campaign_id}~{criterion_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_flight.end_date:
+  data_type: DATE
+  description: '<p>Output only. The end date of the lift measurement flight in the
+    customer''s
+
+    time zone.</p>
+
+    <p>Format: YYYY-MM-DD</p>'
+  filterable: false
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.lift_measurement_config_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement configuration ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.lift_measurement_flight_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement flight ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.lift_type:
+  data_type: ENUM
+  description: <p>Output only. The lift type measured during this flight.</p>
+  enum_values: CONVERSION, SEARCH, SURVEY, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.name:
+  data_type: STRING
+  description: <p>Output only. The name of the lift measurement flight.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Immutable. The resource name of the lift measurement flight.
+
+    Lift measurement flight resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementFlights/{lift_measurement_configuration_id}~{flight_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_flight.start_date:
+  data_type: DATE
+  description: '<p>Output only. The start date of the lift measurement flight in the
+
+    customer''s time zone.</p>
+
+    <p>Format: YYYY-MM-DD</p>'
+  filterable: false
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.status:
+  data_type: ENUM
+  description: <p>Output only. The status of the lift measurement flight.</p>
+  enum_values: ENABLED, STOPPED, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.survey_lift_info.target_response_mode:
+  data_type: ENUM
+  description: <p>Output only. The target response mode that will be used to collect
+    survey responses.</p>
+  enum_values: BOOST, STANDARD, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.survey_lift_measurement.max_survey_response_date:
+  data_type: DATE
+  description: <p>Output only. The latest date in which survey responses were recorded.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.survey_lift_measurement.min_survey_response_date:
+  data_type: DATE
+  description: <p>Output only. The earliest date in which survey responses were recorded.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_flight.survey_lift_measurement.response_collection_ratio_micros:
+  data_type: INT64
+  description: '<p>Output only. The ratio of target survey responses that have been
+    collected so far. Expressed in micros: 0 = 0%, 1000000 = 100%.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_gender.campaign:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The campaign resource name.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_gender.gender:
+  data_type: ENUM
+  description: <p>Output only. The gender type.</p>
+  enum_values: FEMALE, MALE, UNDETERMINED, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_gender.lift_measurement_config_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement config ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_gender.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The resource name of the lift measurement gender.
+
+    Lift measurement gender resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementGenders/{lift_measurement_config_id}~{campaign_id}~{criterion_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_video.campaign:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The campaign resource name.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_video.lift_measurement_config_id:
+  data_type: INT64
+  description: <p>Output only. The lift measurement config ID.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+lift_measurement_video.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Output only. The resource name of the lift measurement video.
+
+    Lift measurement video resource names have the form:</p>
+
+    <p><code>customers/{customer_id}/liftMeasurementVideos/{lift_measurement_config_id}~{campaign_id}~{external_video_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+lift_measurement_video.video:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The video resource name.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
 local_services_employee.category_ids:
   data_type: STRING
   description: '<p>Output only. Category of the employee. A list of Local Services
@@ -16166,9 +16655,9 @@ local_services_lead.resource_name:
   data_type: RESOURCE_NAME
   description: '<p>Immutable. The resource name of the local services lead data.
 
-    Local Services Lead resource name have the form</p>
+    Local Services Lead resource names have the form</p>
 
-    <p><code>customers/{customer_id}/localServicesLead/{local_services_lead_id}</code></p>'
+    <p><code>customers/{customer_id}/localServicesLeads/{local_services_lead_id}</code></p>'
   filterable: true
   is_repeated: false
   sortable: false
@@ -16220,7 +16709,8 @@ local_services_lead_conversation.lead:
 local_services_lead_conversation.message_details.attachment_urls:
   data_type: STRING
   description: <p>Output only. URL to the SMS or email attachments. These URLs can
-    be used to download the contents of the attachment by using the developer token.</p>
+    be used to download the contents of the attachment using authorized Google Cloud
+    project credentials.</p>
   filterable: false
   is_repeated: true
   sortable: false
@@ -16257,9 +16747,9 @@ local_services_lead_conversation.resource_name:
   data_type: RESOURCE_NAME
   description: '<p>Output only. The resource name of the local services lead conversation
 
-    data. Local Services Lead Conversation resource name have the form</p>
+    data. Local Services Lead Conversation resource names have the form</p>
 
-    <p><code>customers/{customer_id}/localServicesLeadConversation/{local_services_lead_conversation_id}</code></p>'
+    <p><code>customers/{customer_id}/localServicesLeadConversations/{local_services_lead_conversation_id}</code></p>'
   filterable: true
   is_repeated: false
   sortable: false
@@ -16583,12 +17073,58 @@ media_file.video.youtube_video_id:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.absolute_brand_lift:
+  data_type: DOUBLE
+  description: '<p>These metrics estimate the additional brand lift directly attributable
+    to
+
+    the ad campaign.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.absolute_brand_lift_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>Lower bound of the 90% confidence interval for absolute brand lift.
+
+    The "conservative" estimate of your success. It is the minimum increase
+
+    you can be 90% sure was caused by your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.absolute_brand_lift_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>Upper bound of the 90% confidence interval for absolute brand lift.
+
+    The "optimistic" estimate of your success. It is the maximum increase
+
+    likely driven by your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.absolute_brand_lift_p_value:
+  data_type: DOUBLE
+  description: '<p>The p-value provides a measure of the statistical significance
+    for the
+
+    detected brand lift. It calculates the likelihood that your incremental
+
+    lift was driven by ad performance rather than being a merely random
+
+    occurrence. Achieving a low score of 0.10 indicates 90%
+
+    confidence that your advertising efforts directly generated the additional
+
+    lift.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.absolute_top_impression_percentage:
   data_type: DOUBLE
   description: '<p>Search absolute top impression share is the percentage of your
     Search ad
 
-    impressions that are shown in the most prominent Search position.</p>'
+    impressions that are shown in the absolute top Search position.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -16750,18 +17286,19 @@ metrics.active_view_ctr:
   sortable: true
 metrics.active_view_impressions:
   data_type: INT64
-  description: '<p>A measurement of how often your ad has become viewable on a Display
+  description: '<p>A measurement of the number of times your ad has become viewable
+    on a
 
-    Network site.</p>'
+    Display Network site.</p>'
   filterable: true
   is_repeated: false
   sortable: true
 metrics.active_view_measurability:
   data_type: DOUBLE
-  description: '<p>The ratio of impressions that could be measured by Active View
-    over the
+  description: '<p>The ratio of impressions that were eligible to be measured by Active
+    View
 
-    number of served impressions.</p>'
+    over the number of served impressions.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -16784,10 +17321,10 @@ metrics.active_view_measurable_impressions:
   sortable: true
 metrics.active_view_viewability:
   data_type: DOUBLE
-  description: '<p>The percentage of time when your ad appeared on an Active View
-    enabled site
+  description: '<p>The percentage of times when your ad appeared on an Active View
+    enabled
 
-    (measurable impressions) and was viewable (viewable impressions).</p>'
+    site (measurable impressions) and was viewable (viewable impressions).</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -17012,8 +17549,7 @@ metrics.all_conversions_from_store_visit:
   sortable: true
 metrics.all_conversions_from_store_website:
   data_type: DOUBLE
-  description: '<p>The number of times that people were taken to a business''s URL
-    after
+  description: '<p>The number of times people were taken to a business''s URL after
 
     clicking an ad.</p>
 
@@ -17412,16 +17948,13 @@ metrics.asset_pinned_total_count:
   sortable: true
 metrics.auction_insight_search_absolute_top_impression_percentage:
   data_type: DOUBLE
-  description: '<p>This metric is part of the Auction Insights report, and tells how
-    often
+  description: '<p>This metric is part of the Auction Insights report, and tells the
 
-    the ads of another participant showed in the most prominent position on the
+    percentage of times the ads of another participant showed in the absolute
 
-    search results page.
+    top position (Position 1) on the search results page. This percentage is
 
-    This percentage is computed only over the auctions that you appeared in
-
-    the page.</p>
+    computed only over the auctions that you appeared in the page.</p>
 
     <p>This metric is not publicly available.</p>'
   filterable: true
@@ -17459,12 +17992,11 @@ metrics.auction_insight_search_outranking_share:
   sortable: true
 metrics.auction_insight_search_overlap_rate:
   data_type: DOUBLE
-  description: '<p>This metric is part of the Auction Insights report, and tells how
-    often
+  description: '<p>This metric is part of the Auction Insights report, and tells the
 
-    another participant''s ad received an impression when your ad also received
+    percentage of times another participant''s ad received an impression when
 
-    an impression.</p>
+    your ad also received an impression.</p>
 
     <p>This metric is not publicly available.</p>'
   filterable: true
@@ -17472,12 +18004,11 @@ metrics.auction_insight_search_overlap_rate:
   sortable: true
 metrics.auction_insight_search_position_above_rate:
   data_type: DOUBLE
-  description: '<p>This metric is part of the Auction Insights report, and tells how
-    often
+  description: '<p>This metric is part of the Auction Insights report, and tells the
 
-    another participant''s ad was shown in a higher position than yours, when
+    percentage of times another participant''s ad was shown in a higher position
 
-    both of your ads were shown at the same page.</p>
+    than yours, when both of your ads were shown at the same page.</p>
 
     <p>This metric is not publicly available.</p>'
   filterable: true
@@ -17485,14 +18016,13 @@ metrics.auction_insight_search_position_above_rate:
   sortable: true
 metrics.auction_insight_search_top_impression_percentage:
   data_type: DOUBLE
-  description: '<p>This metric is part of the Auction Insights report, and tells how
-    often
+  description: '<p>This metric is part of the Auction Insights report, and tells the
 
-    the ads of another participant showed adjacent to the top organic search
+    percentage of times the ads of another participant showed adjacent to the
 
-    results. This percentage is computed only over the auctions that you
+    top organic search results. This percentage is computed only over the
 
-    appeared in the page.</p>
+    auctions that you appeared in the page.</p>
 
     <p>This metric is not publicly available.</p>'
   filterable: true
@@ -17638,7 +18168,9 @@ metrics.benchmark_ctr:
   description: '<p>An indication on how other advertisers'' Shopping ads for similar
     products
 
-    are performing based on how often people who see their ad click on it.</p>'
+    are performing based on the frequency with which people who see their ad
+
+    click on it.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -17678,6 +18210,164 @@ metrics.bounce_rate:
     on your
 
     site. Imported from Google Analytics.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_baseline_positive_response_rate:
+  data_type: DOUBLE
+  description: '<p>Represents the rate of positive responses that would have occurred
+
+    naturally without ad exposure, based on the behavior of the control group.
+
+    Also referred to as "Control" responses. Provides the baseline
+
+    level of brand perception that occurred naturally.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_baseline_positive_response_rate_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>Lower bound of the 90% confidence interval for the baseline positive
+
+    response rate. Represents the conservative baseline rate of positive brand
+
+    responses you could expect naturally without ad exposure.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_baseline_positive_response_rate_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>Upper bound of the 90% confidence interval for the baseline positive
+
+    response rate. Represents the optimistic baseline rate of positive brand
+
+    responses expected naturally without ad exposure.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_exposed_positive_responder_fractional_cookies:
+  data_type: DOUBLE
+  description: '<p>Estimated unique users showing interest in the exposed group. This
+    value is
+
+    "fractional" because it represents a statistical estimate rather than a
+
+    raw headcount.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_exposed_positive_responder_fractional_cookies_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for the estimated
+    number of
+
+    unique cookies within the ad-exposed group that are estimated to have a
+
+    positive brand attitude, as measured by the Brand Lift survey.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_exposed_positive_responder_fractional_cookies_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for the estimated
+    number of
+
+    unique cookies within the ad-exposed group that are estimated to have
+
+    experienced a positive shift in brand attitude, as measured by the Brand
+
+    Lift survey.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_exposed_positive_response_rate:
+  data_type: DOUBLE
+  description: '<p>Represents the rate of positive responses from users who were exposed
+    to
+
+    the ads. Also referred to as "Treatment" responses. Shows
+
+    total positive response rate when users were exposed to your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_exposed_positive_response_rate_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>Lower bound of the 90% confidence interval for the exposed positive
+
+    response rate. Represents the conservative estimate of positive brand
+
+    responses among users exposed to your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_exposed_positive_response_rate_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>Upper bound of the 90% confidence interval for the exposed positive
+
+    response rate. Represents the maximum estimate of positive brand responses
+
+    among users exposed to your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_responses_exposed:
+  data_type: DOUBLE
+  description: <p>The number of survey responses from users who were exposed to the
+    ads.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_responses_suppressed:
+  data_type: DOUBLE
+  description: <p>Brand lift responses suppressed.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_suppressed_positive_responder_fractional_cookies:
+  data_type: DOUBLE
+  description: '<p>Estimated unique users showing interest in the control/suppressed
+    group.
+
+    This value is "fractional" because it represents a statistical estimate.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_suppressed_positive_responder_fractional_cookies_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>Lower bound of the 90% confidence interval for the estimated number
+    of
+
+    fractional cookies within the control group that are categorized as
+
+    positive responders. This lower bound provides a statistically supported
+
+    minimum value for the total fractional cookies in the control group showing
+
+    a positive brand attitude.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_suppressed_positive_responder_fractional_cookies_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>Represents the upper bound of the 90% confidence interval for the
+
+    estimated number of fractional cookies within the control group that are
+
+    categorized as positive responders. This upper bound provides a
+
+    statistically supported maximum value for the total fractional cookies in
+
+    the control group showing a positive brand attitude.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.brand_lift_total_responses:
+  data_type: DOUBLE
+  description: '<p>The total number of survey responses collected across both the
+    exposed and
+
+    control groups.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -17786,7 +18476,8 @@ metrics.combined_queries:
   sortable: true
 metrics.content_budget_lost_impression_share:
   data_type: DOUBLE
-  description: '<p>The estimated percent of times that your ad was eligible to show
+  description: '<p>The estimated percentage of times that your ad was eligible to
+    show
 
     on the Display Network but didn''t because your budget was too low.
 
@@ -17905,6 +18596,39 @@ metrics.conversion_last_received_request_date_time:
     fired from a browser that did not previously click an ad from an
 
     appropriate advertiser). The date/time is in the customer''s time zone.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.conversion_lift_baseline_conversion_value:
+  data_type: DOUBLE
+  description: <p>Represents the baseline conversion value from users not exposed
+    to the ads.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.conversion_lift_baseline_conversions:
+  data_type: DOUBLE
+  description: '<p>Represents the number of conversions that would have occurred naturally
+
+    without ad exposure, based on the behavior of the control group. Often
+
+    referred to as "Control" conversions.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.conversion_lift_exposed_conversion_value:
+  data_type: DOUBLE
+  description: <p>Represents the total conversion value from users exposed to the
+    ads.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.conversion_lift_exposed_conversions:
+  data_type: DOUBLE
+  description: '<p>Represents the total conversions from users who were exposed to
+    the ads.
+
+    Also referred to as "Treatment" conversions.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -18402,6 +19126,77 @@ metrics.cost_per_current_model_attributed_conversion:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.cost_per_incremental_conversion:
+  data_type: DOUBLE
+  description: '<p>The estimated cost incurred for each additional conversion generated
+    by the
+
+    campaign. This is the Incremental Cost Per Acquisition (iCPA).</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.cost_per_incremental_conversion_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for
+
+    cost_per_incremental_conversion. The lowest likely cost you paid per
+
+    incremental conversion.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.cost_per_incremental_conversion_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for
+
+    cost_per_incremental_conversion. The highest likely cost you paid per
+
+    incremental conversion.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.cost_per_incremental_conversion_winner_score:
+  data_type: DOUBLE
+  description: '<p>The probability that this experiment arm is the winner for cost
+    per
+
+    incremental conversion. This value is between 0.0 and 1.0.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.cost_per_lifted_cookie:
+  data_type: DOUBLE
+  description: '<p>The estimated cost incurred for each additional person moved to
+    a positive
+
+    brand state by the campaign. Helps assess the
+
+    cost-effectiveness of your ad spend in driving brand growth.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.cost_per_lifted_cookie_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>Lower bound of the 90% confidence interval for the cost per lifted
+    cookie.
+
+    Represents the optimistic (lowest cost) estimate for moving a user to
+
+    a positive brand state.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.cost_per_lifted_cookie_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>Upper bound of the 90% confidence interval for the cost per lifted
+    cookie.
+
+    Represents the conservative (highest cost) estimate for moving a user
+
+    to a positive brand state.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.cost_per_platform_comparable_conversion:
   data_type: DOUBLE
   description: '<p>The cost of ad interactions divided by the number of platform comparable
@@ -18698,10 +19493,12 @@ metrics.eligible_impressions_from_location_asset_store_reach:
   sortable: true
 metrics.engagement_rate:
   data_type: DOUBLE
-  description: '<p>How often people engage with your ad after it''s shown to them.
-    This is the
+  description: '<p>The frequency with which people engage with your ad after it''s
+    shown to
 
-    number of ad expansions divided by the number of times your ad is shown.</p>'
+    them. This is the number of ad expansions divided by the number of times
+
+    your ad is shown.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -18712,6 +19509,39 @@ metrics.engagements:
     An engagement occurs when a viewer expands your Lightbox ad. Also, in the
 
     future, other ad types may support engagement metrics.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.fractional_lifted_cookies:
+  data_type: DOUBLE
+  description: '<p>Estimated number of unique users who were moved to a positive brand
+    state
+
+    directly by the campaign (that is, lifted users).</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.fractional_lifted_cookies_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for the
+
+    fractional_lifted_cookies metric. This value represents a statistically
+
+    conservative estimate of the minimum number of cookies for whom a positive
+
+    Brand Lift is attributed to the ad exposure.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.fractional_lifted_cookies_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for the
+
+    fractional_lifted_cookies metric. This value represents a statistically
+
+    optimistic estimate of the maximum number of cookies that may have
+
+    experienced a positive Brand Lift.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -18841,6 +19671,37 @@ metrics.gross_profit_micros:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.headroom_brand_lift:
+  data_type: DOUBLE
+  description: '<p>The increase in positive brand responses relative to the total
+    potential
+
+    growth remaining.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.headroom_brand_lift_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>Lower bound of the 90% confidence interval for headroom brand lift.
+    The
+
+    minimum growth rate relative to remaining brand potential you can be 90%
+
+    confident was driven by your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.headroom_brand_lift_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>Upper bound of the 90% confidence interval for headroom brand lift.
+    The
+
+    maximum growth rate relative to remaining brand potential likely driven by
+
+    your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.historical_creative_quality_score:
   data_type: ENUM
   description: <p>The creative historical quality score.</p>
@@ -18863,7 +19724,7 @@ metrics.historical_quality_score:
   sortable: true
 metrics.historical_search_predicted_ctr:
   data_type: ENUM
-  description: <p>The historical search predicted click through rate (CTR).</p>
+  description: <p>The historical search predicted clickthrough rate (CTR).</p>
   enum_values: ABOVE_AVERAGE, AVERAGE, BELOW_AVERAGE, UNKNOWN, UNSPECIFIED
   filterable: true
   is_repeated: false
@@ -18912,7 +19773,7 @@ metrics.hotel_price_difference_percentage:
   sortable: true
 metrics.impressions:
   data_type: INT64
-  description: '<p>Count of how often your ad has appeared on a search results page
+  description: '<p>The number of times your ad has appeared on a search results page
     or
 
     website on the Google Network.</p>'
@@ -18978,6 +19839,146 @@ metrics.impressions_unique_query_clusters:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.incremental_conversion_value:
+  data_type: DOUBLE
+  description: '<p>The estimated additional conversion value the ads generated. Measures
+    the
+
+    incremental revenue or value from your campaigns.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for
+
+    incremental_conversion_value. Shows the minimum amount of extra revenue ($)
+
+    you can be 90% certain was generated by the campaign.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for
+
+    incremental_conversion_value. The highest amount of extra revenue ($)
+
+    likely generated by the campaign.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_p_value:
+  data_type: DOUBLE
+  description: '<p>The conversions value p-value provides a measure of the statistical
+
+    significance for the detected lift in conversions value. It calculates the
+
+    likelihood that your incremental conversion value was driven by ad
+
+    performance rather than being a merely random occurrence.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_per_cost:
+  data_type: DOUBLE
+  description: '<p>The incremental return on ad spend (iROAS), calculated as the additional
+
+    conversion value generated per unit of campaign cost. Measures the return
+
+    on your ad spend in terms of incremental value.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_per_cost_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for incremental
+    conversion
+
+    value per cost. The "Guaranteed" return. Even if the data is noisy, you can
+
+    be 90% sure your return was at least this high.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_per_cost_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for incremental
+    conversion
+
+    value per cost. The "Potential" return. The maximum likely revenue
+
+    generated for every dollar spent.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_per_cost_winner_score:
+  data_type: DOUBLE
+  description: '<p>The probability that this experiment arm is the winner for incremental
+
+    conversion value per cost. This value is between 0.0 and 1.0.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversion_value_winner_score:
+  data_type: DOUBLE
+  description: '<p>The probability that this experiment arm is the winner for incremental
+
+    conversion value. This value is between 0.0 and 1.0.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversions:
+  data_type: DOUBLE
+  description: '<p>The estimated number of additional conversions directly attributable
+    to the
+
+    ad campaign.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversions_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for
+
+    incremental_conversions. The "conservative" estimate of your success. It is
+
+    the minimum number of additional sales you can be 90% sure were caused by
+
+    your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversions_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for
+
+    incremental_conversions. The "optimistic" estimate of your success. It is
+
+    the maximum number of additional sales likely driven by your ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversions_p_value:
+  data_type: DOUBLE
+  description: '<p>The conversions p-value provides a measure of the statistical significance
+
+    for the detected lift in conversions. It calculates the likelihood that
+
+    your incremental conversions were driven by ad performance rather than
+
+    being a merely random occurrence.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.incremental_conversions_winner_score:
+  data_type: DOUBLE
+  description: '<p>The probability that this experiment arm is the winner for incremental
+
+    conversions. This value is between 0.0 and 1.0.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.interaction_event_types:
   data_type: ENUM
   description: <p>The types of payable and free interactions.</p>
@@ -18987,11 +19988,12 @@ metrics.interaction_event_types:
   sortable: false
 metrics.interaction_rate:
   data_type: DOUBLE
-  description: '<p>How often people interact with your ad after it is shown to them.
+  description: '<p>The frequency with which people interact with your ad after it
+    is shown to
 
-    This is the number of interactions divided by the number of times your ad
+    them. This is the number of interactions divided by the number of times
 
-    is shown.</p>'
+    your ad is shown.</p>'
   filterable: true
   is_repeated: false
   sortable: true
@@ -19310,6 +20312,17 @@ metrics.organic_queries:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.original_conversion_value:
+  data_type: DOUBLE
+  description: '<p>The original conversion value from biddable conversions. This is
+    the
+
+    unadjusted value of conversions before any value rule adjustments, such as
+
+    conversion value rules or lifecycle goals adjustments are applied.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.percent_new_visitors:
   data_type: DOUBLE
   description: '<p>Percentage of first-time sessions (from people who had never visited
@@ -19480,9 +20493,102 @@ metrics.publisher_unknown_clicks:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.relative_brand_lift:
+  data_type: DOUBLE
+  description: '<p>The percentage increase in positive responses in the exposed group
+    compared
+
+    to the control group.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_brand_lift_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for Relative Brand
+    Lift.
+
+    Represents the minimum percentage increase in positive brand perception
+
+    among users who were exposed to the ads, relative to the baseline positive
+
+    response rate observed in the control group.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_brand_lift_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for Relative Brand
+    Lift.
+
+    Represents the maximum percentage increase in positive brand perception in
+
+    the ad-exposed group, relative to the control group''s baseline positive
+
+    response rate, at a 90% confidence level.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_conversion_lift:
+  data_type: DOUBLE
+  description: '<p>The percentage increase in conversions in the exposed group compared
+    to the
+
+    control group.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_conversion_lift_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for
+
+    relative_conversion_lift. The minimum percentage increase you can be 90%
+
+    sure occurred.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_conversion_lift_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for
+
+    relative_conversion_lift. The maximum percentage increase you can be 90%
+
+    sure occurred.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_conversion_value_lift:
+  data_type: DOUBLE
+  description: '<p>The percentage increase in conversion value in the exposed group
+    compared
+
+    to the control group.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_conversion_value_lift_p90_lower_bound:
+  data_type: DOUBLE
+  description: '<p>The lower bound of the 90% confidence interval for
+
+    relative_conversion_value_lift. The lowest likely percentage of incremental
+
+    revenue the ads generated.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.relative_conversion_value_lift_p90_upper_bound:
+  data_type: DOUBLE
+  description: '<p>The upper bound of the 90% confidence interval for
+
+    relative_conversion_value_lift. The highest likely percentage of
+
+    incremental revenue the ads generated.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.relative_ctr:
   data_type: DOUBLE
-  description: '<p>Your clickthrough rate (Ctr) divided by the average clickthrough
+  description: '<p>Your clickthrough rate (CTR) divided by the average clickthrough
     rate of
 
     all advertisers on the websites that show your ads. Measures how your ads
@@ -19525,7 +20631,7 @@ metrics.search_absolute_top_impression_share:
   description: '<p>The percentage of the customer''s Shopping or Search ad impressions
     that are
 
-    shown in the most prominent Shopping position. See
+    shown in the absolute top position (Position 1). See
 
     <a href="https://support.google.com/google-ads/answer/7501826">About top and
 
@@ -19537,10 +20643,10 @@ metrics.search_absolute_top_impression_share:
   sortable: true
 metrics.search_budget_lost_absolute_top_impression_share:
   data_type: DOUBLE
-  description: '<p>The number estimating how often your ad wasn''t the very first
-    ad among the
+  description: '<p>The estimated percentage of times your ad wasn''t the very first
+    ad among
 
-    top ads in the search results due to a low budget.</p>
+    the top ads in the search results due to a low budget.</p>
 
     <p>Note: Search budget lost absolute top impression share is reported in the
 
@@ -19550,8 +20656,8 @@ metrics.search_budget_lost_absolute_top_impression_share:
   sortable: true
 metrics.search_budget_lost_impression_share:
   data_type: DOUBLE
-  description: '<p>The estimated percent of times that your ad was eligible to show
-    on the
+  description: '<p>The estimated percentage of times that your ad was eligible to
+    show on the
 
     Search Network but didn''t because your budget was too low.</p>
 
@@ -19565,10 +20671,10 @@ metrics.search_budget_lost_impression_share:
   sortable: true
 metrics.search_budget_lost_top_impression_share:
   data_type: DOUBLE
-  description: '<p>The estimated percent of times that your ad didn''t show adjacent
-    to the top
+  description: '<p>The estimated percentage of times that your ad didn''t show adjacent
+    to the
 
-    organic search results due to a low budget.</p>
+    top organic search results due to a low budget.</p>
 
     <p>Note: Search budget lost top impression share is reported in the range of 0
 
@@ -19619,10 +20725,10 @@ metrics.search_impression_share:
   sortable: true
 metrics.search_rank_lost_absolute_top_impression_share:
   data_type: DOUBLE
-  description: '<p>The number estimating how often your ad wasn''t the very first
-    ad among the
+  description: '<p>The estimated percentage of times your ad wasn''t the very first
+    ad among
 
-    top ads in the search results due to poor Ad Rank.</p>
+    the top ads in the search results due to poor Ad Rank.</p>
 
     <p>Note: Search rank lost absolute top impression share is reported in the
 
@@ -19644,8 +20750,8 @@ metrics.search_rank_lost_impression_share:
   sortable: true
 metrics.search_rank_lost_top_impression_share:
   data_type: DOUBLE
-  description: '<p>The number estimating how often your ad didn''t show adjacent to
-    the top
+  description: '<p>The estimated percentage of times your ad didn''t show adjacent
+    to the top
 
     organic search results due to poor Ad Rank.</p>
 
@@ -19666,7 +20772,7 @@ metrics.search_top_impression_share:
 
     value below 0.1 is reported as 0.0999.</p>
 
-    <p>Top ads are generally above the top organic results, although they may show
+    <p>Top ads are typically above the top organic results, although they may show
 
     below the top organic results on certain queries.</p>'
   filterable: true
@@ -19713,8 +20819,8 @@ metrics.svr:
   sortable: true
 metrics.top_impression_percentage:
   data_type: DOUBLE
-  description: '<p>The percent of your ad impressions that are shown adjacent to the
-    top
+  description: '<p>The percentage of your ad impressions that are shown adjacent to
+    the top
 
     organic search results.</p>'
   filterable: true
@@ -19943,6 +21049,32 @@ metrics.value_per_platform_comparable_conversions_by_conversion_date:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.vertical_ads_average_booking_value_micros:
+  data_type: INT64
+  description: '<p>Click-weighted average daily rate in micros, including taxes and
+    fees, over
+
+    the total length of stay.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.vertical_ads_potential_impressions:
+  data_type: INT64
+  description: '<p>Potential impressions representing the total view-capped eligible
+
+    impressions available across the query context.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.vertical_ads_price_difference_percentage:
+  data_type: DOUBLE
+  description: '<p>Percentage delta comparing the advertiser''s offered price against
+    the
+
+    lowest competing price for the same property.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 metrics.video_quartile_p100_rate:
   data_type: DOUBLE
   description: <p>Percentage of impressions where the viewer watched all of your video.</p>
@@ -20097,6 +21229,26 @@ metrics.view_through_conversions_from_location_asset_website:
   filterable: true
   is_repeated: false
   sortable: true
+metrics.youtube_comments:
+  data_type: INT64
+  description: '<p>The number of comments on YouTube Shorts videos attributed to ad
+
+    impressions.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.youtube_likes:
+  data_type: INT64
+  description: <p>The number of likes on YouTube Shorts videos attributed to ad impressions.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+metrics.youtube_shares:
+  data_type: INT64
+  description: <p>The number of shares on YouTube Shorts videos attributed to ad impressions.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
 mobile_app_category_constant.id:
   data_type: INT32
   description: <p>Output only. The ID of the mobile app category constant.</p>
@@ -20157,6 +21309,101 @@ mobile_device_constant.type:
   data_type: ENUM
   description: <p>Output only. The type of mobile device.</p>
   enum_values: MOBILE, TABLET, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.approval_date_time:
+  data_type: DATE
+  description: '<p>Output only. The approval date and time of the Multi-Party Authorization
+
+    review.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.creation_date_time:
+  data_type: DATE
+  description: '<p>Output only. The creation date and time of the Multi-Party Authorization
+
+    review.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.customer_user_access_invitation_review.new_customer_user_access_invitation:
+  data_type: MESSAGE
+  description: <p>Output only. The new CustomerUserAccessInvitation details. Only
+    fields that need to be reviewed are populated.</p>
+  filterable: false
+  is_repeated: false
+  sortable: false
+multi_party_auth_review.customer_user_access_review.new_customer_user_access:
+  data_type: MESSAGE
+  description: <p>Output only. The new CustomerUserAccess details. Only fields that
+    need to be reviewed are populated.</p>
+  filterable: false
+  is_repeated: false
+  sortable: false
+multi_party_auth_review.customer_user_access_review.old_customer_user_access:
+  data_type: RESOURCE_NAME
+  description: <p>Output only. The resource name of the CustomerUserAccess being changed.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.justification:
+  data_type: STRING
+  description: '<p>Output only. The justification for the Multi-Party Authorization
+    review
+
+    request given by the requester.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.multi_party_auth_review_id:
+  data_type: INT64
+  description: <p>Output only. The ID of the Multi-Party Authorization review.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.operation_type:
+  data_type: ENUM
+  description: <p>Output only. The operation type of the Multi-Party Authorization
+    review.</p>
+  enum_values: CREATE, REMOVE, UNKNOWN, UNSPECIFIED, UPDATE
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.request_user_email:
+  data_type: STRING
+  description: '<p>Output only. The email of the user who requested the Multi-Party
+
+    Authorization review</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.resource_name:
+  data_type: RESOURCE_NAME
+  description: '<p>Immutable. The resource name of the Multi-Party Authentication
+    review.
+
+    Resource names have the form:
+
+    <code>customers/{customer_id}/multiPartyAuthReviews/{multi_party_auth_review_id}</code></p>'
+  filterable: true
+  is_repeated: false
+  sortable: false
+multi_party_auth_review.review_status:
+  data_type: ENUM
+  description: <p>Output only. The status of the Multi-Party Authorization review.</p>
+  enum_values: APPROVED, EXPIRED, PENDING, REJECTED, REVOKED, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+multi_party_auth_review.target_resource:
+  data_type: ENUM
+  description: '<p>Output only. The target resource for which Multi-Party Authorization
+    is
+
+    requested.</p>'
+  enum_values: CUSTOMER_USER_ACCESS, CUSTOMER_USER_ACCESS_INVITATION, UNKNOWN, UNSPECIFIED
   filterable: true
   is_repeated: false
   sortable: true
@@ -20969,6 +22216,12 @@ recommendation.campaign_budget_recommendation:
   filterable: false
   is_repeated: false
   sortable: false
+recommendation.campaign_specific_app_goal_recommendation:
+  data_type: MESSAGE
+  description: <p>Output only. The campaign-specific app goal recommendation.</p>
+  filterable: false
+  is_repeated: false
+  sortable: false
 recommendation.campaigns:
   data_type: RESOURCE_NAME
   description: '<p>Output only. The campaigns targeted by this recommendation.</p>
@@ -21079,6 +22332,14 @@ recommendation.lead_form_asset_recommendation:
   filterable: false
   is_repeated: false
   sortable: false
+recommendation.lower_target_roas_performance_bid_too_low_recommendation:
+  data_type: MESSAGE
+  description: '<p>Output only. The lower Target ROAS for Performance Bid Too Low
+
+    recommendation.</p>'
+  filterable: false
+  is_repeated: false
+  sortable: false
 recommendation.lower_target_roas_recommendation:
   data_type: MESSAGE
   description: <p>Output only. Recommendation to lower Target ROAS.</p>
@@ -21147,6 +22408,14 @@ recommendation.performance_max_opt_in_recommendation:
 recommendation.raise_target_cpa_bid_too_low_recommendation:
   data_type: MESSAGE
   description: <p>Output only. The raise target CPA bid too low recommendation.</p>
+  filterable: false
+  is_repeated: false
+  sortable: false
+recommendation.raise_target_cpa_performance_bid_too_low_recommendation:
+  data_type: MESSAGE
+  description: '<p>Output only. The raise Target CPA for Performance Bid Too Low
+
+    recommendation.</p>'
   filterable: false
   is_repeated: false
   sortable: false
@@ -21313,17 +22582,18 @@ recommendation.text_ad_recommendation:
 recommendation.type:
   data_type: ENUM
   description: <p>Output only. The type of recommendation.</p>
-  enum_values: CALLOUT_ASSET, CALL_ASSET, CAMPAIGN_BUDGET, CUSTOM_AUDIENCE_OPT_IN,
-    DISPLAY_EXPANSION_OPT_IN, DYNAMIC_IMAGE_EXTENSION_OPT_IN, ENHANCED_CPC_OPT_IN,
-    FORECASTING_CAMPAIGN_BUDGET, FORECASTING_SET_TARGET_CPA, FORECASTING_SET_TARGET_ROAS,
-    IMPROVE_DEMAND_GEN_AD_STRENGTH, IMPROVE_GOOGLE_TAG_COVERAGE, IMPROVE_PERFORMANCE_MAX_AD_STRENGTH,
-    KEYWORD, KEYWORD_MATCH_TYPE, LEAD_FORM_ASSET, LOWER_TARGET_ROAS, MARGINAL_ROI_CAMPAIGN_BUDGET,
+  enum_values: CALLOUT_ASSET, CALL_ASSET, CAMPAIGN_BUDGET, CAMPAIGN_SPECIFIC_APP_GOAL,
+    CUSTOM_AUDIENCE_OPT_IN, DISPLAY_EXPANSION_OPT_IN, DYNAMIC_IMAGE_EXTENSION_OPT_IN,
+    ENHANCED_CPC_OPT_IN, FORECASTING_CAMPAIGN_BUDGET, FORECASTING_SET_TARGET_CPA,
+    FORECASTING_SET_TARGET_ROAS, IMPROVE_DEMAND_GEN_AD_STRENGTH, IMPROVE_GOOGLE_TAG_COVERAGE,
+    IMPROVE_PERFORMANCE_MAX_AD_STRENGTH, KEYWORD, KEYWORD_MATCH_TYPE, LEAD_FORM_ASSET,
+    LOWER_TARGET_ROAS, LOWER_TARGET_ROAS_PERFORMANCE_BID_TOO_LOW, MARGINAL_ROI_CAMPAIGN_BUDGET,
     MAXIMIZE_CLICKS_OPT_IN, MAXIMIZE_CONVERSIONS_OPT_IN, MAXIMIZE_CONVERSION_VALUE_OPT_IN,
     MIGRATE_DYNAMIC_SEARCH_ADS_CAMPAIGN_TO_PERFORMANCE_MAX, MOVE_UNUSED_BUDGET, OPTIMIZE_AD_ROTATION,
     PERFORMANCE_MAX_FINAL_URL_OPT_IN, PERFORMANCE_MAX_OPT_IN, RAISE_TARGET_CPA, RAISE_TARGET_CPA_BID_TOO_LOW,
-    REFRESH_CUSTOMER_MATCH_LIST, RESPONSIVE_SEARCH_AD, RESPONSIVE_SEARCH_AD_ASSET,
-    RESPONSIVE_SEARCH_AD_IMPROVE_AD_STRENGTH, SEARCH_PARTNERS_OPT_IN, SET_TARGET_CPA,
-    SET_TARGET_ROAS, SHOPPING_ADD_AGE_GROUP, SHOPPING_ADD_COLOR, SHOPPING_ADD_GENDER,
+    RAISE_TARGET_CPA_PERFORMANCE_BID_TOO_LOW, REFRESH_CUSTOMER_MATCH_LIST, RESPONSIVE_SEARCH_AD,
+    RESPONSIVE_SEARCH_AD_ASSET, RESPONSIVE_SEARCH_AD_IMPROVE_AD_STRENGTH, SEARCH_PARTNERS_OPT_IN,
+    SET_TARGET_CPA, SET_TARGET_ROAS, SHOPPING_ADD_AGE_GROUP, SHOPPING_ADD_COLOR, SHOPPING_ADD_GENDER,
     SHOPPING_ADD_GTIN, SHOPPING_ADD_MORE_IDENTIFIERS, SHOPPING_ADD_PRODUCTS_TO_CAMPAIGN,
     SHOPPING_ADD_SIZE, SHOPPING_FIX_DISAPPROVED_PRODUCTS, SHOPPING_FIX_MERCHANT_CENTER_ACCOUNT_SUSPENSION_WARNING,
     SHOPPING_FIX_SUSPENDED_MERCHANT_CENTER_ACCOUNT, SHOPPING_MIGRATE_REGULAR_SHOPPING_CAMPAIGN_OFFERS_TO_PERFORMANCE_MAX,
@@ -21396,17 +22666,18 @@ recommendation_subscription.status:
 recommendation_subscription.type:
   data_type: ENUM
   description: <p>Required. Immutable. The type of recommendation subscribed to.</p>
-  enum_values: CALLOUT_ASSET, CALL_ASSET, CAMPAIGN_BUDGET, CUSTOM_AUDIENCE_OPT_IN,
-    DISPLAY_EXPANSION_OPT_IN, DYNAMIC_IMAGE_EXTENSION_OPT_IN, ENHANCED_CPC_OPT_IN,
-    FORECASTING_CAMPAIGN_BUDGET, FORECASTING_SET_TARGET_CPA, FORECASTING_SET_TARGET_ROAS,
-    IMPROVE_DEMAND_GEN_AD_STRENGTH, IMPROVE_GOOGLE_TAG_COVERAGE, IMPROVE_PERFORMANCE_MAX_AD_STRENGTH,
-    KEYWORD, KEYWORD_MATCH_TYPE, LEAD_FORM_ASSET, LOWER_TARGET_ROAS, MARGINAL_ROI_CAMPAIGN_BUDGET,
+  enum_values: CALLOUT_ASSET, CALL_ASSET, CAMPAIGN_BUDGET, CAMPAIGN_SPECIFIC_APP_GOAL,
+    CUSTOM_AUDIENCE_OPT_IN, DISPLAY_EXPANSION_OPT_IN, DYNAMIC_IMAGE_EXTENSION_OPT_IN,
+    ENHANCED_CPC_OPT_IN, FORECASTING_CAMPAIGN_BUDGET, FORECASTING_SET_TARGET_CPA,
+    FORECASTING_SET_TARGET_ROAS, IMPROVE_DEMAND_GEN_AD_STRENGTH, IMPROVE_GOOGLE_TAG_COVERAGE,
+    IMPROVE_PERFORMANCE_MAX_AD_STRENGTH, KEYWORD, KEYWORD_MATCH_TYPE, LEAD_FORM_ASSET,
+    LOWER_TARGET_ROAS, LOWER_TARGET_ROAS_PERFORMANCE_BID_TOO_LOW, MARGINAL_ROI_CAMPAIGN_BUDGET,
     MAXIMIZE_CLICKS_OPT_IN, MAXIMIZE_CONVERSIONS_OPT_IN, MAXIMIZE_CONVERSION_VALUE_OPT_IN,
     MIGRATE_DYNAMIC_SEARCH_ADS_CAMPAIGN_TO_PERFORMANCE_MAX, MOVE_UNUSED_BUDGET, OPTIMIZE_AD_ROTATION,
     PERFORMANCE_MAX_FINAL_URL_OPT_IN, PERFORMANCE_MAX_OPT_IN, RAISE_TARGET_CPA, RAISE_TARGET_CPA_BID_TOO_LOW,
-    REFRESH_CUSTOMER_MATCH_LIST, RESPONSIVE_SEARCH_AD, RESPONSIVE_SEARCH_AD_ASSET,
-    RESPONSIVE_SEARCH_AD_IMPROVE_AD_STRENGTH, SEARCH_PARTNERS_OPT_IN, SET_TARGET_CPA,
-    SET_TARGET_ROAS, SHOPPING_ADD_AGE_GROUP, SHOPPING_ADD_COLOR, SHOPPING_ADD_GENDER,
+    RAISE_TARGET_CPA_PERFORMANCE_BID_TOO_LOW, REFRESH_CUSTOMER_MATCH_LIST, RESPONSIVE_SEARCH_AD,
+    RESPONSIVE_SEARCH_AD_ASSET, RESPONSIVE_SEARCH_AD_IMPROVE_AD_STRENGTH, SEARCH_PARTNERS_OPT_IN,
+    SET_TARGET_CPA, SET_TARGET_ROAS, SHOPPING_ADD_AGE_GROUP, SHOPPING_ADD_COLOR, SHOPPING_ADD_GENDER,
     SHOPPING_ADD_GTIN, SHOPPING_ADD_MORE_IDENTIFIERS, SHOPPING_ADD_PRODUCTS_TO_CAMPAIGN,
     SHOPPING_ADD_SIZE, SHOPPING_FIX_DISAPPROVED_PRODUCTS, SHOPPING_FIX_MERCHANT_CENTER_ACCOUNT_SUSPENSION_WARNING,
     SHOPPING_FIX_SUSPENDED_MERCHANT_CENTER_ACCOUNT, SHOPPING_MIGRATE_REGULAR_SHOPPING_CAMPAIGN_OFFERS_TO_PERFORMANCE_MAX,
@@ -21542,6 +22813,17 @@ segments.ad_network_type:
   filterable: true
   is_repeated: false
   sortable: true
+segments.ad_sub_format_type:
+  data_type: ENUM
+  description: '<p>Ad sub format type. Segments YouTube non-skippable instream ads
+    by
+
+    duration. Has to always be selected together with ad_format_type.</p>'
+  enum_values: INSTREAM_NON_SKIPPABLE_MAX30_SEC, INSTREAM_NON_SKIPPABLE_MAX60_SEC,
+    INSTREAM_NON_SKIPPABLE_STANDARD, UNKNOWN, UNSEGMENTED, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
 segments.ad_sub_network_type:
   data_type: ENUM
   description: '<p>Ad sub network type. Currently only available for ads running as
@@ -21608,6 +22890,20 @@ segments.adjusted_gender:
   filterable: true
   is_repeated: false
   sortable: true
+segments.advance_booking_window:
+  data_type: INT64
+  description: <p>Advance booking window for the itinerary in days.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.age_range:
+  data_type: ENUM
+  description: <p>Age range</p>
+  enum_values: AGE_RANGE_18_24, AGE_RANGE_25_34, AGE_RANGE_35_44, AGE_RANGE_45_54,
+    AGE_RANGE_55_64, AGE_RANGE_65_UP, AGE_RANGE_UNDETERMINED, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
 segments.asset_group:
   data_type: RESOURCE_NAME
   description: <p>Resource name of the asset group.</p>
@@ -21632,6 +22928,14 @@ segments.auction_insight_domain:
   data_type: STRING
   description: <p>Domain (visible URL) of a participant in the Auction Insights report.</p>
   filterable: false
+  is_repeated: false
+  sortable: true
+segments.brand_lift_measurement_type:
+  data_type: ENUM
+  description: <p>The brand lift measurement type.</p>
+  enum_values: ASSOCIATION, AWARENESS, CONSIDERATION, CUSTOM, FAVORABILITY, PURCHASE_INTENT,
+    RECALL, UNKNOWN, UNSPECIFIED
+  filterable: true
   is_repeated: false
   sortable: true
 segments.budget_campaign_association_status.campaign:
@@ -21686,9 +22990,10 @@ segments.conversion_action_category:
   data_type: ENUM
   description: <p>Conversion action category.</p>
   enum_values: ADD_TO_CART, BEGIN_CHECKOUT, BOOK_APPOINTMENT, CONTACT, CONVERTED_LEAD,
-    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, OUTBOUND_CLICK,
-    PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE, SIGNUP, STORE_SALE,
-    STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED, YOUTUBE_FOLLOW_ON_VIEWS
+    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, IN_APP_AD_REVENUE,
+    OUTBOUND_CLICK, PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE,
+    SIGNUP, STORE_SALE, STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED,
+    YOUTUBE_FOLLOW_ON_VIEWS
   filterable: true
   is_repeated: false
   sortable: true
@@ -21735,6 +23040,45 @@ segments.conversion_lag_bucket:
   filterable: true
   is_repeated: false
   sortable: true
+segments.conversion_lift_conversion_category:
+  data_type: ENUM
+  description: <p>Conversion Category for Conversion Lift.</p>
+  enum_values: ADD_TO_CART, BEGIN_CHECKOUT, BOOK_APPOINTMENT, CONTACT, CONVERTED_LEAD,
+    DEFAULT, DOWNLOAD, ENGAGEMENT, GET_DIRECTIONS, IMPORTED_LEAD, IN_APP_AD_REVENUE,
+    OUTBOUND_CLICK, PAGE_VIEW, PHONE_CALL_LEAD, PURCHASE, QUALIFIED_LEAD, REQUEST_QUOTE,
+    SIGNUP, STORE_SALE, STORE_VISIT, SUBMIT_LEAD_FORM, SUBSCRIBE_PAID, UNKNOWN, UNSPECIFIED,
+    YOUTUBE_FOLLOW_ON_VIEWS
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.conversion_lift_end_date:
+  data_type: INT64
+  description: '<p>The end date of the period for which these Conversion Lift results
+    are
+
+    calculated. This can differ from the overall Study End Time.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.conversion_lift_included_conversion_action_types:
+  data_type: ENUM
+  description: '<p>The specific conversion types that were included in the Conversion
+    Lift
+
+    measurement for this reporting period.</p>'
+  enum_values: ALL, SELECTED, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.conversion_lift_start_date:
+  data_type: INT64
+  description: '<p>The start date of the period for which these Conversion Lift results
+    are
+
+    calculated. This can differ from the overall Study Start Time.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
 segments.conversion_or_adjustment_lag_bucket:
   data_type: ENUM
   description: '<p>An enum value representing the number of days between the impression
@@ -21774,8 +23118,20 @@ segments.conversion_value_rule_primary_dimension:
     GEO_LOCATION, DEVICE, AUDIENCE, ITINERARY show the net adjustment after
 
     value rules were applied.</p>'
-  enum_values: AUDIENCE, DEVICE, GEO_LOCATION, ITINERARY, MULTIPLE, NEW_VS_RETURNING_USER,
-    NO_RULE_APPLIED, ORIGINAL, UNKNOWN, UNSPECIFIED
+  enum_values: AUDIENCE, DEVICE, GEO_LOCATION, ITINERARY, LOYALTY_MEMBERSHIP, MULTIPLE,
+    NEW_VS_RETURNING_USER, NO_RULE_APPLIED, ORIGINAL, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.country:
+  data_type: RESOURCE_NAME
+  description: <p>Resource name of the country</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.country_localized_name:
+  data_type: STRING
+  description: <p>Localized name of the country.</p>
   filterable: true
   is_repeated: false
   sortable: true
@@ -21802,6 +23158,12 @@ segments.device:
   filterable: true
   is_repeated: false
   sortable: true
+segments.experiment_arm:
+  data_type: RESOURCE_NAME
+  description: <p>Experiment arm.</p>
+  filterable: true
+  is_repeated: false
+  sortable: false
 segments.external_activity_id:
   data_type: STRING
   description: <p>Advertiser supplied activity ID.</p>
@@ -21818,6 +23180,13 @@ segments.external_conversion_source:
     STORE_SALES_CRM, STORE_SALES_DIRECT_UPLOAD, STORE_SALES_PAYMENT_NETWORK, STORE_VISITS,
     THIRD_PARTY_APP_ANALYTICS, UNKNOWN, UNSPECIFIED, UPLOAD, UPLOAD_CALLS, WEBPAGE,
     WEBSITE_CALL_METRICS
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.gender:
+  data_type: ENUM
+  description: <p>Gender</p>
+  enum_values: FEMALE, MALE, UNDETERMINED, UNKNOWN, UNSPECIFIED
   filterable: true
   is_repeated: false
   sortable: true
@@ -22009,6 +23378,23 @@ segments.landing_page_source:
   data_type: ENUM
   description: <p>The source of a landing page in the landing page report.</p>
   enum_values: ADVERTISER, AUTOMATIC, UNKNOWN, UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.length_of_booking:
+  data_type: INT64
+  description: <p>Length of booking for the itinerary in days.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.loyalty_membership:
+  data_type: ENUM
+  description: '<p>The user loyalty membership tier, based on the user belonging to
+    a loyalty
+
+    program.</p>'
+  enum_values: NONMEMBER, TIER1, TIER2, TIER3, TIER4, TIER5, TIER6, TIER7, UNKNOWN,
+    UNSPECIFIED
   filterable: true
   is_repeated: false
   sortable: true
@@ -22364,17 +23750,18 @@ segments.quarter:
 segments.recommendation_type:
   data_type: ENUM
   description: <p>Recommendation type.</p>
-  enum_values: CALLOUT_ASSET, CALL_ASSET, CAMPAIGN_BUDGET, CUSTOM_AUDIENCE_OPT_IN,
-    DISPLAY_EXPANSION_OPT_IN, DYNAMIC_IMAGE_EXTENSION_OPT_IN, ENHANCED_CPC_OPT_IN,
-    FORECASTING_CAMPAIGN_BUDGET, FORECASTING_SET_TARGET_CPA, FORECASTING_SET_TARGET_ROAS,
-    IMPROVE_DEMAND_GEN_AD_STRENGTH, IMPROVE_GOOGLE_TAG_COVERAGE, IMPROVE_PERFORMANCE_MAX_AD_STRENGTH,
-    KEYWORD, KEYWORD_MATCH_TYPE, LEAD_FORM_ASSET, LOWER_TARGET_ROAS, MARGINAL_ROI_CAMPAIGN_BUDGET,
+  enum_values: CALLOUT_ASSET, CALL_ASSET, CAMPAIGN_BUDGET, CAMPAIGN_SPECIFIC_APP_GOAL,
+    CUSTOM_AUDIENCE_OPT_IN, DISPLAY_EXPANSION_OPT_IN, DYNAMIC_IMAGE_EXTENSION_OPT_IN,
+    ENHANCED_CPC_OPT_IN, FORECASTING_CAMPAIGN_BUDGET, FORECASTING_SET_TARGET_CPA,
+    FORECASTING_SET_TARGET_ROAS, IMPROVE_DEMAND_GEN_AD_STRENGTH, IMPROVE_GOOGLE_TAG_COVERAGE,
+    IMPROVE_PERFORMANCE_MAX_AD_STRENGTH, KEYWORD, KEYWORD_MATCH_TYPE, LEAD_FORM_ASSET,
+    LOWER_TARGET_ROAS, LOWER_TARGET_ROAS_PERFORMANCE_BID_TOO_LOW, MARGINAL_ROI_CAMPAIGN_BUDGET,
     MAXIMIZE_CLICKS_OPT_IN, MAXIMIZE_CONVERSIONS_OPT_IN, MAXIMIZE_CONVERSION_VALUE_OPT_IN,
     MIGRATE_DYNAMIC_SEARCH_ADS_CAMPAIGN_TO_PERFORMANCE_MAX, MOVE_UNUSED_BUDGET, OPTIMIZE_AD_ROTATION,
     PERFORMANCE_MAX_FINAL_URL_OPT_IN, PERFORMANCE_MAX_OPT_IN, RAISE_TARGET_CPA, RAISE_TARGET_CPA_BID_TOO_LOW,
-    REFRESH_CUSTOMER_MATCH_LIST, RESPONSIVE_SEARCH_AD, RESPONSIVE_SEARCH_AD_ASSET,
-    RESPONSIVE_SEARCH_AD_IMPROVE_AD_STRENGTH, SEARCH_PARTNERS_OPT_IN, SET_TARGET_CPA,
-    SET_TARGET_ROAS, SHOPPING_ADD_AGE_GROUP, SHOPPING_ADD_COLOR, SHOPPING_ADD_GENDER,
+    RAISE_TARGET_CPA_PERFORMANCE_BID_TOO_LOW, REFRESH_CUSTOMER_MATCH_LIST, RESPONSIVE_SEARCH_AD,
+    RESPONSIVE_SEARCH_AD_ASSET, RESPONSIVE_SEARCH_AD_IMPROVE_AD_STRENGTH, SEARCH_PARTNERS_OPT_IN,
+    SET_TARGET_CPA, SET_TARGET_ROAS, SHOPPING_ADD_AGE_GROUP, SHOPPING_ADD_COLOR, SHOPPING_ADD_GENDER,
     SHOPPING_ADD_GTIN, SHOPPING_ADD_MORE_IDENTIFIERS, SHOPPING_ADD_PRODUCTS_TO_CAMPAIGN,
     SHOPPING_ADD_SIZE, SHOPPING_FIX_DISAPPROVED_PRODUCTS, SHOPPING_FIX_MERCHANT_CENTER_ACCOUNT_SUSPENSION_WARNING,
     SHOPPING_FIX_SUSPENDED_MERCHANT_CENTER_ACCOUNT, SHOPPING_MIGRATE_REGULAR_SHOPPING_CAMPAIGN_OFFERS_TO_PERFORMANCE_MAX,
@@ -22552,6 +23939,20 @@ segments.slot:
   filterable: true
   is_repeated: false
   sortable: true
+segments.start_date:
+  data_type: DATE
+  description: <p>Start date of the booking. Formatted as yyyy-MM-dd.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.start_day_of_week:
+  data_type: ENUM
+  description: <p>Start day of week of the booking.</p>
+  enum_values: FRIDAY, MONDAY, SATURDAY, SUNDAY, THURSDAY, TUESDAY, UNKNOWN, UNSPECIFIED,
+    WEDNESDAY
+  filterable: true
+  is_repeated: false
+  sortable: true
 segments.travel_destination_city:
   data_type: RESOURCE_NAME
   description: <p>The city the user is searching for at query time.</p>
@@ -22567,6 +23968,13 @@ segments.travel_destination_country:
 segments.travel_destination_region:
   data_type: RESOURCE_NAME
   description: <p>The region the user is searching for at query time.</p>
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.user_set_dates:
+  data_type: ENUM
+  description: <p>Indicates whether user-specified dates were selected.</p>
+  enum_values: DEFAULT_SELECTION, UNKNOWN, UNSPECIFIED, USER_SELECTED
   filterable: true
   is_repeated: false
   sortable: true
@@ -22647,6 +24055,32 @@ segments.vertical_ads_partner_account:
     Hotel
 
     Center) that supplies inventory feed data for Vertical Ads.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.vertical_ads_price_tier:
+  data_type: ENUM
+  description: '<p>Relative price competitiveness bucket hotel listing (only relevant
+
+    to hotel campaigns).</p>'
+  enum_values: LOWEST_TIED, LOWEST_UNIQUE, NOT_LOWEST, ONLY_PARTNER_SHOWN, UNKNOWN,
+    UNSPECIFIED
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.vertical_ads_rate_rule_id:
+  data_type: STRING
+  description: '<p>String identifier corresponding to private or conditional rate
+    rules
+
+    applied to the bid/impression.</p>'
+  filterable: true
+  is_repeated: false
+  sortable: true
+segments.vertical_ads_rate_type:
+  data_type: ENUM
+  description: <p>Categorization of the public, private, or conditional rate type.</p>
+  enum_values: PRIVATE_RATE, PUBLIC_RATE, QUALIFIED_RATE, UNAVAILABLE, UNKNOWN, UNSPECIFIED
   filterable: true
   is_repeated: false
   sortable: true
@@ -22831,9 +24265,9 @@ shared_criterion.type:
     LISTING_GROUP, LISTING_SCOPE, LOCAL_SERVICE_ID, LOCATION, LOCATION_GROUP, MOBILE_APPLICATION,
     MOBILE_APP_CATEGORY, MOBILE_DEVICE, NEGATIVE_KEYWORD_LIST, OPERATING_SYSTEM_VERSION,
     PARENTAL_STATUS, PLACEMENT, PLACEMENT_LIST, PROXIMITY, RETAIL_FILTER, RETAIL_FILTER_BUNDLE,
-    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_GROUP_RULE,
-    VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP, WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL,
-    YOUTUBE_VIDEO
+    SEARCH_THEME, TOPIC, UNKNOWN, UNSPECIFIED, USER_INTEREST, USER_LIST, VERTICAL_ADS_ITEM_BID,
+    VERTICAL_ADS_ITEM_GROUP_RULE, VERTICAL_ADS_ITEM_GROUP_RULE_LIST, VIDEO_LINEUP,
+    WEBPAGE, WEBPAGE_LIST, YOUTUBE_CHANNEL, YOUTUBE_VIDEO
   filterable: true
   is_repeated: false
   sortable: true
@@ -23469,7 +24903,7 @@ topic_constant.path:
 
     "Pets &amp; Animals/Pets/Dogs" category. List of available topic categories at
 
-    <a href="https://developers.google.com/google-ads/api/reference/data/verticals">https://developers.google.com/google-ads/api/reference/data/verticals</a></p>'
+    <a href="https://developers.google.com/google-ads/api/data/topics">https://developers.google.com/google-ads/api/data/topics</a></p>'
   filterable: true
   is_repeated: true
   sortable: false
@@ -23516,7 +24950,7 @@ travel_activity_performance_view.resource_name:
 
     Travel Activity performance view resource names have the form:</p>
 
-    <p><code>customers/{customer_id}/travelActivityPerformanceView</code></p>'
+    <p><code>customers/{customer_id}/travelActivityPerformanceViews</code></p>'
   filterable: false
   is_repeated: false
   sortable: false

@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v24.enums.types.targeting_dimension import (
+from google.ads.googleads.v25.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
 from ads_mcp.tools import api

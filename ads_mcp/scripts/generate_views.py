@@ -23,9 +23,11 @@ from typing import Any, Literal
 import httpx
 import yaml
 
+from ads_mcp.api_version import API_VERSION
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-ADS_API_VERSION = "v24"
+ADS_API_VERSION = API_VERSION
 CONTEXT_SCHEMA_VERSION = "2"
 try:
   MCP_SERVER_VERSION = f"v{metadata.version("google-ads-mcp")}"

@@ -21,10 +21,10 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v24.common.types.audiences import AudienceDimension
-from google.ads.googleads.v24.common.types.audiences import AudienceSegment
-from google.ads.googleads.v24.common.types.audiences import ExclusionSegment
-from google.ads.googleads.v24.enums.types.audience_scope import (
+from google.ads.googleads.v25.common.types.audiences import AudienceDimension
+from google.ads.googleads.v25.common.types.audiences import AudienceSegment
+from google.ads.googleads.v25.common.types.audiences import ExclusionSegment
+from google.ads.googleads.v25.enums.types.audience_scope import (
     AudienceScopeEnum,
 )
 
@@ -193,7 +193,7 @@ def summarize_customer_match_jobs(
 
   Fetches every matching job without a GAQL LIMIT, including its attributed
   user-list name. All-job counts are independent of the selected previews.
-  Previews contain the N highest numeric job IDs per list. v24 exposes no
+  Previews contain the N highest numeric job IDs per list. v25 exposes no
   Customer Match job creation/upload timestamp, and ID order does not prove
   time recency. RUNNING match-rate ranges are estimates; terminal-job ranges
   are final only when available. Ranges are not exact or volume-weighted rates.
@@ -349,7 +349,7 @@ def summarize_customer_match_jobs(
             "time_recency_available": False,
             "preview_selection": "HIGHEST_NUMERIC_JOB_IDS_DESCENDING_HEURISTIC",
             "explanation": (
-                "v24 exposes no Customer Match job creation/upload timestamp. "
+                "v25 exposes no Customer Match job creation/upload timestamp. "
                 "Numeric job IDs do not establish chronology; these previews "
                 "must not be called the latest uploads by time."
             ),

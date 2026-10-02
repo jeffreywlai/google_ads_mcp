@@ -18,7 +18,8 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v24.services.types.recommendation_service import (
+from google.ads.googleads.v25.enums.types.recommendation_type import RecommendationTypeEnum
+from google.ads.googleads.v25.services.types.recommendation_service import (
     ApplyRecommendationOperation,
 )
 
@@ -36,6 +37,8 @@ from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import handle_google_ads_errors
+from ads_mcp.tools._service import parse_service_request
 from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
 
@@ -82,7 +85,7 @@ def _get_recommendation_type_map(
 def _validate_apply_parameters(
     operation_field: str,
     parameters: dict[str, Any],
-) -> None:
+) -> Any:
   message_cls = ApplyRecommendationOperation.meta.fields[
       operation_field
   ].message
@@ -94,6 +97,23 @@ def _validate_apply_parameters(
         "Invalid apply_recommendations parameters for "
         f"{operation_field}: {invalid_fields_text}"
     )
+  parsed = parse_service_request(parameters, message_cls)
+  if operation_field == "raise_target_cpa_performance_bid_too_low":
+    if (
+        "target_cpa_multiplier" in parameters
+        and parsed.target_cpa_multiplier <= 1
+    ):
+      raise ToolError("target_cpa_multiplier must be greater than 1.")
+  if operation_field == "lower_target_roas_performance_bid_too_low":
+    if (
+        "target_roas_multiplier" in parameters
+        and not 0 < parsed.target_roas_multiplier < 1
+    ):
+      raise ToolError(
+          "target_roas_multiplier must be greater than 0 and less than 1."
+      )
+
+  return parsed
 
 
 def _normalize_recommendation_resource_names(
@@ -173,6 +193,9 @@ def list_recommendations(
         recommendation.type,
         recommendation.dismissed,
         recommendation.impact,
+        recommendation.campaign_specific_app_goal_recommendation,
+        recommendation.raise_target_cpa_performance_bid_too_low_recommendation,
+        recommendation.lower_target_roas_performance_bid_too_low_recommendation,
         campaign.id,
         campaign.name,
         ad_group.id,
@@ -341,14 +364,22 @@ def apply_recommendations(
   for resource_name in recommendation_resource_names:
     recommendation_type = type_map[resource_name]
     operation_field = recommendation_type.lower()
-    if operation_field not in ApplyRecommendationOperation.meta.fields:
-      raise ToolError(
-          "Unsupported recommendation type for apply_recommendations: "
-          f"{recommendation_type}"
-      )
-
     parameters = parameters_by_resource_name.get(resource_name, {})
-    _validate_apply_parameters(operation_field, parameters)
+    if operation_field not in ApplyRecommendationOperation.meta.fields:
+      # Some recommendations (including v25.1 app goals) have no parameters.
+      if (
+          recommendation_type
+          not in RecommendationTypeEnum.RecommendationType.__members__
+          or recommendation_type in {"UNKNOWN", "UNSPECIFIED"}
+          or parameters
+      ):
+        raise ToolError(
+            "Unsupported recommendation type or parameters for "
+            f"apply_recommendations: {recommendation_type}"
+        )
+      operations.append({"resource_name": resource_name})
+      continue
+    parameters = _validate_apply_parameters(operation_field, parameters)
     operations.append(
         {
             "resource_name": resource_name,
@@ -359,7 +390,7 @@ def apply_recommendations(
   ads_client = get_ads_client(login_customer_id)
   recommendation_service = ads_client.get_service("RecommendationService")
 
-  try:
+  with handle_google_ads_errors():
     response = recommendation_service.apply_recommendation(
         request={
             "customer_id": customer_id,
@@ -367,8 +398,6 @@ def apply_recommendations(
             "partial_failure": partial_failure,
         }
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   result = {
       "resource_names": [row.resource_name for row in response.results],
@@ -409,7 +438,7 @@ def dismiss_recommendations(
   ads_client = get_ads_client(login_customer_id)
   recommendation_service = ads_client.get_service("RecommendationService")
 
-  try:
+  with handle_google_ads_errors():
     response = recommendation_service.dismiss_recommendation(
         request={
             "customer_id": customer_id,
@@ -417,8 +446,6 @@ def dismiss_recommendations(
             "partial_failure": partial_failure,
         }
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   result = {
       "resource_names": [row.resource_name for row in response.results],

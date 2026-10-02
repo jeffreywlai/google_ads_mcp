@@ -19,11 +19,11 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v24.common.types.targeting_setting import (
+from google.ads.googleads.v25.common.types.targeting_setting import (
     TargetRestriction,
     TargetingSetting,
 )
-from google.ads.googleads.v24.enums.types.targeting_dimension import (
+from google.ads.googleads.v25.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
 from pydantic import StrictBool
@@ -492,7 +492,7 @@ def _validate_audience_payload(
       raise ToolError(
           "audiences"
           f"[{index}].type AUDIENCE is not supported by CampaignCriterion "
-          "in Google Ads API v24."
+          "in Google Ads API v25."
       )
     if audience_type not in _AUDIENCE_FIELD_BY_TYPE:
       invalid_audience_type = audience["type"]

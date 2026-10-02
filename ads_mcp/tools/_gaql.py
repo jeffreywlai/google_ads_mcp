@@ -147,6 +147,9 @@ _ALLOWED_UNIQUE_USER_SEGMENTS = {
     "segments.device",
 }
 _REMOVED_FIELD_ALTERNATIVES = {
+    "local_services_lead.contact_details.email": (
+        "local_services_lead.contact_details",
+    ),
     "campaign.start_date": ("campaign.start_date_time",),
     "campaign.end_date": ("campaign.end_date_time",),
     "campaign.url_expansion_opt_out": ("campaign.asset_automation_settings",),
@@ -154,6 +157,10 @@ _REMOVED_FIELD_ALTERNATIVES = {
         "asset_group_asset.primary_status",
         "asset_group_asset.primary_status_reasons",
     ),
+}
+_REMOVED_RESOURCE_ALTERNATIVES = {
+    "campaign_lifecycle_goal": "campaign_goal_config",
+    "customer_lifecycle_goal": "goal",
 }
 _CONTEXT_FIELD_ALTERNATIVES = {
     ("keyword_view", "segments.keyword.info.text"): (
@@ -596,7 +603,7 @@ def _order_by_body_span(query: str) -> tuple[int, int] | None:
 
 @functools.lru_cache(maxsize=1)
 def _load_enum_field_values() -> dict[str, tuple[str, ...]]:
-  """Loads field-level enum values from generated v24 field metadata."""
+  """Loads field-level enum values from generated v25 field metadata."""
   try:
     with open(_FIELDS_METADATA_PATH, "r", encoding="utf-8") as fields_file:
       fields = yaml.safe_load(fields_file) or {}
@@ -871,7 +878,7 @@ def _compatible_fields_text(
   metric_count = len(field_sets["metrics"])
   return (
       f"Use get_reporting_view_doc({resource_name!r}) for compatible fields. "
-      f"Local v24 metadata has {attribute_count} attributes, "
+      f"Local v25 metadata has {attribute_count} attributes, "
       f"{segment_count} segments, and {metric_count} metrics for this "
       "resource."
   )
@@ -912,12 +919,12 @@ def _field_recovery_hint(
     )
   hint = ""
   if field_name in _REMOVED_FIELD_ALTERNATIVES:
-    hint += " This field is unavailable in v24."
+    hint += " This field is unavailable in v25."
   if (resource_name, field_name) == (
       "campaign_simulation",
       "campaign_simulation.target_cpa_point_list",
   ):
-    hint += " The parent message is not a selectable v24 field path."
+    hint += " The parent message is not a selectable v25 field path."
   if alternatives:
     hint += (
         " Selectable alternatives (not equivalent replacements): "
@@ -930,12 +937,6 @@ def _field_recovery_hint(
     field_sets = _load_resource_field_sets(resource)
     if field_sets and field_name in frozenset().union(*field_sets.values()):
       hint += f" This exact field is selectable FROM {resource}."
-  if (resource_name, field_name) == ("campaign_lifecycle_goal", "campaign.id"):
-    hint += (
-        " To scope this resource, use campaign_lifecycle_goal.campaign = "
-        "'customers/<CUSTOMER_ID>/campaigns/<CAMPAIGN_ID>' with the actual "
-        "customer and campaign IDs."
-    )
   return hint + " "
 
 
@@ -1004,7 +1005,7 @@ def _validate_empty_resource_references(query: str) -> None:
 def validate_gaql_field_compatibility(query: str) -> None:
   """Validates selected, filtered, and sorted fields against FROM metadata.
 
-  The checked-in v24 view metadata is generated from Google Ads field metadata
+  The checked-in v25 view metadata is generated from Google Ads field metadata
   and encodes the attribute resources, segments, and metrics selectable with
   each FROM resource. Unknown FROM resources are left to Google Ads so custom
   future-valid GAQL is not blocked by local metadata gaps.
@@ -1202,6 +1203,21 @@ def _preflight_gaql(query: str) -> str:
     raise ToolError("query must be a non-empty GAQL string.")
 
   query_without_literals = _query_without_string_literals(query)
+  resources = {
+      _query_from_resource(query),
+      *(
+          field.split(".", 1)[0]
+          for field in _FIELD_TOKEN_PATTERN.findall(query_without_literals)
+      ),
+  }
+  for resource, replacement in _REMOVED_RESOURCE_ALTERNATIVES.items():
+    if resource in resources:
+      raise ToolError(
+          f"{resource} was removed in Google Ads API v25. Use "
+          f"FROM {replacement} and its unified goal fields, or call "
+          "get_campaign_settings. The new schema requires different field "
+          "paths; the query is not rewritten automatically."
+      )
   if _AGGREGATE_PATTERN.search(query_without_literals):
     raise ToolError(
         "GAQL does not support aggregate functions or GROUP BY. Select raw "
@@ -1261,7 +1277,7 @@ def prepare_gaql_query(query: str) -> tuple[str, dict[str, Any]]:
               "field": field,
               "reason": (
                   "Referenced segment required in SELECT by "
-                  "FROM-specific v24 metadata."
+                  "FROM-specific v25 metadata."
               ),
           }
           for field in additions

@@ -42,6 +42,9 @@ def test_list_asset_group_assets_builds_query():
   assert "campaign.id IN (111)" in query
   assert "asset_group.id IN (222)" in query
   assert "asset_group_asset.status != REMOVED" in query
+  assert "asset_group.tracking_url_template" in query
+  assert "asset_group.url_custom_parameters" in query
+  assert "asset_group.final_url_suffix" in query
   assert "asset_group_asset.primary_status" in query
   assert "asset_group_asset.primary_status_details" not in query
   assert "asset_group_asset.performance_label" not in query

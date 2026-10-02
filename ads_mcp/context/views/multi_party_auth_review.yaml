@@ -1,13 +1,21 @@
-display_name: Customer Lifecycle Goal
-name: customer_lifecycle_goal
-description: <p>Account level customer lifecycle goal settings.</p>
+display_name: Multi Party Auth Review
+name: multi_party_auth_review
+description: <p>Resource representing a Multi-Party Authentication review.</p>
 attributed_views:
 - customer
 attributes:
-- customer_lifecycle_goal.customer_acquisition_goal_value_settings.high_lifetime_value
-- customer_lifecycle_goal.customer_acquisition_goal_value_settings.value
-- customer_lifecycle_goal.owner_customer
-- customer_lifecycle_goal.resource_name
+- multi_party_auth_review.approval_date_time
+- multi_party_auth_review.creation_date_time
+- multi_party_auth_review.customer_user_access_invitation_review.new_customer_user_access_invitation
+- multi_party_auth_review.customer_user_access_review.new_customer_user_access
+- multi_party_auth_review.customer_user_access_review.old_customer_user_access
+- multi_party_auth_review.justification
+- multi_party_auth_review.multi_party_auth_review_id
+- multi_party_auth_review.operation_type
+- multi_party_auth_review.request_user_email
+- multi_party_auth_review.resource_name
+- multi_party_auth_review.review_status
+- multi_party_auth_review.target_resource
 - customer.auto_tagging_enabled
 - customer.call_reporting_setting.call_conversion_action
 - customer.call_reporting_setting.call_conversion_reporting_enabled
@@ -44,6 +52,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments: []

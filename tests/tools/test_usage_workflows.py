@@ -21,7 +21,7 @@ import re
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.v24.services.types.google_ads_service import GoogleAdsRow
+from google.ads.googleads.v25.services.types.google_ads_service import GoogleAdsRow
 import pytest
 import yaml
 
@@ -37,16 +37,17 @@ CONVERSION_OWNER_FIELD = (
     "customer.conversion_tracking_setting.google_ads_conversion_customer"
 )
 LOCATION_FIELD = "campaign_criterion.location.geo_target_constant"
-CAMPAIGN_LIFECYCLE_MODE = (
-    "campaign_lifecycle_goal.customer_acquisition_goal_settings."
-    "optimization_mode"
+CAMPAIGN_GOAL_MODE = (
+    "campaign_goal_config.campaign_new_customer_acquisition_settings."
+    "target_option"
 )
-CAMPAIGN_LIFECYCLE_VALUE = (
-    "campaign_lifecycle_goal.customer_acquisition_goal_settings."
-    "value_settings.value"
+CAMPAIGN_GOAL_VALUE = (
+    "campaign_goal_config.campaign_new_customer_acquisition_settings."
+    "value_settings_override.additional_value"
 )
-CUSTOMER_LIFECYCLE_VALUE = (
-    "customer_lifecycle_goal.customer_acquisition_goal_value_settings.value"
+ACCOUNT_GOAL_VALUE = (
+    "goal.new_customer_acquisition_goal_settings.value_settings."
+    "additional_value"
 )
 CUSTOM_GOAL_FIELD = "conversion_goal_campaign_config.custom_conversion_goal"
 ACCOUNT = {
@@ -148,17 +149,21 @@ def _settings_data():
               "shared_set.type": "NEGATIVE_KEYWORDS",
           },
       ],
-      "campaign_lifecycle_goal": [
+      "campaign_goal_config": [
           {
-              "campaign_lifecycle_goal.campaign": CAMPAIGN_RESOURCE,
-              CAMPAIGN_LIFECYCLE_MODE: "BID_HIGHER_FOR_NEW_CUSTOMER",
-              CAMPAIGN_LIFECYCLE_VALUE: 0,
+              "campaign_goal_config.campaign": CAMPAIGN_RESOURCE,
+              "campaign_goal_config.goal": "customers/999/goals/10",
+              "campaign_goal_config.goal_type": "NEW_CUSTOMER_ACQUISITION",
+              CAMPAIGN_GOAL_MODE: "TARGET_ALL",
+              CAMPAIGN_GOAL_VALUE: 0,
           },
       ],
-      "customer_lifecycle_goal": [
+      "goal": [
           {
-              "customer_lifecycle_goal.owner_customer": "customers/999",
-              CUSTOMER_LIFECYCLE_VALUE: 120,
+              "goal.resource_name": "customers/999/goals/10",
+              "goal.owner_customer": "customers/999",
+              "goal.goal_type": "NEW_CUSTOMER_ACQUISITION",
+              ACCOUNT_GOAL_VALUE: 120,
           },
       ],
       "accessible_bidding_strategy": [
@@ -171,7 +176,7 @@ def _settings_data():
 
 
 def _validate_read_query(query):
-  """Checks syntax, local compatibility, and installed v24 field paths."""
+  """Checks syntax, local compatibility, and installed v25 field paths."""
   preprocess_gaql_query(query)
   selected = re.search(r"SELECT\s+(.+?)\s+FROM", query, re.DOTALL).group(1)
   for field in selected.split(","):
@@ -193,7 +198,7 @@ def _query_callback(data):
   return _run
 
 
-def test_settings_joins_v24_sources_and_conversion_owner():
+def test_settings_joins_v25_sources_and_conversion_owner():
   with mock.patch.object(
       reporting,
       "run_gaql_query",
@@ -221,9 +226,12 @@ def test_settings_joins_v24_sources_and_conversion_owner():
   )
   assert pmax["location_targets"][0]["resolved_location"] is None
   assert pmax["location_targets"][0]["campaign_criterion.negative"] is True
-  assert search["campaign_lifecycle_goals"][0][CAMPAIGN_LIFECYCLE_VALUE] == 0
-  assert pmax["campaign_lifecycle_goals"] == []
-  assert search["customer_lifecycle_goals"][0][CUSTOMER_LIFECYCLE_VALUE] == 120
+  assert search["campaign_goal_configs"][0][CAMPAIGN_GOAL_VALUE] == 0
+  assert pmax["campaign_goal_configs"] == []
+  assert result["account_goals"][0][ACCOUNT_GOAL_VALUE] == 120
+  assert result["goal_owner_customer_id"] == "999"
+  assert "campaign_lifecycle_goals" not in search
+  assert "customer_lifecycle_goals" not in search
   assert (
       pmax["portfolio_bidding_strategy"][
           "accessible_bidding_strategy.target_roas.target_roas"
@@ -237,17 +245,14 @@ def test_settings_joins_v24_sources_and_conversion_owner():
     query, customer, manager = call.args
     assert " LIMIT " not in query.upper()
     assert manager == "456"
-    if (
-        "FROM custom_conversion_goal" in query
-        or "FROM customer_lifecycle_goal" in query
-    ):
+    if "FROM custom_conversion_goal" in query or "FROM goal" in query:
       assert customer == "999"
     else:
       assert customer == CUSTOMER_ID
     fields = query.split("SELECT ", 1)[1].split(" FROM ", 1)[0].split(", ")
     assert all(field in metadata for field in fields)
-    if "FROM campaign_lifecycle_goal" in query:
-      assert "campaign_lifecycle_goal.campaign IN" in query
+    if "FROM campaign_goal_config" in query:
+      assert "campaign_goal_config.campaign IN" in query
       assert "campaign.id" not in query
 
 
@@ -273,7 +278,7 @@ def test_settings_missing_campaigns_do_not_invent_goals():
 
 def test_settings_api_failure_is_not_reported_as_empty_settings():
   def _run(query, customer, manager):
-    if "FROM campaign_lifecycle_goal" in query:
+    if "FROM campaign_goal_config" in query:
       raise ToolError("denied")
     return _query_callback(_settings_data())(query, customer, manager)
 

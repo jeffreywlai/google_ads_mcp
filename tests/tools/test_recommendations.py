@@ -288,11 +288,13 @@ def test_apply_recommendations_builds_operations(mock_ads_client):
   assert request["operations"] == [
       {
           "resource_name": "customers/123/recommendations/1",
-          "campaign_budget": {"new_budget_amount_micros": 20_000_000},
+          "campaign_budget": recommendations.ApplyRecommendationOperation.CampaignBudgetParameters(
+              new_budget_amount_micros=20_000_000
+          ),
       },
       {
           "resource_name": "customers/123/recommendations/2",
-          "keyword": {},
+          "keyword": recommendations.ApplyRecommendationOperation.KeywordParameters(),
       },
   ]
 
@@ -324,7 +326,7 @@ def test_apply_recommendations_accepts_single_resource_string(
   assert request["operations"] == [
       {
           "resource_name": "customers/123/recommendations/1",
-          "keyword": {},
+          "keyword": recommendations.ApplyRecommendationOperation.KeywordParameters(),
       }
   ]
 

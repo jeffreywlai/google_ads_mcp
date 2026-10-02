@@ -37,6 +37,11 @@ import yaml
 from ads_mcp.coordinator import mcp_server
 from ads_mcp.tooling import MUTATE_TAG
 from ads_mcp.tooling import compact_search_result_serializer
+from ads_mcp.tools import account_services
+from ads_mcp.tools import assets
+from ads_mcp.tools import goals
+from ads_mcp.tools import planning
+from ads_mcp.tools import resources as resource_tools
 from ads_mcp.tools import ad_groups
 from ads_mcp.tools import ads
 from ads_mcp.tools import api
@@ -91,6 +96,34 @@ def test_context_schema_marker_is_packaged():
 
 # All tool modules and their expected public tool functions.
 TOOL_MODULES = {
+    account_services: [
+        "fetch_incentives",
+        "apply_incentive",
+        "create_product_link_invitation",
+        "get_account_service_request_schema",
+    ],
+    assets: [
+        "update_asset_group_url_options",
+        "update_campaign_video_crawl_settings",
+        "update_ad_synthetic_content_info",
+        "update_asset_synthetic_content_info",
+    ],
+    goals: ["mutate_goals", "mutate_campaign_goal_configs"],
+    resource_tools: ["mutate_ads_resources", "get_resource_mutation_schema"],
+    planning: [
+        "get_planning_request_schema",
+        "list_benchmarks_available_dates",
+        "list_benchmarks_sources",
+        "list_benchmarks_locations",
+        "list_benchmarks_products",
+        "generate_benchmarks_metrics",
+        "generate_creator_insights",
+        "generate_trending_insights",
+        "list_audience_insights_attributes",
+        "generate_reach_forecast",
+        "list_plannable_products",
+        "list_plannable_locations",
+    ],
     api: [
         "execute_gaql",
         "export_gaql_csv",
@@ -156,6 +189,7 @@ TOOL_MODULES = {
         "suggest_keyword_themes",
         "suggest_smart_campaign_ad",
         "suggest_smart_campaign_budget",
+        "generate_pmax_draft_campaign",
     ],
     docs: [
         "get_tool_guide",
@@ -207,6 +241,7 @@ TOOL_MODULES = {
         "list_performance_max_placements",
     ],
     reporting: [
+        "list_lift_measurements",
         "list_device_performance",
         "list_geographic_performance",
         "list_impression_share",
@@ -254,9 +289,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_117(self):
+  def test_total_tool_count_is_143(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 117, f"Expected 117 tools, found {total}"
+    assert total == 143, f"Expected 143 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -374,6 +409,10 @@ class TestToolDocstrings:
 class TestToolSignatures:
 
   NON_CUSTOMER_TOOLS = {
+      "fetch_incentives",
+      "get_planning_request_schema",
+      "get_resource_mutation_schema",
+      "get_account_service_request_schema",
       "get_gaql_doc",
       "get_tool_guide",
       "get_resource_metadata",
@@ -405,6 +444,9 @@ class TestToolSignatures:
   TOOLS_WITH_LOGIN_CUSTOMER_ID = {
       fn for fns in TOOL_MODULES.values() for fn in fns
   } - {
+      "get_planning_request_schema",
+      "get_resource_mutation_schema",
+      "get_account_service_request_schema",
       "get_gaql_doc",
       "get_tool_guide",
       "get_resource_metadata",
@@ -428,6 +470,9 @@ class TestToolSignatures:
           for fn in fns
           if fn
           not in {
+              "get_planning_request_schema",
+              "get_resource_mutation_schema",
+              "get_account_service_request_schema",
               "get_gaql_doc",
               "get_tool_guide",
               "get_resource_metadata",
@@ -733,7 +778,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 117
+    assert len(registered_tools) == 143
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -2594,3 +2639,28 @@ class TestFastMcpConfiguration:
             "summary": "Unlocks mutating tools for the current session only.",
         },
     ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "show campaign video crawl settings",
+        "show asset group URL options",
+        "what lifecycle goal value multipliers should I use",
+        "show available incentive offers",
+        "show brand lift and conversion lift results",
+    ],
+)
+def test_v25_read_discovery_excludes_remote_mutations_when_unlocked(query):
+  async def check():
+    async with Client(mcp_server) as client:
+      await client.call_tool("unlock_mutation_tools", {})
+      result = await client.call_tool("search_tools", {"query": query})
+      returned = {item["name"] for item in result.structured_content["result"]}
+      registered = await mcp_server._local_provider.list_tools()
+      mutation_names = {
+          tool.name for tool in registered if MUTATE_TAG in tool.tags
+      }
+      assert not returned & mutation_names
+
+  asyncio.run(check())

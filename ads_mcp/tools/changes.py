@@ -662,7 +662,7 @@ def _partition_resource_types(
     if not isinstance(value, str):
       raise ToolError("resource_types values must be strings.")
     normalized = value.upper()
-    # Reuse the GAQL enum validator before comparing against the v24 sets.
+    # Reuse the GAQL enum validator before comparing against the v25 sets.
     quote_enum_values([normalized])
     if normalized not in normalized_values:
       normalized_values.append(normalized)

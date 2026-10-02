@@ -3,9 +3,16 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
-[![Google Ads API v24](https://img.shields.io/badge/Google%20Ads%20API-v24-red.svg)](https://developers.google.com/google-ads/api/docs/start)
+[![Google Ads API v25.2](https://img.shields.io/badge/Google%20Ads%20API-v25.2-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 117 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 143 tools for querying, managing, and optimizing your ad accounts through natural language.**
+
+Targets Google Ads API **25.2** using the `v25` endpoint and Python SDK 33.
+New fields and enums use the existing query tools and strict native resource
+requests. Dedicated tools cover lifecycle goals, lift studies, planning,
+PMax draft conversion, video crawl, URL options and synthetic attestations.
+See the [migration coverage report](docs/reports/20261002_api_v25_2_migration.md)
+for breaking changes, validation, and the upstream `vertical_ads_item_bid` gap.
 
 > Ask Claude or Gemini to "show me my top campaigns this month" or "pause that underperforming ad group" — and it just works.
 
@@ -14,7 +21,7 @@
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **117 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **143 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
@@ -40,7 +47,28 @@
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (117)
+## 📋 Available Tools (143)
+
+### API 25.2 workflows
+
+| Tools | Purpose |
+| --- | --- |
+| `mutate_ads_resources`, `get_resource_mutation_schema` | Strict native resource changes, including new conversion types, conversion value rules, Demand Gen automation and attribution partners; validates by default |
+| `mutate_goals`, `mutate_campaign_goal_configs` | Unified new-customer, retention and loyalty goals; validates by default |
+| `update_asset_group_url_options`, `update_campaign_video_crawl_settings` | PMax URL and crawl settings; validates by default |
+| `update_ad_synthetic_content_info`, `update_asset_synthetic_content_info` | Advertiser attestations; validates by default |
+| `generate_pmax_draft_campaign` | Validate Smart-to-PMax conversion or create a paused, incomplete draft |
+| `list_lift_measurements` | Study configuration, brand lift and conversion lift across supported dimensions |
+| `get_planning_request_schema` | Exact installed schemas for the planning tools below |
+| `list_benchmarks_available_dates`, `list_benchmarks_sources`, `list_benchmarks_locations`, `list_benchmarks_products`, `generate_benchmarks_metrics` | Benchmark categories, aggregate/share/percentile data and availability |
+| `generate_creator_insights`, `generate_trending_insights`, `list_audience_insights_attributes` | Handles, topics, sentiment, consent-gated creator data and capability discovery |
+| `generate_reach_forecast`, `list_plannable_products`, `list_plannable_locations` | Reach plans with parental status, multiple locations and current frequency caps |
+| `fetch_incentives`, `apply_incentive`, `create_product_link_invitation`, `get_account_service_request_schema` | Current incentive and invitation schemas; redemption and invitation apply directly because these services have no validate-only mode |
+
+`get_campaign_settings` now returns `campaign_goal_configs`, conversion-owner
+`account_goals` and `goal_owner_customer_id`. The removed lifecycle keys and
+resources cannot be used in v25. Incompatible reporting combinations state
+`omitted_metrics`; unavailable benchmark metrics are left absent.
 
 ### 🔍 Query & Discovery
 
@@ -211,7 +239,7 @@ for exclusions. Both tools validate inputs and retain mutation visibility rules.
 
 `summarize_customer_match_jobs(customer_id, user_list_ids=None,
 jobs_per_list=5, login_customer_id=None)` counts all matching jobs before
-selecting previews. v24 exposes no Customer Match creation/upload timestamp,
+selecting previews. v25.2 exposes no Customer Match creation/upload timestamp,
 so highest numeric IDs are a labeled recency heuristic. Match-rate buckets are
 not exact or volume-weighted rates. Offline conversion upload health uses the
 separate upload summary tools. Large summaries have a 32 KiB logical-response
@@ -515,6 +543,10 @@ google_ads_mcp/
 │   │   ├── labels.py          # Label CRUD & assignment
 │   │   ├── keyword_planner.py # Keyword research
 │   │   ├── smart_campaigns.py # Smart campaign suggestions
+│   │   ├── planning.py        # Benchmarks, reach and creator insights
+│   │   ├── resources.py       # Strict native resource mutations
+│   │   ├── assets.py          # PMax options and attestations
+│   │   ├── goals.py           # Unified lifecycle goal mutations
 │   │   ├── recommendations.py # Optimization score & recommendations
 │   │   ├── search_terms.py    # Search term insights & analysis
 │   │   ├── simulations.py     # Bid & budget simulations
@@ -563,4 +595,4 @@ Questions, suggestions, or feedback? [Open an issue](../../issues).
 
 ---
 
-**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v24](https://developers.google.com/google-ads/api/docs/start)**
+**Built with [FastMCP](https://github.com/jlowin/fastmcp) and [Google Ads API v25.2](https://developers.google.com/google-ads/api/docs/start)**

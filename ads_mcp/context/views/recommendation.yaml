@@ -2,10 +2,10 @@ display_name: Recommendation
 name: recommendation
 description: <p>A recommendation.</p>
 attributed_views:
-- ad_group
+- campaign_budget
 - customer
 - campaign
-- campaign_budget
+- ad_group
 attributes:
 - recommendation.ad_group
 - recommendation.call_asset_recommendation
@@ -13,6 +13,7 @@ attributes:
 - recommendation.campaign
 - recommendation.campaign_budget
 - recommendation.campaign_budget_recommendation
+- recommendation.campaign_specific_app_goal_recommendation
 - recommendation.campaigns
 - recommendation.custom_audience_opt_in_recommendation
 - recommendation.dismissed
@@ -29,6 +30,7 @@ attributes:
 - recommendation.keyword_match_type_recommendation
 - recommendation.keyword_recommendation
 - recommendation.lead_form_asset_recommendation
+- recommendation.lower_target_roas_performance_bid_too_low_recommendation
 - recommendation.lower_target_roas_recommendation
 - recommendation.marginal_roi_campaign_budget_recommendation
 - recommendation.maximize_clicks_opt_in_recommendation
@@ -40,6 +42,7 @@ attributes:
 - recommendation.performance_max_final_url_opt_in_recommendation
 - recommendation.performance_max_opt_in_recommendation
 - recommendation.raise_target_cpa_bid_too_low_recommendation
+- recommendation.raise_target_cpa_performance_bid_too_low_recommendation
 - recommendation.raise_target_cpa_recommendation
 - recommendation.refresh_customer_match_list_recommendation
 - recommendation.resource_name
@@ -121,6 +124,7 @@ attributes:
 - ad_group.vertical_ads_format_setting.enable_booking_links
 - ad_group.vertical_ads_format_setting.enable_vertical_promotion_ads
 - ad_group.video_ad_group_settings.video_ad_sequence.step_id
+- campaign.aca_migration_date_time
 - campaign.accessible_bidding_strategy
 - campaign.ad_serving_optimization_status
 - campaign.advertising_channel_sub_type
@@ -140,6 +144,7 @@ attributes:
 - campaign.brand_guidelines.main_color
 - campaign.brand_guidelines.predefined_font_family
 - campaign.brand_guidelines_enabled
+- campaign.broad_match_migration_date_time
 - campaign.campaign_budget
 - campaign.campaign_group
 - campaign.commission.commission_rate_micros
@@ -235,6 +240,7 @@ attributes:
 - campaign.text_guidelines.term_exclusions
 - campaign.third_party_integration_partners.brand_lift_integration_partners
 - campaign.third_party_integration_partners.brand_safety_integration_partners
+- campaign.third_party_integration_partners.conversion_attribution_integration_partners
 - campaign.third_party_integration_partners.reach_integration_partners
 - campaign.third_party_integration_partners.viewability_integration_partners
 - campaign.tracking_setting.tracking_url
@@ -313,6 +319,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments: []

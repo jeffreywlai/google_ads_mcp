@@ -48,8 +48,8 @@ from fastmcp.server.dependencies import get_access_token
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.util import get_nested_attr
-from google.ads.googleads.v24.services.services.customer_service import CustomerServiceClient
-from google.ads.googleads.v24.services.services.google_ads_service import GoogleAdsServiceClient
+from google.ads.googleads.v25.services.services.customer_service import CustomerServiceClient
+from google.ads.googleads.v25.services.services.google_ads_service import GoogleAdsServiceClient
 from google.protobuf.field_mask_pb2 import FieldMask
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtobufMessage
@@ -59,6 +59,7 @@ import proto
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.api_version import API_VERSION
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_write_tool
 from ads_mcp.tools import _gaql
@@ -89,6 +90,8 @@ INLINE_RESPONSE_BYTE_LIMIT = 48 * 1024
 _MAX_INLINE_PAGE_BYTES = INLINE_PAGE_BYTE_LIMIT
 _SNAPSHOT_TOKEN_PREFIX = "gaql-snapshot-v1:"
 _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX = "materialized-snapshot-v1:"
+_PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX = "public-schema-snapshot-v1:"
+_PUBLIC_SCHEMA_SNAPSHOT_SCOPE = "public-native-schema"
 _MATERIALIZED_SNAPSHOT_CACHE_TTL_SECONDS = 15 * 60.0
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_ENTRIES = 16
@@ -285,6 +288,9 @@ def _default_ads_assistant() -> str | None:
 def _apply_ads_client_defaults(ads_config: dict[str, Any]) -> dict[str, Any]:
   """Applies compact default client settings for this MCP server."""
   normalized_config = dict(ads_config)
+  # The SDK removed this option in v32. Preserve old credential files while
+  # using the SDK's current authentication behavior.
+  normalized_config.pop("use_cloud_org_for_api_access", None)
   normalized_config["use_proto_plus"] = True
 
   ads_assistant = _default_ads_assistant()
@@ -349,7 +355,7 @@ def _build_ads_client(
   else:
     build_config["login_customer_id"] = key
   try:
-    return GoogleAdsClient.load_from_dict(build_config)
+    return GoogleAdsClient.load_from_dict(build_config, version=API_VERSION)
   except ValueError as exc:
     raise ToolError(f"Invalid Google Ads client config: {exc}") from exc
 
@@ -398,6 +404,7 @@ def get_ads_client(
         developer_token=ads_config.get("developer_token"),
         use_proto_plus=True,
         ads_assistant=ads_config.get("ads_assistant"),
+        version=API_VERSION,
     )
     if login_customer_id:
       client.login_customer_id = login_customer_id
@@ -1064,6 +1071,7 @@ def build_bounded_materialized_response(
     artifact_failure_is_error: bool = True,
     defer_artifact_write: bool = False,
     max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
+    public_schema: bool = False,
 ) -> dict[str, Any]:
   """Bounds materialized arrays and preserves omitted values losslessly.
 
@@ -1153,7 +1161,9 @@ def build_bounded_materialized_response(
     )
   artifact_columns = ["result_type", "result_index", "result"]
   if defer_artifact_write:
-    snapshot_token = _store_materialized_snapshot(artifact_rows)
+    snapshot_token = _store_materialized_snapshot(
+        artifact_rows, public_schema=public_schema
+    )
     artifact = {
         "available": True,
         "row_count": len(artifact_rows),
@@ -1298,6 +1308,7 @@ def finalize_bounded_response(
     section_keys: tuple[str, ...],
     *,
     max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
+    public_schema: bool = False,
 ) -> dict[str, Any]:
   """Finalizes a variable-cardinality read under one whole-response budget.
 
@@ -1320,6 +1331,7 @@ def finalize_bounded_response(
       ),
       defer_artifact_write=True,
       max_bytes=max_bytes,
+      public_schema=public_schema,
   )
 
 
@@ -1367,6 +1379,40 @@ def format_value(value: Any) -> Any:
   return return_value
 
 
+_LIFT_METRIC_PREFIXES = (
+    "absolute_brand_lift",
+    "brand_lift_",
+    "conversion_lift_",
+    "cost_per_incremental_conversion",
+    "cost_per_lifted_cookie",
+    "fractional_lifted_cookies",
+    "headroom_brand_lift",
+    "incremental_conversion",
+    "relative_brand_lift",
+    "relative_conversion_lift",
+    "relative_conversion_value_lift",
+)
+
+
+def _extract_gaql_field_value(row: Any, field_name: str) -> Any:
+  """Keeps missing lift statistics distinct from zeros in native API rows."""
+  if field_name.startswith("metrics."):
+    metric_name = field_name.removeprefix("metrics.")
+    if metric_name.startswith(_LIFT_METRIC_PREFIXES):
+      native_row = (
+          proto.Message.pb(row) if isinstance(row, proto.Message) else row
+      )
+      metrics = getattr(native_row, "metrics", None)
+      if isinstance(metrics, ProtobufMessage):
+        field = metrics.DESCRIPTOR.fields_by_name.get(metric_name)
+        if field is not None and field.has_presence:
+          # Unavailable p-values must not become zero and imply significance.
+          # A present zero is a distinct API observation and remains zero.
+          if not metrics.HasField(metric_name):
+            return None
+  return format_value(get_nested_attr(row, field_name))
+
+
 def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
   """Converts a Google Ads search stream response into plain dict rows."""
   output = []
@@ -1374,7 +1420,7 @@ def gaql_results_to_dicts(query_res: Any) -> list[dict[str, Any]]:
     for row in batch.results:
       output.append(
           {
-              field_name: format_value(get_nested_attr(row, field_name))
+              field_name: _extract_gaql_field_value(row, field_name)
               for field_name in batch.field_mask.paths
           }
       )
@@ -1525,9 +1571,15 @@ def _prune_materialized_snapshot_cache_unlocked(now: float) -> None:
     _MATERIALIZED_SNAPSHOT_CACHE.pop(cache_key, None)
 
 
-def _store_materialized_snapshot(rows: list[dict[str, Any]]) -> str:
+def _store_materialized_snapshot(
+    rows: list[dict[str, Any]], *, public_schema: bool = False
+) -> str:
   """Stores one exact read result for a later explicit local-write export."""
-  credential_scope = get_ads_credential_cache_scope()
+  credential_scope = (
+      _PUBLIC_SCHEMA_SNAPSHOT_SCOPE
+      if public_schema
+      else get_ads_credential_cache_scope()
+  )
   snapshot_id = uuid.uuid4().hex
   cache_key = (credential_scope, snapshot_id)
   with _MATERIALIZED_SNAPSHOT_CACHE_LOCK:
@@ -1561,7 +1613,12 @@ def _store_materialized_snapshot(rows: list[dict[str, Any]]) -> str:
     ):
       _, removed_entry = _MATERIALIZED_SNAPSHOT_CACHE.popitem(last=False)
       retained_bytes -= removed_entry[2]
-  return f"{_MATERIALIZED_SNAPSHOT_TOKEN_PREFIX}{snapshot_id}"
+  prefix = (
+      _PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX
+      if public_schema
+      else _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX
+  )
+  return f"{prefix}{snapshot_id}"
 
 
 def _get_materialized_snapshot_rows(
@@ -1573,8 +1630,16 @@ def _get_materialized_snapshot_rows(
         "Invalid materialized snapshot_token. Use the exact export_call "
         "returned by the original read response."
     )
+  public_schema = snapshot_token.startswith(
+      _PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX
+  )
+  prefix = (
+      _PUBLIC_SCHEMA_SNAPSHOT_TOKEN_PREFIX
+      if public_schema
+      else _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX
+  )
   match = re.fullmatch(
-      rf"{re.escape(_MATERIALIZED_SNAPSHOT_TOKEN_PREFIX)}([0-9a-f]{{32}})",
+      rf"{re.escape(prefix)}([0-9a-f]{{32}})",
       snapshot_token,
   )
   if not match:
@@ -1582,7 +1647,12 @@ def _get_materialized_snapshot_rows(
         "Invalid materialized snapshot_token. Use the exact export_call "
         "returned by the original read response."
     )
-  cache_key = (get_ads_credential_cache_scope(), match.group(1))
+  credential_scope = (
+      _PUBLIC_SCHEMA_SNAPSHOT_SCOPE
+      if public_schema
+      else get_ads_credential_cache_scope()
+  )
+  cache_key = (credential_scope, match.group(1))
   with _MATERIALIZED_SNAPSHOT_CACHE_LOCK:
     now = time.monotonic()
     _prune_materialized_snapshot_cache_unlocked(now)
@@ -2715,7 +2785,7 @@ def _iter_gaql_query_attempt(
   for batch in query_res:
     for row in batch.results:
       yield {
-          field_name: format_value(get_nested_attr(row, field_name))
+          field_name: _extract_gaql_field_value(row, field_name)
           for field_name in batch.field_mask.paths
       }
 
@@ -3379,7 +3449,8 @@ def export_materialized_response_csv(
   in a read response's full_materialized_response_export.export_call.
 
   Args:
-      snapshot_token: Credential-scoped token from a bounded read response.
+      snapshot_token: Exact token from a bounded response. Account snapshots
+          stay credential-scoped; public native schema tokens need no credentials.
       output_path: Optional destination inside GOOGLE_ADS_MCP_EXPORT_DIR.
       overwrite: Whether to replace an existing explicit output path.
 

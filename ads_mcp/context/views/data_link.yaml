@@ -4,8 +4,8 @@ description: '<p>Represents the data sharing connection between  a Google
 
   Ads customer and another product''s data.</p>'
 attributed_views:
-- product_link
 - customer
+- product_link
 attributes:
 - data_link.data_link_id
 - data_link.product_link_id
@@ -50,6 +50,7 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 - product_link.advertising_partner.customer

@@ -67,8 +67,7 @@ def test_enum_normalizer_reports_each_bad_list_item_and_filter():
         (
             "SELECT campaign_lifecycle_goal.campaign "
             "FROM campaign_lifecycle_goal WHERE campaign.id = 456",
-            "campaign_lifecycle_goal.campaign = "
-            "'customers/<CUSTOMER_ID>/campaigns/<CAMPAIGN_ID>'",
+            "FROM campaign_goal_config",
         ),
     ],
 )

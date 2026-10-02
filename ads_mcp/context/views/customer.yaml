@@ -39,14 +39,19 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
 segments:
 - segments.ad_format_type
 - segments.ad_network_type
+- segments.ad_sub_format_type
 - segments.ad_sub_network_type
 - segments.ad_using_product_data
 - segments.ad_using_video
+- segments.adjusted_age_range
+- segments.adjusted_gender
+- segments.advance_booking_window
 - segments.auction_insight_domain
 - segments.click_type
 - segments.conversion_action
@@ -61,6 +66,7 @@ segments:
 - segments.device
 - segments.external_conversion_source
 - segments.hour
+- segments.length_of_booking
 - segments.mobile_device_platform
 - segments.month
 - segments.month_of_year
@@ -79,6 +85,9 @@ segments:
 - segments.sk_ad_network_user_type
 - segments.sk_ad_network_version
 - segments.slot
+- segments.start_date
+- segments.start_day_of_week
+- segments.user_set_dates
 - segments.vertical_ads_event_participant_display_names
 - segments.vertical_ads_hotel_class
 - segments.vertical_ads_listing
@@ -89,6 +98,9 @@ segments:
 - segments.vertical_ads_listing_user_rating
 - segments.vertical_ads_listing_venue
 - segments.vertical_ads_partner_account
+- segments.vertical_ads_price_tier
+- segments.vertical_ads_rate_rule_id
+- segments.vertical_ads_rate_type
 - segments.vertical_ads_vertical
 - segments.week
 - segments.year
@@ -206,6 +218,7 @@ metrics:
 - metrics.optimization_score_uplift
 - metrics.optimization_score_url
 - metrics.orders
+- metrics.original_conversion_value
 - metrics.platform_comparable_conversions
 - metrics.platform_comparable_conversions_by_conversion_date
 - metrics.platform_comparable_conversions_from_interactions_rate
@@ -213,6 +226,7 @@ metrics:
 - metrics.platform_comparable_conversions_value
 - metrics.platform_comparable_conversions_value_by_conversion_date
 - metrics.platform_comparable_conversions_value_per_cost
+- metrics.primary_impressions
 - metrics.revenue_micros
 - metrics.search_budget_lost_impression_share
 - metrics.search_exact_match_impression_share
@@ -220,6 +234,7 @@ metrics:
 - metrics.search_rank_lost_impression_share
 - metrics.sk_ad_network_installs
 - metrics.sk_ad_network_total_conversions
+- metrics.svr
 - metrics.top_impression_percentage
 - metrics.trueview_average_cpv
 - metrics.units_sold
@@ -229,6 +244,9 @@ metrics:
 - metrics.value_per_conversions_by_conversion_date
 - metrics.value_per_platform_comparable_conversion
 - metrics.value_per_platform_comparable_conversions_by_conversion_date
+- metrics.vertical_ads_average_booking_value_micros
+- metrics.vertical_ads_potential_impressions
+- metrics.vertical_ads_price_difference_percentage
 - metrics.video_trueview_view_rate
 - metrics.video_trueview_view_rate_in_feed
 - metrics.video_trueview_view_rate_in_stream
@@ -243,3 +261,6 @@ metrics:
 - metrics.view_through_conversions_from_location_asset_other_engagement
 - metrics.view_through_conversions_from_location_asset_store_visits
 - metrics.view_through_conversions_from_location_asset_website
+- metrics.youtube_comments
+- metrics.youtube_likes
+- metrics.youtube_shares

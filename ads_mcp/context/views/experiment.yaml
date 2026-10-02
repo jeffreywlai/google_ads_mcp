@@ -4,12 +4,14 @@ description: '<p>A Google ads experiment for users to experiment changes on mult
 
   campaigns, compare the performance, and apply the effective changes.</p>'
 attributed_views:
+- lift_measurement_config
 - customer
 attributes:
 - experiment.description
 - experiment.end_date
 - experiment.experiment_id
 - experiment.goals
+- experiment.lift_measurement_config
 - experiment.long_running_operation
 - experiment.name
 - experiment.optimize_assets_experiment.optimize_assets_experiment_subtype
@@ -57,8 +59,21 @@ attributes:
 - customer.video_brand_safety_suitability
 - customer.video_customer.third_party_integration_partners.brand_lift_integration_partners
 - customer.video_customer.third_party_integration_partners.brand_safety_integration_partners
+- customer.video_customer.third_party_integration_partners.conversion_attribution_integration_partners
 - customer.video_customer.third_party_integration_partners.reach_integration_partners
 - customer.video_customer.third_party_integration_partners.viewability_integration_partners
+- lift_measurement_config.campaigns
+- lift_measurement_config.conversion_actions
+- lift_measurement_config.conversion_lift_holdback_ratio_micros
+- lift_measurement_config.lift_measurement_config_id
+- lift_measurement_config.name
+- lift_measurement_config.resource_name
+- lift_measurement_config.single_measurement_question_set.advertiser_preferred_choice
+- lift_measurement_config.single_measurement_question_set.competitor_choices
+- lift_measurement_config.single_measurement_question_set.question_measurements
+- lift_measurement_config.single_measurement_question_set.question_text_intended_action
+- lift_measurement_config.single_measurement_question_set.question_text_subject_type
+- lift_measurement_config.survey_language
 segments:
 - segments.date
 metrics:

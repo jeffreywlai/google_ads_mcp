@@ -11,7 +11,7 @@ from unittest import mock
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from google.api_core.exceptions import PermissionDenied
-from google.ads.googleads.v24.services.types.google_ads_service import GoogleAdsRow
+from google.ads.googleads.v25.services.types.google_ads_service import GoogleAdsRow
 import pytest
 
 from ads_mcp.coordinator import mcp_server
