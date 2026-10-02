@@ -769,6 +769,10 @@ def _prepare_public_gaql(
       else None
   )
   if resource == "change_event":
+    _history.validate_change_event_query(query)
+    # This pass validates fields and syntax only. Discard its rewrites so named
+    # history dates are still resolved once using the account calendar below.
+    prepare_gaql_query(query)
     today, zone = get_account_calendar(customer_id, login_customer_id)
     history_query, history_metadata = _history.prepare_change_event_query(
         query, today, zone, retention_policy

@@ -275,6 +275,28 @@ def normalize_date_range_literal(date_range: str) -> str:
   return normalized_date_range
 
 
+def validate_date_range_literal(date_range: str) -> str:
+  """Validates supported named ranges without resolving a calendar date."""
+  literal = normalize_date_range_literal(date_range)
+  match = re.fullmatch(r"LAST_(\d+)_DAYS", literal)
+  if match:
+    digits = match[1].lstrip("0") or "0"
+    if digits == "0":
+      raise ToolError("LAST_N_DAYS date ranges must be greater than 0.")
+    if len(digits) > 4 or int(digits) > _MAX_EXTENDED_LAST_N_DAYS:
+      raise ToolError(
+          "LAST_N_DAYS date ranges must be "
+          f"{_MAX_EXTENDED_LAST_N_DAYS} days or fewer."
+      )
+  elif literal not in ACCEPTED_DATE_RANGE_FUNCTIONS:
+    raise ToolError(
+        f"Invalid date_range: {date_range}. Use one of: "
+        + ", ".join(sorted(ACCEPTED_DATE_RANGE_FUNCTIONS))
+        + " or {'start_date': 'YYYY-MM-DD', 'end_date': 'YYYY-MM-DD'}."
+    )
+  return literal
+
+
 def normalize_list_arg(value: Any, field_name: str) -> list[Any]:
   """Normalizes list args, accepting JSON-stringified arrays from LLMs."""
   if value is None:
@@ -378,6 +400,7 @@ def _literal_date_bounds(
     date_range: str,
     today: date | None = None,
 ) -> tuple[date, date] | None:
+  date_range = validate_date_range_literal(date_range)
   today = today or date.today()
   yesterday = today - timedelta(days=1)
   if date_range == "TODAY":
@@ -386,14 +409,7 @@ def _literal_date_bounds(
     return yesterday, yesterday
   match = re.fullmatch(r"LAST_(\d+)_DAYS", date_range)
   if match:
-    days = int(match.group(1))
-    if days <= 0:
-      raise ToolError("LAST_N_DAYS date ranges must be greater than 0.")
-    if days > _MAX_EXTENDED_LAST_N_DAYS:
-      raise ToolError(
-          "LAST_N_DAYS date ranges must be "
-          f"{_MAX_EXTENDED_LAST_N_DAYS} days or fewer."
-      )
+    days = int(match.group(1).lstrip("0"))
     return today - timedelta(days=days), yesterday
   if date_range == "THIS_MONTH":
     return _month_start(today), today

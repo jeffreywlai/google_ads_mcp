@@ -241,13 +241,14 @@ def update_campaign_video_crawl_settings(
       },
       MutateCampaignsRequest,
   )
-  rows = run_gaql_query(
-      "SELECT campaign.resource_name, campaign.advertising_channel_type, "
-      "campaign.asset_automation_settings FROM campaign WHERE campaign.id = "
-      + quote_int_value(campaign_id, "campaign_id"),
-      customer_id,
-      login_customer_id,
-  )
+  with handle_google_ads_errors():
+    rows = run_gaql_query(
+        "SELECT campaign.resource_name, campaign.advertising_channel_type, "
+        "campaign.asset_automation_settings FROM campaign WHERE campaign.id = "
+        + quote_int_value(campaign_id, "campaign_id"),
+        customer_id,
+        login_customer_id,
+    )
   if len(rows) != 1 or rows[0].get("campaign.resource_name") != resource_name:
     raise ToolError("No unique campaign was returned for the requested ID.")
   if rows[0].get("campaign.advertising_channel_type") != "PERFORMANCE_MAX":

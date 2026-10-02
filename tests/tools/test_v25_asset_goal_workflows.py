@@ -868,3 +868,19 @@ def test_mask_cannot_use_oneof_group_name_in_place_of_native_field(clients):
         ],
     )
   _assert_no_account_access(clients)
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    [google_exceptions.GoogleAPICallError, google_exceptions.PermissionDenied],
+)
+def test_video_preflight_api_error_is_tool_error_without_mutation(
+    clients, error_class
+):
+  clients["query"].side_effect = error_class("Cannot read campaign settings.")
+  with pytest.raises(ToolError, match="Cannot read campaign settings"):
+    assets.update_campaign_video_crawl_settings("123", "7", [])
+  clients["query"].assert_called_once()
+  clients["assets"].assert_not_called()
+  service = clients["assets"].return_value.get_service.return_value
+  service.mutate_campaigns.assert_not_called()

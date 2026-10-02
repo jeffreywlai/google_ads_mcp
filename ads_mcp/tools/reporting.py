@@ -4900,7 +4900,8 @@ def _daily_performance_source(
       f"WHERE campaign.id = {campaign_id} AND {date_condition} "
       "ORDER BY segments.date ASC"
   )
-  source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
+  with handle_google_ads_errors():
+    source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
   for row in source["rows"]:
     if str(row.get("campaign.id")) != campaign_id:
       raise ToolError("Performance source returned a different campaign.")
@@ -5082,7 +5083,8 @@ def _boundary_change_source(
       f"{campaign_condition}"
       "ORDER BY change_event.change_date_time ASC LIMIT 10000"
   )
-  source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
+  with handle_google_ads_errors():
+    source = run_gaql_query_snapshot(query, customer_id, login_customer_id)
   for row in source["rows"]:
     if row.get("change_event.change_resource_type") != resource_type or (
         resource_type == "CAMPAIGN"

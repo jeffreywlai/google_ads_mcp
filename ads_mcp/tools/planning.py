@@ -8,6 +8,7 @@ from google.ads.googleads.v25.services.types import benchmarks_service
 from google.ads.googleads.v25.services.types import content_creator_insights_service
 from google.ads.googleads.v25.services.types import reach_plan_service
 
+from ads_mcp.api_version import API_VERSION
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_read_tool
@@ -98,7 +99,7 @@ def _planning_read(
         login_customer_id, "login_customer_id"
     )
   client = get_ads_client(login_customer_id)
-  service = client.get_service(service_name, version="v25")
+  service = client.get_service(service_name, version=API_VERSION)
   with handle_google_ads_errors():
     response = getattr(service, method_name)(request=typed_request)
   return bounded_service_response(

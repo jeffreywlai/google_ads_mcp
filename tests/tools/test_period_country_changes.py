@@ -23,6 +23,8 @@ from unittest import mock
 
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.v25.services.types.google_ads_service import GoogleAdsRow
+from google.api_core.exceptions import PermissionDenied
+from google.api_core.exceptions import ServiceUnavailable
 import pytest
 import yaml
 
@@ -204,6 +206,67 @@ def _invoke(
           login_customer_id="456",
       )
   return result, queries
+
+
+@pytest.mark.parametrize("error_type", [PermissionDenied, ServiceUnavailable])
+@pytest.mark.parametrize(
+    "workflow,failed_call,failed_query_fragment",
+    [
+        ("explicit", 1, "FROM user_location_view"),
+        ("around", 1, "change_resource_type = CAMPAIGN "),
+        ("around", 2, "change_resource_type = CAMPAIGN_BUDGET "),
+        ("around", 3, "FROM user_location_view"),
+    ],
+)
+def test_comparison_snapshot_transport_errors_stop_the_public_workflow(
+    error_type, workflow, failed_call, failed_query_fragment
+):
+  source_error = error_type("offline source failure")
+  empty_source = {
+      "rows": [],
+      "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
+  }
+  with (
+      mock.patch.object(
+          reporting, "run_gaql_query", side_effect=_metadata
+      ) as settings,
+      mock.patch.object(
+          reporting,
+          "run_gaql_query_snapshot",
+          side_effect=[empty_source] * (failed_call - 1) + [source_error],
+      ) as snapshot,
+      mock.patch.object(
+          reporting, "get_account_calendar", return_value=(TODAY, ZONE)
+      ),
+      mock.patch.object(reporting, "aggregate_periods") as aggregate,
+      mock.patch.object(reporting, "_add_country_names") as country_names,
+      mock.patch.object(reporting, "finalize_bounded_response") as finalize,
+  ):
+    with pytest.raises(ToolError, match="offline source failure") as raised:
+      if workflow == "explicit":
+        reporting.compare_performance_periods(
+            CUSTOMER,
+            "111",
+            PERIODS,
+            segment_by="COUNTRY",
+            login_customer_id="456",
+        )
+      else:
+        reporting.compare_performance_around_changes(
+            CUSTOMER,
+            "111",
+            "2026-09-01",
+            "2026-09-05",
+            segment_by="COUNTRY",
+            login_customer_id="456",
+        )
+  assert raised.value.__cause__ is source_error
+  assert snapshot.call_count == failed_call
+  assert failed_query_fragment in snapshot.call_args.args[0]
+  assert settings.call_count == 2
+  aggregate.assert_not_called()
+  country_names.assert_not_called()
+  finalize.assert_not_called()
 
 
 def test_country_aggregates_physical_location_buckets_and_resolves_names():

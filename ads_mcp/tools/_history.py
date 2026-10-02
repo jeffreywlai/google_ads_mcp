@@ -236,8 +236,8 @@ def _unsupported_interval() -> ToolError:
 
 
 def _parse_interval(
-    parts: list[str], today: date
-) -> tuple[HistoryInterval, list[int], bool]:
+    parts: list[str],
+) -> tuple[HistoryInterval | str, list[int], bool]:
   indices = []
   lower = upper = None
   complete = None
@@ -264,12 +264,11 @@ def _parse_interval(
           _timestamp(between[1]), _timestamp(between[2]), True, True
       )
     elif during and complete is None:
-      # Share accepted spellings without resolving dates in the host timezone.
-      literal = _gaql.normalize_date_range_literal(during["literal"])
-      bounds = _gaql._literal_date_bounds(literal, today)  # pylint: disable=protected-access
-      if bounds is None:
+      # Keep named bounds symbolic until the account calendar is available.
+      literal = _gaql.validate_date_range_literal(during["literal"])
+      if literal == "ALL_TIME":
         raise _unsupported_interval()
-      complete = date_interval(bounds[0].isoformat(), bounds[1].isoformat())
+      complete = literal
       named = True
     else:
       raise _unsupported_interval()
@@ -284,10 +283,8 @@ def _parse_interval(
   raise _unsupported_interval()
 
 
-def prepare_change_event_query(
-    query: str, today: date, time_zone: str, policy: RetentionPolicy
-) -> tuple[str | None, dict[str, Any]]:
-  """Prepares only safely understood history bounds, never general GAQL."""
+def _query_parts(query: str) -> tuple[int, tuple[int, int], list[str]]:
+  """Validates the result cap and extracts the local interval conditions."""
   masked = _gaql._blank_string_literals(query)  # pylint: disable=protected-access
   limit = re.search(
       r"\bLIMIT\s+(\d+)\s*(?:PARAMETERS\b.*)?;?\s*$", masked, re.I | re.S
@@ -307,7 +304,29 @@ def prepare_change_event_query(
   if span is None:
     raise _unsupported_interval()
   parts = _conditions(query[span[0] : span[1]])
-  requested, indices, named = _parse_interval(parts, today)
+  return int(limit_digits), span, parts
+
+
+def validate_change_event_query(query: str) -> None:
+  """Rejects malformed bounds and limits before any account lookup."""
+  _, _, parts = _query_parts(query)
+  requested, _, _ = _parse_interval(parts)
+  if (
+      isinstance(requested, HistoryInterval)
+      and requested.start > requested.end
+  ):
+    raise ToolError("change_event start date must be on or before end date.")
+
+
+def prepare_change_event_query(
+    query: str, today: date, time_zone: str, policy: RetentionPolicy
+) -> tuple[str | None, dict[str, Any]]:
+  """Prepares only safely understood history bounds, never general GAQL."""
+  result_limit, span, parts = _query_parts(query)
+  requested, indices, named = _parse_interval(parts)
+  if isinstance(requested, str):
+    bounds = _gaql._literal_date_bounds(requested, today)  # pylint: disable=protected-access
+    requested = date_interval(bounds[0].isoformat(), bounds[1].isoformat())
   applied, metadata = plan_retention(requested, today, time_zone, policy)
   executed = query
   adjustments = []
@@ -335,7 +354,7 @@ def prepare_change_event_query(
         }
     )
   metadata.update({"original_query": query, "executed_query": executed})
-  metadata["query_result_limit"] = int(limit_digits)
+  metadata["query_result_limit"] = result_limit
   if adjustments:
     metadata["query_adjustments"] = adjustments
   return executed, metadata

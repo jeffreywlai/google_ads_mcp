@@ -95,7 +95,9 @@ def _run(tool_name, request, response):
   ) as get:
     result = getattr(planning, tool_name)("12-3", request, "45 6")
   get.assert_called_once_with("456")
-  client.get_service.assert_called_once_with(service_name, version="v25")
+  client.get_service.assert_called_once_with(
+      service_name, version=planning.API_VERSION
+  )
   return result, getattr(service, method_name).call_args.kwargs["request"]
 
 
@@ -465,3 +467,12 @@ def test_planning_tools_survive_mcp_and_schema_is_local_read():
       )
 
   asyncio.run(check())
+
+
+def test_planning_service_uses_centralized_api_version():
+  with mock.patch.object(planning, "API_VERSION", "configured-version"):
+    _run(
+        "list_benchmarks_available_dates",
+        {},
+        benchmarks.ListBenchmarksAvailableDatesResponse(),
+    )
