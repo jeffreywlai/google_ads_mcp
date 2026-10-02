@@ -1476,7 +1476,11 @@ def test_list_keyword_quality_scores_returns_pagination_metadata():
 
   assert mock_run.call_args.kwargs["page_size"] == 1000
   assert mock_run.call_args.kwargs["page_token"] == "current-page"
-  assert result == {
+  assert result["snapshot_lifetime"]["expires_after_seconds"] >= 600
+  assert result["snapshot_lifetime"]["may_be_evicted_earlier"] is True
+  assert {
+      key: value for key, value in result.items() if key != "snapshot_lifetime"
+  } == {
       "keyword_quality_scores": [
           {
               "campaign.id": "77",
@@ -2330,7 +2334,11 @@ def test_list_video_enhancements_returns_pagination_metadata():
 
   assert mock_run.call_args.kwargs["page_size"] == 1
   assert mock_run.call_args.kwargs["page_token"] == "current-page"
-  assert result == {
+  assert result["snapshot_lifetime"]["expires_after_seconds"] >= 600
+  assert result["snapshot_lifetime"]["may_be_evicted_earlier"] is True
+  assert {
+      key: value for key, value in result.items() if key != "snapshot_lifetime"
+  } == {
       "video_enhancements": rows,
       "returned_count": 1,
       "total_count": 5,

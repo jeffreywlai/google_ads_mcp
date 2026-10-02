@@ -77,7 +77,7 @@ _ADS_CLIENTS_MAX_ENTRIES = 8
 _ADS_CLIENTS_CREDENTIALS_MTIME: float | None = None
 _ADS_CLIENTS_CREDENTIALS_PATH: str | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_PAGED_QUERY_CACHE_TTL_SECONDS = 90.0
+_PAGED_QUERY_CACHE_TTL_SECONDS = 15 * 60.0
 _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _PAGED_QUERY_CACHE_MAX_ENTRIES = 16
 _PAGED_QUERY_CACHE_MAX_BYTES = 64 * 1024 * 1024
@@ -89,7 +89,7 @@ INLINE_RESPONSE_BYTE_LIMIT = 48 * 1024
 _MAX_INLINE_PAGE_BYTES = INLINE_PAGE_BYTE_LIMIT
 _SNAPSHOT_TOKEN_PREFIX = "gaql-snapshot-v1:"
 _MATERIALIZED_SNAPSHOT_TOKEN_PREFIX = "materialized-snapshot-v1:"
-_MATERIALIZED_SNAPSHOT_CACHE_TTL_SECONDS = 90.0
+_MATERIALIZED_SNAPSHOT_CACHE_TTL_SECONDS = 15 * 60.0
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_ENTRIES = 16
 _MATERIALIZED_SNAPSHOT_CACHE_MAX_BYTES = 32 * 1024 * 1024
@@ -164,6 +164,16 @@ _EXECUTE_GAQL_OUTPUT_SCHEMA = {
         "max_rows_applied": {"type": "integer"},
         "warning_row_threshold": {"type": "integer"},
         "token_efficiency_warning": {"type": "string"},
+        "complete_inline": {"type": "boolean"},
+        "inline_bytes": {"type": "integer"},
+        "inline_byte_limit": {"type": "integer"},
+        "inline_omitted_row_count": {"type": "integer"},
+        "represented_row_count": {"type": "integer"},
+        "bulk_export_call": {"type": "object"},
+        "export_row_count": {"type": "integer"},
+        "export_scope": {"type": "string"},
+        "snapshot_lifetime": {"type": "object"},
+        "ordering_warning": {"type": "string"},
         "query_adjustments": {"type": ["array", "object"]},
         "original_query": {"type": ["string", "object"]},
         "executed_query": {"type": ["string", "null", "object"]},
@@ -923,6 +933,8 @@ def _serialized_json_bytes(value: Any) -> int:
 def _inline_page_plan(
     rows: list[dict[str, Any]],
     page_size: int,
+    *,
+    first_page_only: bool = False,
 ) -> list[dict[str, Any]]:
   """Partitions rows by count and bytes without restricting snapshot export."""
   pages = []
@@ -971,6 +983,8 @@ def _inline_page_plan(
             "byte_limited": byte_limited,
         }
     )
+    if first_page_only:
+      break
   return pages
 
 
@@ -1049,6 +1063,7 @@ def build_bounded_materialized_response(
     truncation_note: str,
     artifact_failure_is_error: bool = True,
     defer_artifact_write: bool = False,
+    max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
 ) -> dict[str, Any]:
   """Bounds materialized arrays and preserves omitted values losslessly.
 
@@ -1057,6 +1072,16 @@ def build_bounded_materialized_response(
   local/mutation callers write a temporary CSV; read finalizers defer that
   write and return an exact in-memory snapshot export call instead.
   """
+  if (
+      isinstance(max_bytes, bool)
+      or not isinstance(max_bytes, int)
+      or not 8 * 1024 <= max_bytes <= INLINE_RESPONSE_BYTE_LIMIT
+  ):
+    raise ValueError(
+        "max_bytes must be an integer between 8192 and "
+        f"{INLINE_RESPONSE_BYTE_LIMIT}."
+    )
+  section_byte_limit = min(INLINE_SECTION_BYTE_LIMIT, max_bytes - 8 * 1024)
   section_values = {}
   section_kinds = {}
   for section_key in section_keys:
@@ -1076,10 +1101,12 @@ def build_bounded_materialized_response(
           "dict."
       )
 
-  delivery = bound_inline_sections(section_values)
+  delivery = bound_inline_sections(
+      section_values, max_bytes=section_byte_limit
+  )
   bounded_sections = delivery.pop("sections")
   whole_response_too_large = (
-      _serialized_json_bytes(materialized_result) > INLINE_RESPONSE_BYTE_LIMIT
+      _serialized_json_bytes(materialized_result) > max_bytes
   )
   if not delivery["limited"] and not whole_response_too_large:
     return materialized_result
@@ -1249,13 +1276,10 @@ def build_bounded_materialized_response(
     }
 
   result = _assemble_result(delivery, bounded_sections)
-  section_byte_limit = INLINE_SECTION_BYTE_LIMIT
-  while _serialized_json_bytes(result) > INLINE_RESPONSE_BYTE_LIMIT and any(
+  while _serialized_json_bytes(result) > max_bytes and any(
       bounded_sections.values()
   ):
-    overflow_bytes = (
-        _serialized_json_bytes(result) - INLINE_RESPONSE_BYTE_LIMIT
-    )
+    overflow_bytes = _serialized_json_bytes(result) - max_bytes
     section_byte_limit = max(
         0,
         section_byte_limit - overflow_bytes - 256,
@@ -1272,6 +1296,8 @@ def build_bounded_materialized_response(
 def finalize_bounded_response(
     response: dict[str, Any],
     section_keys: tuple[str, ...],
+    *,
+    max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
 ) -> dict[str, Any]:
   """Finalizes a variable-cardinality read under one whole-response budget.
 
@@ -1293,6 +1319,7 @@ def finalize_bounded_response(
           "metadata to CSV. Exact source export calls remain valid."
       ),
       defer_artifact_write=True,
+      max_bytes=max_bytes,
   )
 
 
@@ -2698,6 +2725,7 @@ def _build_spooled_gaql_snapshot(
     customer_id: str,
     login_customer_id: str | None,
     row_sort_fields: tuple[str, ...] | None,
+    source_rows: list[dict[str, Any]] | None = None,
 ) -> _SpooledGaqlSnapshot:
   """Streams one retry-safe exact GAQL snapshot into an internal SQLite DB."""
   descriptor, file_path = tempfile.mkstemp(
@@ -2747,11 +2775,16 @@ def _build_spooled_gaql_snapshot(
         columns.clear()
         seen_columns.clear()
         try:
-          for row in _iter_gaql_query_attempt(
-              query=query,
-              customer_id=customer_id,
-              login_customer_id=login_customer_id,
-          ):
+          rows = (
+              _iter_gaql_query_attempt(
+                  query=query,
+                  customer_id=customer_id,
+                  login_customer_id=login_customer_id,
+              )
+              if source_rows is None
+              else source_rows
+          )
+          for row in rows:
             for column in row:
               if column not in seen_columns:
                 seen_columns.add(column)
@@ -2792,10 +2825,11 @@ def _build_spooled_gaql_snapshot(
       connection.execute("DROP TABLE source_rows")
       connection.commit()
     snapshot = _SpooledGaqlSnapshot(file_path, row_count, tuple(columns))
-    prepared, metadata = prepare_gaql_query(query)
-    if _gaql._query_from_resource(query) == "change_event":  # pylint: disable=protected-access
-      metadata.update({"original_query": query, "executed_query": prepared})
-    snapshot.preparation_metadata = metadata
+    if source_rows is None:
+      prepared, metadata = prepare_gaql_query(query)
+      if _gaql._query_from_resource(query) == "change_event":  # pylint: disable=protected-access
+        metadata.update({"original_query": query, "executed_query": prepared})
+      snapshot.preparation_metadata = metadata
     return snapshot
   except BaseException:
     with contextlib.suppress(OSError):
@@ -2875,7 +2909,7 @@ def run_gaql_query_page(
   provides a consistent cursor contract for MCP tools by applying client-side
   paging over the full result set. Inline pages are capped independently from
   full-data access. Continuation and export tokens refer to the same immutable
-  result snapshot. Tokens can expire after the cache TTL or normal bounded-LRU
+  result snapshot. Tokens expire after 15 minutes or normal bounded-LRU
   eviction; callers receive a restart hint rather than rows from a different
   result snapshot.
   """
@@ -3074,6 +3108,7 @@ def build_paginated_list_response(
         "tool": "export_gaql_csv",
         "arguments": {"snapshot_token": snapshot_token},
     }
+    result["snapshot_lifetime"] = _snapshot_lifetime_metadata()
   return result
 
 
@@ -3108,9 +3143,123 @@ def _finalize_gaql_response(response: dict[str, Any]) -> dict[str, Any]:
   if _serialized_json_bytes(response) <= INLINE_RESPONSE_BYTE_LIMIT:
     return response
   result = finalize_bounded_response(response, ("data",))
-  result["returned_row_count"] = len(result["data"])
+  result["returned_row_count"] = sum(
+      not is_inline_omission(row) for row in result["data"]
+  )
   result.setdefault("total_row_count", len(response["data"]))
   result["complete_inline"] = False
+  result["truncated"] = True
+  result["inline_bytes"] = _serialized_json_bytes(result["data"])
+  if "inline_omitted_row_count" in result:
+    result["inline_omitted_row_count"] = sum(
+        is_inline_omission(row) for row in result["data"]
+    )
+    result["represented_row_count"] = len(result["data"])
+  return result
+
+
+def _snapshot_lifetime_metadata() -> dict[str, Any]:
+  """Describes exact GAQL snapshot retention without promising capacity."""
+  return {
+      "expires_after_seconds": _PAGED_QUERY_CACHE_TTL_SECONDS,
+      "may_be_evicted_earlier": True,
+      "eviction_policy": "Credential-scoped bounded least-recently-used cache.",
+  }
+
+
+def _capture_gaql_response_snapshot(
+    rows: list[dict[str, Any]],
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+    query_metadata: dict[str, Any],
+) -> str:
+  """Captures already retrieved rows without rerunning the reporting query."""
+  snapshot = _build_spooled_gaql_snapshot(
+      query,
+      customer_id,
+      login_customer_id,
+      row_sort_fields=None,
+      source_rows=rows,
+  )
+  snapshot.query_metadata = deepcopy(query_metadata)
+  snapshot_id = uuid.uuid4().hex
+  query_key = _page_cache_key(query, customer_id, login_customer_id)
+  with _PAGED_QUERY_CACHE_LOCK:
+    _publish_page_snapshot_unlocked(query_key, snapshot_id, snapshot)
+  return _encode_snapshot_token(snapshot_id)
+
+
+def _bounded_gaql_response(
+    response: dict[str, Any],
+    rows: list[dict[str, Any]],
+    query: str,
+    customer_id: str,
+    login_customer_id: str | None,
+    query_metadata: dict[str, Any],
+    max_rows: int | None,
+) -> dict[str, Any]:
+  """Bounds inline rows while preserving every retrieved row for export."""
+  if rows:
+    page = _inline_page_plan(
+        rows, max_rows or len(rows), first_page_only=True
+    )[0]
+    inline_rows = page["rows"]
+  else:
+    inline_rows = []
+  incomplete_rows = len(inline_rows) < len(rows) or any(
+      is_inline_omission(row) for row in inline_rows
+  )
+  response["data"] = inline_rows
+  metadata_needs_bounding = (
+      _serialized_json_bytes(response) > INLINE_RESPONSE_BYTE_LIMIT
+  )
+  if incomplete_rows or metadata_needs_bounding:
+    token = _capture_gaql_response_snapshot(
+        rows, query, customer_id, login_customer_id, query_metadata
+    )
+    response.update(
+        {
+            "returned_row_count": sum(
+                not is_inline_omission(row) for row in inline_rows
+            ),
+            "total_row_count": len(rows),
+            "truncated": incomplete_rows,
+            "complete_inline": not incomplete_rows,
+            "inline_bytes": _serialized_json_bytes(inline_rows),
+            "inline_byte_limit": _MAX_INLINE_PAGE_BYTES,
+            "bulk_export_call": {
+                "tool": "export_gaql_csv",
+                "arguments": {"snapshot_token": token},
+            },
+            "export_row_count": len(rows),
+            "export_scope": (
+                "All rows returned by this GAQL query; its LIMIT and Google "
+                "Ads API restrictions still apply. max_rows only caps inline "
+                "rows."
+            ),
+            "snapshot_lifetime": _snapshot_lifetime_metadata(),
+        }
+    )
+    omitted_count = sum(is_inline_omission(row) for row in inline_rows)
+    if omitted_count:
+      response["inline_omitted_row_count"] = omitted_count
+      response["represented_row_count"] = len(inline_rows)
+    if (
+        incomplete_rows or (metadata_needs_bounding and rows)
+    ) and not re.search(
+        r"\bORDER\s+BY\b",
+        _gaql._query_without_string_literals(query),  # pylint: disable=protected-access
+        re.I,
+    ):
+      response["ordering_warning"] = (
+          "Inline rows are an incomplete subset in Google Ads API order. "
+          "Use bulk_export_call for all returned rows before account-wide "
+          "analysis, or add ORDER BY for a ranked subset."
+      )
+  result = _finalize_gaql_response(response)
+  if result.get("returned_row_count", len(rows)) == len(rows):
+    result.pop("ordering_warning", None)
   return result
 
 
@@ -3138,8 +3287,12 @@ def execute_gaql(
   cap large result sets without changing the underlying GAQL query.
   max_results is accepted as an alias for max_rows. Required segment fields
   are added to SELECT and recorded in query_adjustments. Filters and metrics
-  are never silently removed or replaced. Oversized responses preserve exact
-  rows and metadata through full_materialized_response_export.
+  are never silently removed or replaced. Inline rows are bounded to 32 KiB;
+  incomplete responses provide bulk_export_call for every retrieved row.
+  max_rows does not limit that exact export. Query LIMIT and API restrictions
+  still apply. Snapshots expire after 15 minutes and may be evicted earlier
+  by the credential-scoped bounded cache. Oversized metadata remains available
+  through full_materialized_response_export.
 
   Args:
       query: GAQL reporting query.
@@ -3185,23 +3338,27 @@ def execute_gaql(
   )
   _history.add_result_coverage(query_metadata, len(rows))
   if max_rows is None:
-    return _finalize_gaql_response(
-        {
-            **_unbounded_gaql_response(rows, warning_row_threshold),
-            **query_metadata,
-        }
-    )
-
-  returned_rows = rows[:max_rows]
-  return _finalize_gaql_response(
-      {
-          "data": returned_rows,
-          "returned_row_count": len(returned_rows),
-          "total_row_count": len(rows),
-          "truncated": len(rows) > max_rows,
-          "max_rows_applied": max_rows,
-          **query_metadata,
-      }
+    response = {
+        **_unbounded_gaql_response(rows, warning_row_threshold),
+        **query_metadata,
+    }
+  else:
+    response = {
+        "data": rows[:max_rows],
+        "returned_row_count": len(rows[:max_rows]),
+        "total_row_count": len(rows),
+        "truncated": len(rows) > max_rows,
+        "max_rows_applied": max_rows,
+        **query_metadata,
+    }
+  return _bounded_gaql_response(
+      response,
+      rows,
+      prepared_query or query,
+      customer_id,
+      login_customer_id,
+      query_metadata,
+      max_rows,
   )
 
 

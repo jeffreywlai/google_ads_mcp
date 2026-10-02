@@ -230,6 +230,13 @@ def test_list_customer_search_term_insights_term_detail_paginates():
               "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
           },
       },
+      "snapshot_lifetime": {
+          "expires_after_seconds": 900,
+          "may_be_evicted_earlier": True,
+          "eviction_policy": (
+              "Credential-scoped bounded least-recently-used cache."
+          ),
+      },
   }
 
 

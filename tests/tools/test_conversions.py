@@ -166,6 +166,13 @@ def test_list_offline_conversion_upload_client_summaries_passes_paging():
               "snapshot_token": "gaql-snapshot-v1:" + "a" * 32,
           },
       },
+      "snapshot_lifetime": {
+          "expires_after_seconds": 900,
+          "may_be_evicted_earlier": True,
+          "eviction_policy": (
+              "Credential-scoped bounded least-recently-used cache."
+          ),
+      },
   }
 
 

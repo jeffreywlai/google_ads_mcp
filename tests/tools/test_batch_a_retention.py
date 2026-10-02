@@ -480,7 +480,7 @@ def test_expired_history_snapshot_does_not_recompute_dates_or_query():
       ) as run,
   ):
     first = changes.list_change_events("123", limit=1)
-    clock[0] += 91.0
+    clock[0] += api._PAGED_QUERY_CACHE_TTL_SECONDS + 1  # pylint: disable=protected-access
     with mock.patch.object(
         changes,
         "_account_today",

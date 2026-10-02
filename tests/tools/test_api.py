@@ -438,34 +438,43 @@ def test_execute_gaql_applies_max_rows_and_returns_metadata():
   ]
 
   with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
-    assert api.execute_gaql(
+    result = api.execute_gaql(
         "SELECT campaign.id FROM campaign",
         "123",
         max_rows=2,
-    ) == {
+    )
+    expected = {
         "data": [{"campaign.id": "1"}, {"campaign.id": "2"}],
         "returned_row_count": 2,
         "total_row_count": 3,
         "truncated": True,
         "max_rows_applied": 2,
     }
+  assert {key: result[key] for key in expected} == expected
+  assert result["complete_inline"] is False
+  assert result["export_row_count"] == 3
+  assert result["bulk_export_call"]["tool"] == "export_gaql_csv"
 
 
 def test_execute_gaql_accepts_max_results_alias():
   rows = [{"campaign.id": "1"}, {"campaign.id": "2"}]
 
   with mock.patch("ads_mcp.tools.api.run_gaql_query", return_value=rows):
-    assert api.execute_gaql(
+    result = api.execute_gaql(
         "SELECT campaign.id FROM campaign",
         "123",
         max_results=1,
-    ) == {
+    )
+    expected = {
         "data": [{"campaign.id": "1"}],
         "returned_row_count": 1,
         "total_row_count": 2,
         "truncated": True,
         "max_rows_applied": 1,
     }
+  assert {key: result[key] for key in expected} == expected
+  assert result["complete_inline"] is False
+  assert result["export_row_count"] == 2
 
 
 def test_execute_gaql_warns_on_large_unbounded_result():
@@ -571,13 +580,15 @@ def test_execute_gaql_max_rows_suppresses_unbounded_warning():
     )
 
   assert "token_efficiency_warning" not in result
-  assert result == {
+  expected = {
       "data": [{"campaign.id": "1"}, {"campaign.id": "2"}],
       "returned_row_count": 2,
       "total_row_count": 3,
       "truncated": True,
       "max_rows_applied": 2,
   }
+  assert {key: result[key] for key in expected} == expected
+  assert result["bulk_export_call"]["tool"] == "export_gaql_csv"
 
 
 def test_execute_gaql_rejects_conflicting_row_caps():
@@ -880,6 +891,7 @@ def test_tokenless_page_refreshes_while_old_snapshot_tokens_stay_exact():
 
 def test_run_gaql_query_page_expires_cache_after_ttl():
   rows = [{"campaign.id": "1"}]
+  expired_at = 101.0 + api._PAGED_QUERY_CACHE_TTL_SECONDS
 
   with mock.patch(
       "ads_mcp.tools.api._iter_gaql_query_attempt",
@@ -887,7 +899,7 @@ def test_run_gaql_query_page_expires_cache_after_ttl():
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.api.time.monotonic",
-        side_effect=[100.0, 191.0, 191.0],
+        side_effect=[100.0, expired_at, expired_at],
     ):
       api.run_gaql_query_page(
           "SELECT campaign.id FROM campaign",
@@ -901,6 +913,7 @@ def test_run_gaql_query_page_expires_cache_after_ttl():
       )
 
   assert mock_run.call_count == 2
+  assert len(api._PAGED_QUERY_CACHE) == 1
 
 
 def test_run_gaql_query_page_rejects_expired_snapshot_token():
@@ -915,7 +928,7 @@ def test_run_gaql_query_page_rejects_expired_snapshot_token():
   ) as mock_run:
     with mock.patch(
         "ads_mcp.tools.api.time.monotonic",
-        side_effect=[100.0, 100.0, 191.0],
+        side_effect=[100.0, 100.0, 101.0 + api._PAGED_QUERY_CACHE_TTL_SECONDS],
     ):
       first_page = api.run_gaql_query_page(
           query,
@@ -1404,6 +1417,13 @@ def test_build_paginated_list_response_returns_completeness_metadata():
           "arguments": {
               "snapshot_token": f"gaql-snapshot-v1:{snapshot_id}",
           },
+      },
+      "snapshot_lifetime": {
+          "expires_after_seconds": api._PAGED_QUERY_CACHE_TTL_SECONDS,
+          "may_be_evicted_earlier": True,
+          "eviction_policy": (
+              "Credential-scoped bounded least-recently-used cache."
+          ),
       },
   }
 
@@ -2249,7 +2269,7 @@ def test_snapshot_export_expiry_has_actionable_restart_guidance():
     with mock.patch.object(
         api.time,
         "monotonic",
-        side_effect=[100.0, 100.0, 191.0],
+        side_effect=[100.0, 100.0, 101.0 + api._PAGED_QUERY_CACHE_TTL_SECONDS],
     ):
       page = api.run_gaql_query_page(
           "SELECT campaign.id FROM campaign",

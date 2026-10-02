@@ -155,6 +155,43 @@ _REMOVED_FIELD_ALTERNATIVES = {
         "asset_group_asset.primary_status_reasons",
     ),
 }
+_CONTEXT_FIELD_ALTERNATIVES = {
+    ("keyword_view", "segments.keyword.info.text"): (
+        "ad_group_criterion.keyword.text",
+    ),
+    ("campaign_simulation", "campaign_simulation.target_cpa_point_list"): (
+        "campaign_simulation.target_cpa_point_list.points",
+    ),
+}
+_VALIDATION_ERROR_BYTE_LIMIT = 16384
+
+
+def _raise_validation_errors(errors: list[str]) -> None:
+  """Reports independent known problems together with a bounded message."""
+  unique_errors = list(dict.fromkeys(errors))
+  if not unique_errors:
+    return
+  parts = []
+  used_bytes = 0
+  for index, error in enumerate(unique_errors):
+    error_bytes = error.encode("utf-8")
+    # Reserve space for an explicit omitted-diagnostic count.
+    if used_bytes + len(error_bytes) + 1 > _VALIDATION_ERROR_BYTE_LIMIT - 160:
+      if not parts:
+        parts.append(
+            error_bytes[: _VALIDATION_ERROR_BYTE_LIMIT - 160].decode(
+                "utf-8", errors="ignore"
+            )
+        )
+      parts.append(
+          f"{len(unique_errors) - index} additional validation diagnostics "
+          "were omitted to keep this error bounded. Correct the listed "
+          "problems and validate again."
+      )
+      break
+    parts.append(error)
+    used_bytes += len(error_bytes) + 1
+  raise ToolError("\n".join(parts))
 
 
 def gaql_quote_string(value: str) -> str:
@@ -688,10 +725,16 @@ def _canonical_enum_filter_value(
     items = _split_gaql_list_items(stripped_value[1:-1])
     if not items:
       raise ToolError(f"{field_name} {operator} enum list cannot be empty.")
-    canonical_items = [
-        _canonical_enum_literal(field_name, item, allowed_values)
-        for item in items
-    ]
+    canonical_items = []
+    errors = []
+    for item in items:
+      try:
+        canonical_items.append(
+            _canonical_enum_literal(field_name, item, allowed_values)
+        )
+      except ToolError as error:
+        errors.append(str(error))
+    _raise_validation_errors(errors)
     canonical_list = ", ".join(canonical_items)
     return f"({canonical_list})"
   return _canonical_enum_literal(field_name, value, allowed_values)
@@ -703,15 +746,23 @@ def normalize_gaql_enum_literals(query: str) -> str:
   Unknown fields and non-enum fields are left untouched so custom valid GAQL is
   not blocked by incomplete local parsing.
   """
+  query, errors = _normalize_gaql_enum_literals(query)
+  _raise_validation_errors(errors)
+  return query
+
+
+def _normalize_gaql_enum_literals(query: str) -> tuple[str, list[str]]:
+  """Collects enum failures while preserving every valid canonicalization."""
   where_span = _where_body_span(query)
   if where_span is None:
-    return query
+    return query, []
 
   enum_fields = _load_enum_field_values()
   if not enum_fields:
-    return query
+    return query, []
 
   replacements = []
+  errors = []
   where_offset, where_end = where_span
   where_body = query[where_offset:where_end]
   string_spans = [
@@ -727,12 +778,16 @@ def normalize_gaql_enum_literals(query: str) -> str:
       continue
 
     value = enum_filter_match.group("value")
-    canonical_value = _canonical_enum_filter_value(
-        field_name,
-        enum_filter_match.group("operator"),
-        value,
-        allowed_values,
-    )
+    try:
+      canonical_value = _canonical_enum_filter_value(
+          field_name,
+          enum_filter_match.group("operator"),
+          value,
+          allowed_values,
+      )
+    except ToolError as error:
+      errors.append(str(error))
+      continue
     value_start = where_offset + enum_filter_match.start("value")
     value_end = where_offset + enum_filter_match.end("value")
     if canonical_value != value:
@@ -740,7 +795,7 @@ def normalize_gaql_enum_literals(query: str) -> str:
 
   for start, end, replacement in sorted(replacements, reverse=True):
     query = query[:start] + replacement + query[end:]
-  return query
+  return query, errors
 
 
 @functools.lru_cache(maxsize=None)
@@ -833,12 +888,15 @@ def _load_field_metadata() -> dict[str, dict[str, Any]]:
 
 
 def _field_recovery_hint(
-    field_name: str, compatible_fields: frozenset[str]
+    field_name: str, compatible_fields: frozenset[str], resource_name: str
 ) -> str:
   """Suggests only verified alternatives, never an automatic substitution."""
   alternatives = [
       field
-      for field in _REMOVED_FIELD_ALTERNATIVES.get(field_name, ())
+      for field in (
+          _CONTEXT_FIELD_ALTERNATIVES.get((resource_name, field_name))
+          or _REMOVED_FIELD_ALTERNATIVES.get(field_name, ())
+      )
       if field in compatible_fields
   ]
   if not alternatives:
@@ -855,6 +913,11 @@ def _field_recovery_hint(
   hint = ""
   if field_name in _REMOVED_FIELD_ALTERNATIVES:
     hint += " This field is unavailable in v24."
+  if (resource_name, field_name) == (
+      "campaign_simulation",
+      "campaign_simulation.target_cpa_point_list",
+  ):
+    hint += " The parent message is not a selectable v24 field path."
   if alternatives:
     hint += (
         " Selectable alternatives (not equivalent replacements): "
@@ -867,6 +930,12 @@ def _field_recovery_hint(
     field_sets = _load_resource_field_sets(resource)
     if field_sets and field_name in frozenset().union(*field_sets.values()):
       hint += f" This exact field is selectable FROM {resource}."
+  if (resource_name, field_name) == ("campaign_lifecycle_goal", "campaign.id"):
+    hint += (
+        " To scope this resource, use campaign_lifecycle_goal.campaign = "
+        "'customers/<CUSTOMER_ID>/campaigns/<CAMPAIGN_ID>' with the actual "
+        "customer and campaign IDs."
+    )
   return hint + " "
 
 
@@ -940,42 +1009,54 @@ def validate_gaql_field_compatibility(query: str) -> None:
   each FROM resource. Unknown FROM resources are left to Google Ads so custom
   future-valid GAQL is not blocked by local metadata gaps.
   """
+  _raise_validation_errors(_field_compatibility_errors(query))
+
+
+def _field_compatibility_errors(query: str) -> list[str]:
+  """Collects known field and pairwise problems without rejecting gaps."""
   resource_name = _query_from_resource(query)
   if not resource_name:
-    return
+    return []
 
   field_sets = _load_resource_field_sets(resource_name)
   if field_sets is None:
-    return
+    return []
 
   compatible_fields = frozenset().union(*field_sets.values())
   referenced_fields = _unique_field_order(
       _selected_fields(query) + _referenced_filter_and_order_fields(query)
   )
+  errors = []
+  metadata = _load_field_metadata()
   for field_name in referenced_fields:
     if field_name in compatible_fields:
       continue
     if (
-        field_name not in _load_field_metadata()
+        field_name not in metadata
         and field_name not in _REMOVED_FIELD_ALTERNATIVES
+        and (resource_name, field_name) not in _CONTEXT_FIELD_ALTERNATIVES
     ):
       continue
-    raise ToolError(
+    errors.append(
         f"{field_name} is not compatible with FROM {resource_name}. "
-        + _field_recovery_hint(field_name, compatible_fields)
-        + _compatible_fields_text(resource_name, field_sets)
+        + _field_recovery_hint(field_name, compatible_fields, resource_name)
     )
+  if errors:
+    errors.append(_compatible_fields_text(resource_name, field_sets))
   # Pairwise metadata cannot prove unknown future fields incompatible either.
-  _validate_pairwise_field_compatibility(
-      resource_name,
-      [field for field in referenced_fields if field in compatible_fields],
+  errors.extend(
+      _pairwise_field_compatibility_errors(
+          resource_name,
+          [field for field in referenced_fields if field in compatible_fields],
+      )
   )
+  return errors
 
 
-def _validate_pairwise_field_compatibility(
+def _pairwise_field_compatibility_errors(
     resource_name: str,
     referenced_fields: list[str],
-) -> None:
+) -> list[str]:
   """Validates generated and compact local pairwise compatibility rules."""
   metrics = [
       field for field in referenced_fields if field.startswith("metrics.")
@@ -984,6 +1065,7 @@ def _validate_pairwise_field_compatibility(
       field for field in referenced_fields if field.startswith("segments.")
   ]
   generated_compatibility = _load_segment_metric_compatibility()
+  errors = []
   for segment in segments:
     compatible_metrics = generated_compatibility.get(segment)
     if compatible_metrics is None:
@@ -997,7 +1079,7 @@ def _validate_pairwise_field_compatibility(
           if compatible_preview
           else ""
       )
-      raise ToolError(
+      errors.append(
           f"{metric} is not selectable with {segment}. Split the conflicting "
           f"fields into separate GAQL queries for FROM {resource_name} and "
           "join them on shared resource and date dimensions."
@@ -1006,16 +1088,18 @@ def _validate_pairwise_field_compatibility(
 
   unique_user_metrics = sorted(set(metrics) & _UNIQUE_USER_METRICS)
   if not unique_user_metrics:
-    return
+    return errors
 
   incompatible_segments = sorted(set(segments) - _ALLOWED_UNIQUE_USER_SEGMENTS)
   if incompatible_segments:
-    raise ToolError(
-        f"{unique_user_metrics[0]} is not selectable with "
-        + ", ".join(incompatible_segments)
-        + ". Drop the incompatible segment or use get_reporting_view_doc for "
-        "compatible metric/segment combinations."
-    )
+    for metric in unique_user_metrics:
+      errors.append(
+          f"{metric} is not selectable with "
+          + ", ".join(incompatible_segments)
+          + ". Drop the incompatible segment or use get_reporting_view_doc "
+          "for compatible metric/segment combinations."
+      )
+  return errors
 
 
 def _referenced_filter_and_order_fields(query: str) -> list[str]:
@@ -1126,10 +1210,14 @@ def _preflight_gaql(query: str) -> str:
   _validate_or_compatibility(query_without_literals)
 
   query = rewrite_gaql_date_ranges(query)
-  query = normalize_gaql_enum_literals(query)
-  _validate_empty_resource_references(query)
+  query, errors = _normalize_gaql_enum_literals(query)
+  try:
+    _validate_empty_resource_references(query)
+  except ToolError as error:
+    errors.append(str(error))
   query = _add_missing_referenced_select_fields(query)
-  validate_gaql_field_compatibility(query)
+  errors.extend(_field_compatibility_errors(query))
+  _raise_validation_errors(errors)
   return query
 
 
