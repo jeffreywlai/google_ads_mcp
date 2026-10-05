@@ -23,6 +23,10 @@ classifiers = [
 ]
 
 dependencies = [
+    # Preserve platforms removed by cryptography 49.
+    "cryptography>=48.0.1,<49; sys_platform == 'win32'",
+    "cryptography>=48.0.1,<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "cryptography>=50.0.2; sys_platform != 'win32' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     "fastmcp>=3.4.8,<3.5",
     "google-ads>=33.0.0,<34.0.0",
     "httpx[http2]>=0.28.1",
