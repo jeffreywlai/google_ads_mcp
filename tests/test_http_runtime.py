@@ -11,8 +11,8 @@ from unittest import mock
 from fastmcp.server.auth import AccessToken
 from fastmcp.server.auth import TokenVerifier
 from fastmcp.server.auth.providers.google import GoogleTokenVerifier
+from fastmcp.server.http import FastMCPStreamableHTTPSessionManager
 import httpx
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 import pytest
 
 from ads_mcp import server
@@ -55,14 +55,16 @@ async def _http_runtime(verifier, **limits):
   managers = []
 
   def make_manager(*args, **kwargs):
-    manager = StreamableHTTPSessionManager(*args, **kwargs, **limits)
+    manager = FastMCPStreamableHTTPSessionManager(*args, **kwargs)
+    for name, value in limits.items():
+      setattr(manager, name, value)
     managers.append(manager)
     return manager
 
   with (
       mock.patch.object(server.mcp_server, "auth", verifier),
       mock.patch(
-          "fastmcp.server.http.StreamableHTTPSessionManager",
+          "fastmcp.server.http.FastMCPStreamableHTTPSessionManager",
           side_effect=make_manager,
       ),
   ):

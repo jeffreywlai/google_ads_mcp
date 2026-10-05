@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=3.2.2,<3.3",
+    "fastmcp>=3.4.8,<3.5",
     "google-ads>=33.0.0,<34.0.0",
     "httpx[http2]>=0.28.1",
     "mcp>=1.30.0,<2.0",
