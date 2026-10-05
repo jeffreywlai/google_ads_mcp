@@ -36,7 +36,6 @@ from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import project_inline_rows
 from ads_mcp.tools.api import run_gaql_query_page
 
-
 # ---------------------------------------------------------------------------
 # Shared Negative Keyword Lists (SharedSet)
 # ---------------------------------------------------------------------------

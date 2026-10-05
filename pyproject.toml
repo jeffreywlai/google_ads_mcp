@@ -34,7 +34,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pyink>=25.12.0",
+    "pyink>=26.5.1",
     "pylint>=4.0.5",
     "pytest>=9.0.2",
     "pytest-mock>=3.15.1",
@@ -54,6 +54,7 @@ run-mcp-server-http = "ads_mcp.server:main"
 
 [tool.pyink]
 # Formatting configuration to follow Google style-guide
+target-version = ["py312"]
 pyink-indentation = 2
 pyink-use-majority-quotes = true
 line-length = 79

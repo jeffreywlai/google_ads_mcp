@@ -12,7 +12,6 @@ from fastmcp.exceptions import ToolError
 
 from ads_mcp.tools import _gaql
 
-
 RetentionPolicy = Literal["error", "clamp"]
 CHANGE_EVENT_LOOKBACK_DAYS = 30
 CHANGE_EVENT_RESULT_CAP = 10_000

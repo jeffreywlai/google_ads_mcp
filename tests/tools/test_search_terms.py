@@ -20,7 +20,6 @@ from ads_mcp.tools import api
 from ads_mcp.tools import search_terms
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 
 

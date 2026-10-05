@@ -16,8 +16,7 @@ def test_stdio_survives_large_queries_exports_and_validation_error(tmp_path):
   root = Path(__file__).resolve().parents[1]
   fixture = tmp_path / "offline_server.py"
   fixture.write_text(
-      textwrap.dedent(
-          """
+      textwrap.dedent("""
           from ads_mcp import stdio
           from ads_mcp.tools import api
 
@@ -42,8 +41,7 @@ def test_stdio_survives_large_queries_exports_and_validation_error(tmp_path):
             return {"source_calls": source_calls}
 
           stdio.main()
-          """
-      ),
+          """),
       encoding="utf-8",
   )
   config = {

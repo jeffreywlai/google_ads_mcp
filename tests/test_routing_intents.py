@@ -25,7 +25,6 @@ from ads_mcp.routing.intents import ROUTE_CATALOG
 from ads_mcp.routing.intents import TOOL_CAPABILITIES
 from ads_mcp.routing.intents import resolve_intent
 
-
 _HISTORY_TOOLS = {
     "export_change_history_csv",
     "get_change_history_extended",

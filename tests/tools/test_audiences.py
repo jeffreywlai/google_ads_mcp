@@ -24,7 +24,6 @@ from google.ads.googleads.v25.resources.types.audience import Audience
 from ads_mcp.tools import audiences
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 
 

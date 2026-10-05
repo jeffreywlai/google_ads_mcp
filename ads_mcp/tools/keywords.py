@@ -21,7 +21,6 @@ from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import get_ads_client
 
-
 keyword_tool = ads_mutation_tool(mcp, tags={"keywords"})
 
 

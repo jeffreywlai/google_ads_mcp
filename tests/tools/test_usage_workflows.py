@@ -29,7 +29,6 @@ from ads_mcp.tools import api
 from ads_mcp.tools import reporting
 from ads_mcp.tools._gaql import preprocess_gaql_query
 
-
 CUSTOMER_ID = "1234567890"
 CAMPAIGN_RESOURCE = f"customers/{CUSTOMER_ID}/campaigns/111"
 CUSTOM_GOAL = "customers/999/customConversionGoals/10"

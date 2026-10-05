@@ -8,7 +8,6 @@ import pytest
 
 from ads_mcp.tools import api
 
-
 _FIELD = "change_event.change_date_time"
 _VALID_PREDICATE = f"{_FIELD} DURING LAST_7_DAYS"
 

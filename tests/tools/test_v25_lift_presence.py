@@ -30,7 +30,6 @@ import pytest
 from ads_mcp.tools import api
 from ads_mcp.tools import reporting
 
-
 LIFT_FIELDS = (
     reporting._BRAND_LIFT_METRICS + reporting._CONVERSION_LIFT_METRICS
 )

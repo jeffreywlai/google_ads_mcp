@@ -27,7 +27,6 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 import yaml
 
-
 NATIVE_DATE_RANGE_FUNCTIONS = {
     "LAST_14_DAYS",
     "LAST_30_DAYS",

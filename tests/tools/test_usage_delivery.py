@@ -15,7 +15,6 @@ import pytest
 from ads_mcp.coordinator import mcp_server
 from ads_mcp.tools import api
 
-
 QUERY = "SELECT campaign.id, campaign.name FROM campaign"
 
 

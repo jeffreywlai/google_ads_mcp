@@ -26,7 +26,6 @@ from ads_mcp.tools import changes
 from fastmcp.exceptions import ToolError
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 
 

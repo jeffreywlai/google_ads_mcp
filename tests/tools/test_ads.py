@@ -19,7 +19,6 @@ from unittest import mock
 from ads_mcp.tools import ads
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 AD_GROUP_ID = "111"
 AD_ID = "222"

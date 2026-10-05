@@ -26,7 +26,6 @@ from ads_mcp.tools import api
 from ads_mcp.tools import campaigns
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 CAMPAIGN_ID = "111"
 BUDGET_ID = "222"

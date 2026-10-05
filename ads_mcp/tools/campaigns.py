@@ -50,7 +50,6 @@ from ads_mcp.tools.api import run_gaql_query
 from ads_mcp.tools.api import run_gaql_query_page
 from ads_mcp.tools.api import run_gaql_query_snapshot
 
-
 campaign_read_tool = ads_read_tool(mcp, tags={"campaigns", "audiences"})
 campaign_tool = ads_mutation_tool(mcp, tags={"campaigns"})
 

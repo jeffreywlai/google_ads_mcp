@@ -17,7 +17,6 @@ import pytest
 
 from ads_mcp import server
 
-
 _SCOPE = "https://www.googleapis.com/auth/adwords"
 _PROTOCOL_VERSION = "2025-06-18"
 _INITIALIZE_PARAMS = {

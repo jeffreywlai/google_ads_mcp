@@ -36,7 +36,6 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 
 

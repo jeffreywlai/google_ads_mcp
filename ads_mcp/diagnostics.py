@@ -27,7 +27,6 @@ import uuid
 
 from fastmcp.server.middleware import Middleware
 
-
 _LOGGER = logging.getLogger("ads_mcp.diagnostics")
 
 

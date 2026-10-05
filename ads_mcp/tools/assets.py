@@ -37,7 +37,6 @@ from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import INLINE_PAGE_BYTE_LIMIT
 from ads_mcp.tools.api import run_gaql_query
 
-
 asset_mutation_tool = ads_mutation_tool(mcp, tags={"assets"})
 
 

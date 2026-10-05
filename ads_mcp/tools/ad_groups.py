@@ -27,7 +27,6 @@ from ads_mcp.tools._gaql import require_unique_values
 from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import get_ads_client
 
-
 ad_group_tool = ads_mutation_tool(mcp, tags={"ad_groups"})
 
 

@@ -13,7 +13,6 @@ import pytest
 
 from ads_mcp.tools import api
 
-
 _CASES = json.loads(
     (Path(__file__).parents[1] / "fixtures/usage_report_gaql.json").read_text(
         encoding="utf-8"

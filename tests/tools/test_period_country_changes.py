@@ -32,7 +32,6 @@ from ads_mcp.tools import _history
 from ads_mcp.tools import api
 from ads_mcp.tools import reporting
 
-
 CUSTOMER = "1234567890"
 CAMPAIGN = f"customers/{CUSTOMER}/campaigns/111"
 BUDGET = f"customers/{CUSTOMER}/campaignBudgets/222"

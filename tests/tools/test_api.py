@@ -34,7 +34,6 @@ from google.protobuf.field_mask_pb2 import FieldMask
 import proto
 import pytest
 
-
 real_page_cache_scope = api._page_cache_scope
 
 

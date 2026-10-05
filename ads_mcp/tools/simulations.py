@@ -28,7 +28,6 @@ from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import run_gaql_query_page
 
-
 _CAMPAIGN_SIMULATION_FIELDS = {
     "BUDGET": ["campaign_simulation.budget_point_list.points"],
     "CPC_BID": ["campaign_simulation.cpc_bid_point_list.points"],

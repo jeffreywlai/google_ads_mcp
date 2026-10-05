@@ -35,7 +35,6 @@ from ads_mcp.tools import negatives
 from ads_mcp.tools.api import preprocess_gaql
 from ads_mcp.utils import MODULE_DIR
 
-
 # ===================================================================
 # 1. Invalid status validation (regression guard for consolidation)
 # ===================================================================

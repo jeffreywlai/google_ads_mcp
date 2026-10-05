@@ -14,7 +14,6 @@ import pytest
 from ads_mcp import server
 from ads_mcp.tools import campaigns
 
-
 _MUTATION = "set_campaign_status"
 _ARGUMENTS = {
     "customer_id": "123",

@@ -21,7 +21,6 @@ from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import handle_google_ads_errors
 
-
 planning_read_tool = ads_read_tool(mcp, tags={"planning", "insights"})
 
 _PLANNING_METHODS = {

@@ -26,7 +26,6 @@ from ads_mcp.tools._gaql import segments_date_condition
 from ads_mcp.tools.api import get_ads_credential_cache_scope
 from ads_mcp.tools.api import run_gaql_query
 
-
 _CAMPAIGN_CONTEXT_CACHE_TTL_SECONDS = 15.0
 _CAMPAIGN_CONTEXT_CACHE_MAX_ENTRIES = 128
 _CAMPAIGN_CONTEXT_CACHE: OrderedDict[
