@@ -29,7 +29,7 @@ dependencies = [
     "mcp>=1.30.0,<2.0",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
-    "uvicorn>=0.30",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]

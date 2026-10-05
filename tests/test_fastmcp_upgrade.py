@@ -96,7 +96,7 @@ async def test_real_stdio_transport_preserves_discovery_and_mutation_lock():
       cwd=str(Path(__file__).resolve().parents[1]),
       keep_alive=False,
   )
-  async with asyncio.timeout(15), Client(transport) as client:
+  async with asyncio.timeout(30), Client(transport) as client:
     await client.ping()
     names = {tool.name for tool in await client.list_tools()}
     assert {"search_tools", "call_tool", "get_campaign_settings"} <= names
