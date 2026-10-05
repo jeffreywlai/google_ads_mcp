@@ -393,6 +393,13 @@ Use `run-mcp-server-http` to launch the streamable-HTTP server. The
 `run-mcp-server` script is reserved for stdio clients.
 
 The runtime uses FastMCP 3.4.x (3.4.8 or newer) and MCP 1.x (1.30 or newer).
+These bounds preserve per-client mutation unlocking. FastMCP 4 / MCP 2's
+modern protocol changes session state; adopting them requires migrating and
+testing that workflow (see the [migration guide](https://gofastmcp.com/getting-started/upgrading/from-fastmcp-3)).
+Black and pydantic-core follow Pyink's and Pydantic's exact dependency pins.
+Cryptography uses the 48.x series on Windows and Intel Macs to preserve
+platform support removed in 49; other platforms use 50.x or newer.
+
 Authenticated HTTP sessions are bound to the identity that created them.
 Idle HTTP sessions expire after 30 minutes; an open GET stream keeps a session
 active. After expiry, the next request returns 404 and the client must initialize
