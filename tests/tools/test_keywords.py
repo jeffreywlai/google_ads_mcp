@@ -17,6 +17,10 @@
 from unittest import mock
 
 from ads_mcp.tools import keywords
+from fastmcp.exceptions import ToolError
+from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.api_core import exceptions as google_exceptions
 import pytest
 
 CUSTOMER_ID = "1234567890"
@@ -99,3 +103,63 @@ class TestUpdateKeywordBid:
         login_customer_id="999",
     )
     mock_ads_client._mock_get.assert_any_call("999")
+
+
+# Pytest injects fixtures using their declared names.
+# pylint: disable=redefined-outer-name
+
+
+@pytest.fixture(params=["transport", "google_ads"])
+def api_failure(request):
+  """Provides transport errors and native Google Ads hint-bearing failures."""
+  if request.param == "transport":
+    return google_exceptions.ServiceUnavailable("transport unavailable")
+  return GoogleAdsException(
+      error=mock.Mock(),
+      failure=GoogleAdsFailure(errors=[{"message": "USER_PERMISSION_DENIED"}]),
+      call=mock.Mock(),
+      request_id="test",
+  )
+
+
+def _assert_api_failure(raised, original):
+  assert raised.__cause__ is original
+  if isinstance(original, GoogleAdsException):
+    assert "USER_PERMISSION_DENIED" in str(raised)
+    assert "Hints:\n- Call list_accessible_accounts" in str(raised)
+  else:
+    assert str(raised) == str(original)
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        pytest.param(
+            keywords.set_keyword_status,
+            (CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID, "PAUSED"),
+            id="pause",
+        ),
+        pytest.param(
+            keywords.set_keyword_status,
+            (CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID, "ENABLED"),
+            id="enable",
+        ),
+        pytest.param(
+            keywords.update_keyword_bid,
+            (CUSTOMER_ID, AD_GROUP_ID, CRITERION_ID, 2_500_000),
+            id="bid",
+        ),
+    ],
+)
+def test_keyword_mutation_handles_api_failure_once(
+    mock_ads_client, api_failure, tool, args
+):
+  mutation = mock_ads_client.get_service.return_value.mutate_ad_group_criteria
+  mutation.side_effect = api_failure
+
+  with pytest.raises(ToolError) as caught:
+    tool(*args)
+
+  _assert_api_failure(caught.value, api_failure)
+  mutation.assert_called_once()
+  assert len(mutation.call_args.kwargs["operations"]) == 1

@@ -19,6 +19,15 @@ from types import SimpleNamespace
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
+from google.api_core import exceptions as google_exceptions
+from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsError
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.ads.googleads.v25.enums.types.campaign_status import CampaignStatusEnum
+from google.ads.googleads.v25.services.types.campaign_service import CampaignOperation
+from google.ads.googleads.v25.services.types.campaign_budget_service import CampaignBudgetOperation
+from google.ads.googleads.v25.services.types.campaign_criterion_service import CampaignCriterionOperation
+from google.ads.googleads.v25.services.types.google_ads_service import SearchGoogleAdsStreamResponse
 from google.ads.googleads.v25.enums.types.targeting_dimension import (
     TargetingDimensionEnum,
 )
@@ -1042,3 +1051,251 @@ class TestRemoveCampaignAudiences:
       )
 
     mock_ads_client.get_service.assert_not_called()
+
+
+@pytest.fixture(
+    name="legacy_api_error", params=["permission", "unavailable", "google_ads"]
+)
+def _legacy_api_error_fixture(request):
+  """Exercises both transport failures and native Google Ads hint formatting."""
+  if request.param == "permission":
+    return google_exceptions.PermissionDenied("synthetic permission failure")
+  if request.param == "unavailable":
+    return google_exceptions.ServiceUnavailable("synthetic service failure")
+  return GoogleAdsException(
+      error=mock.Mock(),
+      call=mock.Mock(),
+      request_id="offline-request",
+      failure=GoogleAdsFailure(
+          errors=[
+              GoogleAdsError(
+                  error_code={"authorization_error": "USER_PERMISSION_DENIED"},
+                  message="synthetic Google Ads permission failure",
+              )
+          ]
+      ),
+  )
+
+
+def _assert_legacy_tool_error(error, api_error):
+  assert error.__cause__ is api_error
+  if isinstance(api_error, GoogleAdsException):
+    assert str(api_error.failure.errors[0]) in str(error)
+    assert "Hints:" in str(error)
+    assert "list_accessible_accounts" in str(error)
+  else:
+    assert str(error) == str(api_error)
+
+
+@pytest.mark.parametrize(
+    "tool_name,args,service_name,method_name,reads_targeting",
+    [
+        (
+            "set_campaign_status",
+            (CUSTOMER_ID, CAMPAIGN_ID, "PAUSED"),
+            "CampaignService",
+            "mutate_campaigns",
+            False,
+        ),
+        (
+            "update_campaign_budget",
+            (CUSTOMER_ID, BUDGET_ID, 2_500_000),
+            "CampaignBudgetService",
+            "mutate_campaign_budgets",
+            False,
+        ),
+        (
+            "set_campaign_view_through_conversion_optimization",
+            (CUSTOMER_ID, CAMPAIGN_ID, True),
+            "CampaignService",
+            "mutate_campaigns",
+            False,
+        ),
+        (
+            "update_campaign_targeting_setting",
+            (
+                CUSTOMER_ID,
+                CAMPAIGN_ID,
+                [{"targeting_dimension": "KEYWORD", "bid_only": True}],
+            ),
+            "CampaignService",
+            "mutate_campaigns",
+            False,
+        ),
+        (
+            "update_campaign_targeting_setting",
+            (
+                CUSTOMER_ID,
+                CAMPAIGN_ID,
+                [{"targeting_dimension": "AUDIENCE", "bid_only": False}],
+            ),
+            "CampaignService",
+            "mutate_campaigns",
+            True,
+        ),
+        (
+            "add_campaign_audiences",
+            (
+                CUSTOMER_ID,
+                CAMPAIGN_ID,
+                [{"type": "USER_LIST", "user_list_id": "7001"}],
+            ),
+            "CampaignCriterionService",
+            "mutate_campaign_criteria",
+            False,
+        ),
+        (
+            "remove_campaign_audiences",
+            (CUSTOMER_ID, CAMPAIGN_ID, ["7001", "7002"]),
+            "CampaignCriterionService",
+            "mutate_campaign_criteria",
+            False,
+        ),
+        (
+            "copy_audiences_between_campaigns",
+            (CUSTOMER_ID, CAMPAIGN_ID, "222", None, False),
+            "CampaignCriterionService",
+            "mutate_campaign_criteria",
+            False,
+        ),
+    ],
+    ids=[
+        "status",
+        "budget",
+        "view-through",
+        "targeting-no-read",
+        "targeting-with-read",
+        "add-audience",
+        "remove-audience",
+        "copy-audience",
+    ],
+)
+def test_legacy_campaign_mutation_failure_is_normalized_without_retry(
+    mock_ads_client,
+    legacy_api_error,
+    tool_name,
+    args,
+    service_name,
+    method_name,
+    reads_targeting,
+):
+  services = {
+      name: mock.Mock()
+      for name in (
+          "CampaignService",
+          "CampaignBudgetService",
+          "CampaignCriterionService",
+          "GoogleAdsService",
+      )
+  }
+  mock_ads_client.get_service.side_effect = services.__getitem__
+  mock_ads_client.get_type.side_effect = lambda name: {
+      "CampaignOperation": CampaignOperation,
+      "CampaignBudgetOperation": CampaignBudgetOperation,
+      "CampaignCriterionOperation": CampaignCriterionOperation,
+  }[name]()
+  mock_ads_client.enums.CampaignStatusEnum = CampaignStatusEnum.CampaignStatus
+  services["CampaignService"].campaign_path.side_effect = (
+      lambda customer, campaign: f"customers/{customer}/campaigns/{campaign}"
+  )
+  services["CampaignBudgetService"].campaign_budget_path.return_value = (
+      f"customers/{CUSTOMER_ID}/campaignBudgets/{BUDGET_ID}"
+  )
+  services["CampaignCriterionService"].campaign_criterion_path.side_effect = (
+      lambda customer, campaign, criterion: (
+          f"customers/{customer}/campaignCriteria/" f"{campaign}~{criterion}"
+      )
+  )
+  services["GoogleAdsService"].search_stream.return_value = [
+      SearchGoogleAdsStreamResponse(
+          results=[
+              {
+                  "campaign": {
+                      "targeting_setting": {
+                          "target_restrictions": [
+                              {
+                                  "targeting_dimension": "AUDIENCE",
+                                  "bid_only": True,
+                              }
+                          ]
+                      }
+                  }
+              }
+          ]
+      )
+  ]
+  mutation = getattr(services[service_name], method_name)
+  mutation.side_effect = legacy_api_error
+  complete_diff = {
+      "source_campaign_id": CAMPAIGN_ID,
+      "target_campaign_id": "222",
+      "missing_in_target": [{"type": "USER_LIST", "user_list_id": "7001"}],
+      "common_count": 0,
+      "target_only_count": 0,
+      "source_bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {"snapshot_token": "offline"},
+      },
+  }
+  with (
+      mock.patch.object(
+          campaigns,
+          "_complete_campaign_audience_diff",
+          return_value=complete_diff,
+      ),
+      pytest.raises(ToolError) as caught,
+  ):
+    getattr(campaigns, tool_name)(*args)
+
+  _assert_legacy_tool_error(caught.value, legacy_api_error)
+  mutation.assert_called_once()
+  request = mutation.call_args.kwargs
+  assert len(request.get("request", request)["operations"]) == (
+      2 if tool_name == "remove_campaign_audiences" else 1
+  )
+  preflight = services["GoogleAdsService"].search_stream
+  if reads_targeting:
+    preflight.assert_called_once()
+  else:
+    preflight.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_phase", ["call", "stream", "rows"])
+def test_legacy_targeting_preflight_failure_prevents_mutation(
+    mock_ads_client, legacy_api_error, failure_phase
+):
+  campaign_service = mock.Mock()
+  google_ads_service = mock.Mock()
+  mock_ads_client.get_service.side_effect = {
+      "CampaignService": campaign_service,
+      "GoogleAdsService": google_ads_service,
+  }.__getitem__
+
+  def failed_iteration():
+    yield SearchGoogleAdsStreamResponse()
+    raise legacy_api_error
+
+  def failed_rows():
+    yield from ()
+    raise legacy_api_error
+
+  if failure_phase == "call":
+    google_ads_service.search_stream.side_effect = legacy_api_error
+  elif failure_phase == "stream":
+    google_ads_service.search_stream.return_value = failed_iteration()
+  else:
+    google_ads_service.search_stream.return_value = [
+        SimpleNamespace(results=failed_rows())
+    ]
+
+  with pytest.raises(ToolError) as caught:
+    campaigns.update_campaign_targeting_setting(
+        CUSTOMER_ID,
+        CAMPAIGN_ID,
+        [{"targeting_dimension": "AUDIENCE", "bid_only": False}],
+    )
+
+  _assert_legacy_tool_error(caught.value, legacy_api_error)
+  google_ads_service.search_stream.assert_called_once()
+  campaign_service.mutate_campaigns.assert_not_called()
+  mock_ads_client.get_type.assert_not_called()

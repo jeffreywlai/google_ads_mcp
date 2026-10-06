@@ -30,6 +30,7 @@ import uuid
 from ads_mcp.tools import api
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
+from google.api_core import exceptions as google_exceptions
 from google.protobuf.field_mask_pb2 import FieldMask
 import proto
 import pytest
@@ -703,6 +704,62 @@ def test_failed_spooled_snapshot_build_removes_internal_file(tmp_path):
         )
 
   assert not spool_path.exists()
+  assert not api._PAGED_QUERY_BUILDS
+
+
+@pytest.mark.parametrize(
+    "query_runner",
+    ["run_gaql_query", "run_gaql_query_snapshot", "run_gaql_query_page"],
+)
+@pytest.mark.parametrize("failure_phase", ["call", "iteration"])
+@pytest.mark.parametrize(
+    "failure_type",
+    [google_exceptions.ServiceUnavailable, google_exceptions.PermissionDenied],
+)
+def test_gaql_transport_errors_are_tool_errors_without_retry(
+    tmp_path, query_runner, failure_phase, failure_type
+):
+  """Read transport failures retain their cause and clean incomplete spools."""
+  failure = failure_type("synthetic read transport failure")
+  client = mock.Mock()
+  service = client.get_service.return_value
+  spool_paths = []
+  native_mkstemp = tempfile.mkstemp
+
+  def create_spool(**kwargs):
+    descriptor, path = native_mkstemp(**{**kwargs, "dir": str(tmp_path)})
+    spool_paths.append(path)
+    return descriptor, path
+
+  def failing_stream():
+    yield mock.Mock(
+        results=[mock.Mock()],
+        field_mask=mock.Mock(paths=["campaign.id"]),
+    )
+    raise failure
+
+  if failure_phase == "call":
+    service.search_stream.side_effect = failure
+  else:
+    service.search_stream.return_value = failing_stream()
+  with (
+      mock.patch.object(api, "get_ads_client", return_value=client),
+      mock.patch.object(api, "get_nested_attr", return_value="123"),
+      mock.patch.object(api.tempfile, "mkstemp", side_effect=create_spool),
+      mock.patch.object(api.time, "sleep") as sleep,
+      pytest.raises(
+          ToolError, match="synthetic read transport failure"
+      ) as error,
+  ):
+    runner_kwargs = {"page_size": 1} if query_runner.endswith("_page") else {}
+    getattr(api, query_runner)(
+        "SELECT campaign.id FROM campaign", "123", **runner_kwargs
+    )
+
+  assert error.value.__cause__ is failure
+  service.search_stream.assert_called_once()
+  sleep.assert_not_called()
+  assert all(not os.path.exists(path) for path in spool_paths)
   assert not api._PAGED_QUERY_BUILDS
 
 

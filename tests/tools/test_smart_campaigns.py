@@ -188,3 +188,49 @@ class TestSuggestSmartCampaignBudget:
         login_customer_id="999",
     )
     mock_ads_client._mock_get.assert_any_call("999")
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "service_method"),
+    [
+        ("suggest_keyword_themes", "suggest_keyword_themes"),
+        ("suggest_smart_campaign_ad", "suggest_smart_campaign_ad"),
+        (
+            "suggest_smart_campaign_budget",
+            "suggest_smart_campaign_budget_options",
+        ),
+    ],
+)
+@pytest.mark.parametrize("error_kind", ["transport", "google_ads"])
+def test_suggestion_service_errors_preserve_cause_and_do_not_retry(
+    request, tool_name, service_method, error_kind
+):
+  client = request.getfixturevalue("mock_ads_client")
+  service_call = getattr(client.get_service.return_value, service_method)
+  if error_kind == "transport":
+    exception = google_exceptions.ServiceUnavailable("transport unavailable")
+  else:
+    error = mock.Mock()
+    error.__str__ = lambda self: "USER_PERMISSION_DENIED"
+    exception = GoogleAdsException(
+        error=mock.Mock(),
+        failure=mock.Mock(errors=[error]),
+        call=mock.Mock(),
+        request_id="test",
+    )
+  service_call.side_effect = exception
+
+  with pytest.raises(ToolError) as caught:
+    getattr(smart_campaigns, tool_name)(
+        CUSTOMER_ID, "Test", "https://example.com"
+    )
+
+  assert caught.value.__cause__ is exception
+  service_call.assert_called_once()
+  if error_kind == "transport":
+    assert str(caught.value) == str(exception)
+  else:
+    assert "USER_PERMISSION_DENIED" in str(caught.value)
+    assert "Hints:" in str(caught.value)
+    assert "list_accessible_accounts" in str(caught.value)
+    assert "login_customer_id" in str(caught.value)

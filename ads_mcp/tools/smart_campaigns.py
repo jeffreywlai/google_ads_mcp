@@ -17,9 +17,7 @@
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.v25.services.types.smart_campaign_setting_service import GeneratePMaxDraftCampaignRequest
-from google.api_core import exceptions as google_exceptions
 from pydantic import StrictBool
 
 from ads_mcp.coordinator import mcp_server as mcp
@@ -168,12 +166,8 @@ def suggest_keyword_themes(
       language_code=language_code,
   )
 
-  try:
+  with handle_google_ads_errors():
     response = suggest_service.suggest_keyword_themes(request=request)
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-  except google_exceptions.GoogleAPICallError as e:
-    raise ToolError(str(e)) from e
 
   themes = []
   for theme in response.keyword_themes:
@@ -215,12 +209,8 @@ def suggest_smart_campaign_ad(
       language_code,
   )
 
-  try:
+  with handle_google_ads_errors():
     response = suggest_service.suggest_smart_campaign_ad(request=request)
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-  except google_exceptions.GoogleAPICallError as e:
-    raise ToolError(str(e)) from e
 
   ad_info = response.ad_info
   return {
@@ -256,14 +246,10 @@ def suggest_smart_campaign_budget(
       language_code,
   )
 
-  try:
+  with handle_google_ads_errors():
     response = suggest_service.suggest_smart_campaign_budget_options(
         request=request
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
-  except google_exceptions.GoogleAPICallError as e:
-    raise ToolError(str(e)) from e
 
   budget_options = {}
   if response.low:

@@ -882,11 +882,13 @@ def _format_google_ads_error(error: GoogleAdsException) -> str:
 
 
 @contextlib.contextmanager
-def handle_google_ads_errors():
-  """Converts Google Ads API errors into hint-formatted ToolErrors."""
+def handle_google_ads_errors(*, reraise_google_ads: bool = False):
+  """Converts API errors, optionally preserving Ads errors for read retries."""
   try:
     yield
   except GoogleAdsException as exc:
+    if reraise_google_ads:
+      raise
     raise ToolError(_format_google_ads_error(exc)) from exc
   except google_exceptions.GoogleAPICallError as exc:
     raise ToolError(str(exc)) from exc
@@ -3166,16 +3168,17 @@ def _iter_gaql_query_attempt(
   ads_service: GoogleAdsServiceClient = ads_client.get_service(
       "GoogleAdsService"
   )
-  query_res = ads_service.search_stream(
-      query=query,
-      customer_id=customer_id,
-  )
-  for batch in query_res:
-    for row in batch.results:
-      yield {
-          field_name: _extract_gaql_field_value(row, field_name)
-          for field_name in batch.field_mask.paths
-      }
+  with handle_google_ads_errors(reraise_google_ads=True):
+    query_res = ads_service.search_stream(
+        query=query,
+        customer_id=customer_id,
+    )
+    for batch in query_res:
+      for row in batch.results:
+        yield {
+            field_name: _extract_gaql_field_value(row, field_name)
+            for field_name in batch.field_mask.paths
+        }
 
 
 def _build_spooled_gaql_snapshot(

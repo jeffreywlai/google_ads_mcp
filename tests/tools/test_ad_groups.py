@@ -18,6 +18,14 @@ from unittest import mock
 
 from ads_mcp.tools import ad_groups
 from fastmcp.exceptions import ToolError
+from google.api_core import exceptions as google_exceptions
+from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsError
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.ads.googleads.v25.enums.types.ad_group_status import AdGroupStatusEnum
+from google.ads.googleads.v25.enums.types.ad_group_criterion_status import AdGroupCriterionStatusEnum
+from google.ads.googleads.v25.services.types.ad_group_service import AdGroupOperation
+from google.ads.googleads.v25.services.types.ad_group_criterion_service import AdGroupCriterionOperation
 import pytest
 
 CUSTOMER_ID = "1234567890"
@@ -317,3 +325,96 @@ class TestUpdateAdGroupBid:
         login_customer_id="999",
     )
     mock_ads_client._mock_get.assert_any_call("999")
+
+
+@pytest.fixture(
+    name="legacy_api_error", params=["permission", "unavailable", "google_ads"]
+)
+def _legacy_api_error_fixture(request):
+  """Exercises both transport failures and native Google Ads hint formatting."""
+  if request.param == "permission":
+    return google_exceptions.PermissionDenied("synthetic permission failure")
+  if request.param == "unavailable":
+    return google_exceptions.ServiceUnavailable("synthetic service failure")
+  return GoogleAdsException(
+      error=mock.Mock(),
+      call=mock.Mock(),
+      request_id="offline-request",
+      failure=GoogleAdsFailure(
+          errors=[
+              GoogleAdsError(
+                  error_code={"authorization_error": "USER_PERMISSION_DENIED"},
+                  message="synthetic Google Ads permission failure",
+              )
+          ]
+      ),
+  )
+
+
+def _assert_legacy_tool_error(error, api_error):
+  assert error.__cause__ is api_error
+  if isinstance(api_error, GoogleAdsException):
+    assert str(api_error.failure.errors[0]) in str(error)
+    assert "Hints:" in str(error)
+    assert "list_accessible_accounts" in str(error)
+  else:
+    assert str(error) == str(api_error)
+
+
+@pytest.mark.parametrize(
+    "tool_name,args,method_name",
+    [
+        (
+            "set_ad_group_status",
+            (CUSTOMER_ID, AD_GROUP_ID, "PAUSED"),
+            "mutate_ad_groups",
+        ),
+        (
+            "set_ad_group_criterion_status",
+            (CUSTOMER_ID, AD_GROUP_ID, ["222", "333"], "ENABLED"),
+            "mutate_ad_group_criteria",
+        ),
+        (
+            "remove_ad_group_audiences",
+            (CUSTOMER_ID, AD_GROUP_ID, ["222", "333"]),
+            "mutate_ad_group_criteria",
+        ),
+        (
+            "update_ad_group_bid",
+            (CUSTOMER_ID, AD_GROUP_ID, 2_500_000),
+            "mutate_ad_groups",
+        ),
+    ],
+    ids=["status", "criterion-status", "remove-audience", "bid"],
+)
+def test_legacy_ad_group_mutation_failure_is_normalized_without_retry(
+    mock_ads_client, legacy_api_error, tool_name, args, method_name
+):
+  service = mock_ads_client.get_service.return_value
+  mock_ads_client.get_type.side_effect = lambda name: {
+      "AdGroupOperation": AdGroupOperation,
+      "AdGroupCriterionOperation": AdGroupCriterionOperation,
+  }[name]()
+  mock_ads_client.enums.AdGroupStatusEnum = AdGroupStatusEnum.AdGroupStatus
+  mock_ads_client.enums.AdGroupCriterionStatusEnum = (
+      AdGroupCriterionStatusEnum.AdGroupCriterionStatus
+  )
+  service.ad_group_path.return_value = (
+      f"customers/{CUSTOMER_ID}/adGroups/{AD_GROUP_ID}"
+  )
+  service.ad_group_criterion_path.side_effect = (
+      lambda customer, ad_group, criterion: (
+          f"customers/{customer}/adGroupCriteria/" f"{ad_group}~{criterion}"
+      )
+  )
+  mutation = getattr(service, method_name)
+  mutation.side_effect = legacy_api_error
+
+  with pytest.raises(ToolError) as caught:
+    getattr(ad_groups, tool_name)(*args)
+
+  _assert_legacy_tool_error(caught.value, legacy_api_error)
+  mutation.assert_called_once()
+  assert len(mutation.call_args.kwargs["operations"]) == (
+      2 if method_name == "mutate_ad_group_criteria" else 1
+  )

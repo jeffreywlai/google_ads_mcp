@@ -17,12 +17,12 @@
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import handle_google_ads_errors
 
 label_tool = ads_mutation_tool(mcp, tags={"labels"})
 destructive_label_tool = ads_mutation_tool(
@@ -49,12 +49,10 @@ def create_label(
   if description:
     label.text_label.description = description
 
-  try:
+  with handle_google_ads_errors():
     response = label_service.mutate_labels(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -72,12 +70,10 @@ def delete_label(
   operation = ads_client.get_type("LabelOperation")
   operation.remove = label_service.label_path(customer_id, label_id)
 
-  try:
+  with handle_google_ads_errors():
     response = label_service.mutate_labels(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -122,12 +118,10 @@ def manage_campaign_labels(
   else:
     raise ToolError(f"Invalid action '{action}'. Use 'APPLY' or 'REMOVE'.")
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_label_service.mutate_campaign_labels(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {
@@ -177,12 +171,10 @@ def manage_ad_group_labels(
   else:
     raise ToolError(f"Invalid action '{action}'. Use 'APPLY' or 'REMOVE'.")
 
-  try:
+  with handle_google_ads_errors():
     response = ad_group_label_service.mutate_ad_group_labels(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {

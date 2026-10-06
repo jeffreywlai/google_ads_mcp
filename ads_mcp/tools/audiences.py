@@ -20,7 +20,6 @@ import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.v25.common.types.audiences import AudienceDimension
 from google.ads.googleads.v25.common.types.audiences import AudienceSegment
 from google.ads.googleads.v25.common.types.audiences import ExclusionSegment
@@ -548,12 +547,10 @@ def create_audience(
         _build_exclusion_segment(segment)
     )
 
-  try:
+  with handle_google_ads_errors():
     response = audience_service.mutate_audiences(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   audience_resource_name = response.results[0].resource_name
   audience_id = audience_service.parse_audience_path(audience_resource_name)[

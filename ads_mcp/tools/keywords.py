@@ -15,11 +15,11 @@
 """Tools for managing ad group keywords in Google Ads."""
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import handle_google_ads_errors
 
 keyword_tool = ads_mutation_tool(mcp, tags={"keywords"})
 
@@ -53,12 +53,10 @@ def set_keyword_status(
   )
   operation.update_mask.paths.append("status")
 
-  try:
+  with handle_google_ads_errors():
     response = criterion_service.mutate_ad_group_criteria(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -86,11 +84,9 @@ def update_keyword_bid(
   criterion.cpc_bid_micros = cpc_bid_micros
   operation.update_mask.paths.append("cpc_bid_micros")
 
-  try:
+  with handle_google_ads_errors():
     response = criterion_service.mutate_ad_group_criteria(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}

@@ -20,6 +20,9 @@ from unittest import mock
 from ads_mcp.tools import negatives
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.api_core import exceptions as google_exceptions
+from google.ads.googleads.v25.enums.types.keyword_match_type import KeywordMatchTypeEnum
 import pytest
 
 CUSTOMER_ID = "1234567890"
@@ -992,3 +995,125 @@ class TestRemoveCampaignNegativeKeywords:
       )
 
     mock_ads_client.get_service.assert_not_called()
+
+
+# Pytest injects fixtures using their declared names.
+# pylint: disable=redefined-outer-name
+
+
+@pytest.fixture(params=["transport", "google_ads"])
+def api_failure(request):
+  """Provides transport errors and native Google Ads hint-bearing failures."""
+  if request.param == "transport":
+    return google_exceptions.ServiceUnavailable("transport unavailable")
+  return GoogleAdsException(
+      error=mock.Mock(),
+      failure=GoogleAdsFailure(errors=[{"message": "USER_PERMISSION_DENIED"}]),
+      call=mock.Mock(),
+      request_id="test",
+  )
+
+
+def _assert_api_failure(raised, original):
+  assert raised.__cause__ is original
+  if isinstance(original, GoogleAdsException):
+    assert "USER_PERMISSION_DENIED" in str(raised)
+    assert "Hints:\n- Call list_accessible_accounts" in str(raised)
+  else:
+    assert str(raised) == str(original)
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "method"),
+    [
+        pytest.param(
+            negatives.create_shared_set,
+            (CUSTOMER_ID, "Test List"),
+            "mutate_shared_sets",
+            id="create_shared_set",
+        ),
+        pytest.param(
+            negatives.add_shared_set_keywords,
+            (
+                CUSTOMER_ID,
+                SHARED_SET_ID,
+                [{"text": "free", "match_type": "EXACT"}],
+            ),
+            "mutate_shared_criteria",
+            id="add_shared_keywords",
+        ),
+        pytest.param(
+            negatives.remove_shared_set_keywords,
+            (CUSTOMER_ID, SHARED_SET_ID, ["333"]),
+            "mutate_shared_criteria",
+            id="remove_shared_keywords",
+        ),
+        pytest.param(
+            negatives.attach_shared_set_to_campaign,
+            (CUSTOMER_ID, CAMPAIGN_ID, SHARED_SET_ID),
+            "mutate_campaign_shared_sets",
+            id="attach_shared_set",
+        ),
+        pytest.param(
+            negatives.detach_shared_set_from_campaign,
+            (CUSTOMER_ID, CAMPAIGN_ID, SHARED_SET_ID),
+            "mutate_campaign_shared_sets",
+            id="detach_shared_set",
+        ),
+        pytest.param(
+            negatives.add_campaign_negative_keywords,
+            (
+                CUSTOMER_ID,
+                CAMPAIGN_ID,
+                [{"text": "free", "match_type": "EXACT"}],
+            ),
+            "mutate_campaign_criteria",
+            id="add_campaign_keywords",
+        ),
+        pytest.param(
+            negatives.remove_campaign_negative_keywords,
+            (CUSTOMER_ID, CAMPAIGN_ID, ["333"]),
+            "mutate_campaign_criteria",
+            id="remove_campaign_keywords",
+        ),
+    ],
+)
+def test_negative_mutation_handles_api_failure_once(
+    mock_ads_client, api_failure, tool, args, method
+):
+  mock_ads_client.enums.KeywordMatchTypeEnum = (
+      KeywordMatchTypeEnum.KeywordMatchType
+  )
+  mutation = getattr(mock_ads_client.get_service.return_value, method)
+  mutation.side_effect = api_failure
+
+  with pytest.raises(ToolError) as caught:
+    tool(*args)
+
+  _assert_api_failure(caught.value, api_failure)
+  mutation.assert_called_once()
+  assert len(mutation.call_args.kwargs["operations"]) == 1
+
+
+@pytest.mark.parametrize("failure_phase", ["call", "batch", "row"])
+def test_list_shared_sets_handles_stream_api_failure_once(
+    mock_ads_client, api_failure, failure_phase
+):
+  search = mock_ads_client.get_service.return_value.search_stream
+
+  def fail_iteration():
+    yield from ()
+    raise api_failure
+
+  if failure_phase == "call":
+    search.side_effect = api_failure
+  elif failure_phase == "batch":
+    search.return_value = fail_iteration()
+  else:
+    search.return_value = [mock.Mock(results=fail_iteration())]
+
+  with pytest.raises(ToolError) as caught:
+    negatives.list_shared_sets(CUSTOMER_ID)
+
+  _assert_api_failure(caught.value, api_failure)
+  search.assert_called_once()

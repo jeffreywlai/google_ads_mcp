@@ -18,7 +18,6 @@ import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.v25.common.types.targeting_setting import (
     TargetRestriction,
     TargetingSetting,
@@ -450,7 +449,7 @@ def _get_campaign_target_restrictions(
   """
 
   current_restrictions = {}
-  try:
+  with handle_google_ads_errors():
     response = ads_service.search_stream(
         query=preprocess_gaql_query(query),
         customer_id=customer_id,
@@ -462,8 +461,6 @@ def _get_campaign_target_restrictions(
               restriction.bid_only
           )
         return current_restrictions
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return current_restrictions
 
@@ -694,12 +691,10 @@ def set_campaign_status(
   campaign.status = getattr(ads_client.enums.CampaignStatusEnum, status_upper)
   operation.update_mask.paths.append("status")
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_service.mutate_campaigns(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -729,12 +724,10 @@ def update_campaign_budget(
   budget.amount_micros = amount_micros
   operation.update_mask.paths.append("amount_micros")
 
-  try:
+  with handle_google_ads_errors():
     response = budget_service.mutate_campaign_budgets(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -776,12 +769,10 @@ def set_campaign_view_through_conversion_optimization(
       "view_through_conversion_optimization_enabled"
   )
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_service.mutate_campaigns(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {
       "resource_name": response.results[0].resource_name,
@@ -838,12 +829,10 @@ def update_campaign_targeting_setting(
     campaign.targeting_setting.target_restrictions.append(target_restriction)
   operation.update_mask.paths.append("targeting_setting.target_restrictions")
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_service.mutate_campaigns(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   result = {
       "campaign_resource_name": response.results[0].resource_name,
@@ -1091,7 +1080,7 @@ def add_campaign_audiences(
     setattr(criterion_info, resource_field, audience["resource_name"])
     operations.append(operation)
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_criterion_service.mutate_campaign_criteria(
         request={
             "customer_id": customer_id,
@@ -1099,8 +1088,6 @@ def add_campaign_audiences(
             "partial_failure": True,
         }
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   raw_resource_names = [result.resource_name for result in response.results]
   resource_names = [
@@ -1245,12 +1232,10 @@ def remove_campaign_audiences(
     )
     operations.append(operation)
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_criterion_service.mutate_campaign_criteria(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {
