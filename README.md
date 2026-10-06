@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP 3.4.8+](https://img.shields.io/badge/FastMCP-3.4.8+-green.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP 3.4.x](https://img.shields.io/badge/FastMCP-3.4.x-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v25.2](https://img.shields.io/badge/Google%20Ads%20API-v25.2-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
 **A powerful MCP server that bridges LLMs with the Google Ads API — 143 tools for querying, managing, and optimizing your ad accounts through natural language.**
@@ -421,6 +421,11 @@ control the new hardening and resumability behavior:
   (explicit paths under `/tmp` are also accepted on POSIX systems).
 - `GOOGLE_ADS_ADS_ASSISTANT`: Override the Google Ads request tag. By default,
   the server sends a compact `google-ads-mcp-<version>` tag automatically.
+
+Explicit CSV paths use private staging and directory-relative file operations
+to prevent symlink redirection during saving. This requires the directory
+descriptor support available on macOS and Linux; on other platforms, omit
+`output_path` to export to an automatically generated temporary file.
 
 For either transport, set `GOOGLE_ADS_MCP_DIAGNOSTICS=1` to record startup
 package versions/build fingerprint, tool timing, exception class, and result

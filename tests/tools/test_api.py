@@ -2521,9 +2521,9 @@ def test_export_gaql_csv_succeeds_if_post_link_cleanup_fails(
       return_value=[{"campaign.id": "1"}],
   ):
     with mock.patch(
-        "ads_mcp.tools.api.os.remove",
+        "ads_mcp.tools.api.os.unlink",
         side_effect=OSError("post-link cleanup failed"),
-    ) as mock_remove:
+    ) as mock_unlink:
       result = api.export_gaql_csv(
           query="SELECT campaign.id FROM campaign",
           customer_id="123",
@@ -2535,9 +2535,11 @@ def test_export_gaql_csv_succeeds_if_post_link_cleanup_fails(
       "campaign.id",
       "1",
   ]
-  assert mock_remove.call_count >= 2
+  assert mock_unlink.call_count >= 2
   for temp_path in tmp_path.glob(".google_ads_mcp_*.tmp"):
-    temp_path.unlink()
+    for child in temp_path.iterdir():
+      child.unlink()
+    temp_path.rmdir()
 
 
 def test_export_gaql_csv_writes_file_and_metadata(tmp_path, monkeypatch):

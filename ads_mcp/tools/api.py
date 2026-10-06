@@ -77,6 +77,14 @@ _ADS_CLIENTS_MAX_ENTRIES = 8
 _ADS_CLIENTS_CREDENTIALS_MTIME: float | None = None
 _ADS_CLIENTS_CREDENTIALS_PATH: str | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SECURE_EXPORT_PATHS_SUPPORTED = (
+    hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and {os.open, os.mkdir, os.stat, os.link, os.rename, os.unlink, os.rmdir}
+    <= os.supports_dir_fd
+    and os.stat in os.supports_follow_symlinks
+    and os.link in os.supports_follow_symlinks
+)
 _PAGED_QUERY_CACHE_TTL_SECONDS = 15 * 60.0
 _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _PAGED_QUERY_CACHE_MAX_ENTRIES = 16
@@ -2419,6 +2427,7 @@ def _resolve_export_path(
   if not output_path:
     return None
 
+  _require_secure_export_paths()
   allowed_bases = _allowed_export_bases()
   resolved_path = os.path.realpath(output_path)
   for allowed_base in allowed_bases:
@@ -2442,13 +2451,96 @@ def _resolve_export_path(
   return resolved_path
 
 
+def _require_secure_export_paths() -> None:
+  """Rejects explicit paths if the platform cannot pin their directories."""
+  if not _SECURE_EXPORT_PATHS_SUPPORTED:
+    raise ToolError(
+        "Secure output_path exports require directory-descriptor support. "
+        "Omit output_path to use an automatically generated temp file."
+    )
+
+
+@contextlib.contextmanager
+def _open_export_parent(
+    resolved_path: str, *, create: bool = True
+) -> Iterator[int]:
+  """Pins a canonical export parent without following any symlink component."""
+  _require_secure_export_paths()
+  flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+  flags |= getattr(os, "O_CLOEXEC", 0)
+  parent_fd = None
+  try:
+    parent_fd = os.open(os.path.sep, flags)
+    for component in os.path.dirname(resolved_path).split(os.path.sep):
+      if not component:
+        continue
+      try:
+        child_fd = os.open(component, flags, dir_fd=parent_fd)
+      except FileNotFoundError:
+        if not create:
+          raise
+        try:
+          os.mkdir(component, dir_fd=parent_fd)
+        except FileExistsError:
+          pass
+        child_fd = os.open(component, flags, dir_fd=parent_fd)
+      os.close(parent_fd)
+      parent_fd = child_fd
+    yield parent_fd
+  except OSError as exc:
+    raise ToolError(f"Unable to write output_path: {exc}") from exc
+  finally:
+    if parent_fd is not None:
+      os.close(parent_fd)
+
+
+@contextlib.contextmanager
+def _open_export_staging(parent_fd: int) -> Iterator[int]:
+  """Keeps staging private even when the export parent is shared."""
+  staging_name = f".google_ads_mcp_{uuid.uuid4().hex}.tmp"
+  os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
+  staging_fd = None
+  private_staging = False
+  try:
+    staging_fd = os.open(
+        staging_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    staging_stat = os.fstat(staging_fd)
+    if staging_stat.st_uid != os.geteuid() or staging_stat.st_mode & 0o077:
+      raise ToolError("Unable to create a private export staging directory.")
+    private_staging = True
+    yield staging_fd
+  finally:
+    if staging_fd is not None:
+      if private_staging:
+        _remove_export_file("export.csv", dir_fd=staging_fd)
+      os.close(staging_fd)
+    with contextlib.suppress(OSError):
+      os.rmdir(staging_name, dir_fd=parent_fd)
+
+
+def _verify_export_parent(resolved_path: str, parent_fd: int) -> None:
+  """Refuses publication if the returned path no longer names this parent."""
+  with _open_export_parent(resolved_path, create=False) as current_fd:
+    expected = os.fstat(parent_fd)
+    current = os.fstat(current_fd)
+    if (expected.st_dev, expected.st_ino) != (current.st_dev, current.st_ino):
+      raise ToolError("The output_path directory changed during export.")
+
+
 def _open_export_file(resolved_path: str, overwrite: bool) -> Any:
-  """Opens an export target without following final-component symlinks."""
+  """Opens an export target without following any symlink component."""
   open_flags = os.O_WRONLY | os.O_CREAT
   open_flags |= os.O_TRUNC if overwrite else os.O_EXCL
-  open_flags |= getattr(os, "O_NOFOLLOW", 0)
+  _require_secure_export_paths()
+  open_flags |= os.O_NOFOLLOW
   try:
-    file_descriptor = os.open(resolved_path, open_flags, 0o644)
+    with _open_export_parent(resolved_path) as parent_fd:
+      file_descriptor = os.open(
+          os.path.basename(resolved_path), open_flags, 0o600, dir_fd=parent_fd
+      )
   except FileExistsError as exc:
     raise ToolError(
         "output_path already exists; pass overwrite=True to replace it."
@@ -2473,25 +2565,32 @@ def _write_csv_rows(
     existing_mode = None
     if resolved_output_path:
       final_path = resolved_output_path
-      parent_dir = os.path.dirname(final_path)
-      if parent_dir:
-        os.makedirs(parent_dir, exist_ok=True)
+      final_name = os.path.basename(final_path)
+      parent_fd = temp_cleanup.enter_context(_open_export_parent(final_path))
       if overwrite:
         try:
-          existing_mode = stat.S_IMODE(os.stat(final_path).st_mode)
+          target_stat = os.stat(
+              final_name, dir_fd=parent_fd, follow_symlinks=False
+          )
+          if not stat.S_ISREG(target_stat.st_mode):
+            raise ToolError("output_path must name a regular file.")
+          existing_mode = stat.S_IMODE(target_stat.st_mode)
         except FileNotFoundError:
           pass
-      file_descriptor, working_path = tempfile.mkstemp(
-          prefix=".google_ads_mcp_",
-          suffix=".tmp",
-          dir=parent_dir or ".",
+      staging_fd = temp_cleanup.enter_context(_open_export_staging(parent_fd))
+      working_path = "export.csv"
+      file_descriptor = os.open(
+          working_path,
+          os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+          0o600,
+          dir_fd=staging_fd,
       )
-      temp_cleanup.callback(_remove_export_file, working_path)
     else:
       final_path = None
       file_descriptor, working_path = tempfile.mkstemp(
           prefix="google_ads_mcp_",
           suffix=".csv",
+          dir=os.path.realpath(tempfile.gettempdir()),
       )
       temp_cleanup.callback(_remove_export_file, working_path)
     try:
@@ -2514,20 +2613,33 @@ def _write_csv_rows(
           writer.writerow(
               [_csv_cell_value(row.get(column)) for column in columns]
           )
+      csv_file.flush()
+      bytes_written = os.fstat(csv_file.fileno()).st_size
+      if existing_mode is not None:
+        os.fchmod(csv_file.fileno(), existing_mode)
 
-    bytes_written = os.path.getsize(working_path)
     if final_path:
+      _verify_export_parent(final_path, parent_fd)
       try:
-        if existing_mode is not None:
-          os.chmod(working_path, existing_mode)
         if overwrite:
           with _MANAGED_TEMP_ARTIFACT_CONDITION:
-            os.replace(working_path, final_path)
+            os.replace(
+                working_path,
+                final_name,
+                src_dir_fd=staging_fd,
+                dst_dir_fd=parent_fd,
+            )
             _MANAGED_TEMP_ARTIFACTS.pop(final_path, None)
             _MANAGED_TEMP_ARTIFACT_CONDITION.notify_all()
         else:
-          os.link(working_path, final_path)
-          _remove_export_file(working_path)
+          os.link(
+              working_path,
+              final_name,
+              src_dir_fd=staging_fd,
+              dst_dir_fd=parent_fd,
+              follow_symlinks=False,
+          )
+          _remove_export_file(working_path, dir_fd=staging_fd)
       except FileExistsError as exc:
         raise ToolError(
             "output_path already exists; pass overwrite=True to replace it."
@@ -2733,8 +2845,12 @@ def remove_temp_csv_file(file_path: str) -> None:
   _remove_export_file(file_path)
 
 
-def _remove_export_file(file_path: str) -> None:
+def _remove_export_file(file_path: str, *, dir_fd: int | None = None) -> None:
   """Removes an export file if it still exists."""
+  if dir_fd is not None:
+    with contextlib.suppress(OSError):
+      os.unlink(file_path, dir_fd=dir_fd)
+    return
   with _MANAGED_TEMP_ARTIFACT_CONDITION:
     _MANAGED_TEMP_ARTIFACTS.pop(file_path, None)
     _MANAGED_TEMP_ARTIFACT_CONDITION.notify_all()
