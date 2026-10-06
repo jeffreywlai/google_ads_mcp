@@ -286,3 +286,52 @@ def test_failed_restoration_preserves_the_previous_csv_in_private_staging(
   assert stat.S_IMODE(previous.stat().st_mode) == 0o600
   assert stat.S_IMODE(previous.parent.stat().st_mode) == 0o700
   assert {path.name for path in previous.parent.iterdir()} == {"previous.csv"}
+
+
+@pytest.mark.parametrize("published_change", ["deleted", "replaced"])
+def test_changed_published_file_is_not_touched_and_previous_csv_is_retained(
+    tmp_path, monkeypatch, published_change
+):
+  """Rollback preserves other writers' files and recoverable previous data."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  output.chmod(0o600)
+  outside_before = _directory_files(outside)
+  original_replace = api.os.replace
+  retained = []
+  other_data = b"another writer's CSV\n"
+
+  def publish(source, destination, *args, **kwargs):
+    result = original_replace(source, destination, *args, **kwargs)
+    if (
+        destination == output.name
+        and kwargs.get("dst_dir_fd") is not None
+        and not retained
+    ):
+      retained.append(_swap_directory(parent, outside))
+      published = retained[0] / output.name
+      if published_change == "deleted":
+        published.unlink()
+      else:
+        replacement = retained[0] / "replacement.csv"
+        replacement.write_bytes(other_data)
+        original_replace(replacement, published)
+    return result
+
+  with (
+      mock.patch.object(api.os, "replace", side_effect=publish),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError, match="previous CSV is retained"),
+  ):
+    _export(output, True)
+
+  assert len(retained) == 1
+  assert _directory_files(outside) == outside_before
+  previous_paths = list(retained[0].glob("*/previous.csv"))
+  assert len(previous_paths) == 1
+  previous = previous_paths[0]
+  expected = {str(previous.relative_to(retained[0])): _ORIGINAL.encode()}
+  if published_change == "replaced":
+    expected[output.name] = other_data
+  assert _directory_files(retained[0]) == expected
+  assert stat.S_IMODE(previous.stat().st_mode) == 0o600
+  assert stat.S_IMODE(previous.parent.stat().st_mode) == 0o700

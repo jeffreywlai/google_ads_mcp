@@ -2668,13 +2668,17 @@ def _write_csv_rows(
             _verify_export_parent(final_path, parent_fd)
           except ToolError:
             try:
-              _undo_export_publication(
+              undone = _undo_export_publication(
                   parent_fd,
                   staging_fd,
                   final_name,
                   written_identity,
                   existing_identity is not None,
               )
+              if not undone:
+                raise OSError(
+                    "The published destination changed during cleanup."
+                )
             except OSError as exc:
               backup_cleanup.pop_all()
               raise ToolError(
@@ -2706,20 +2710,21 @@ def _undo_export_publication(
     final_name: str,
     written_identity: tuple[int, int],
     has_previous: bool,
-) -> None:
+) -> bool:
   """Removes or restores a failed publication only while it is our file."""
   try:
     current = os.stat(final_name, dir_fd=parent_fd, follow_symlinks=False)
   except FileNotFoundError:
-    return
+    return False
   if (current.st_dev, current.st_ino) != written_identity:
-    return
+    return False
   if has_previous:
     os.replace(
         "previous.csv", final_name, src_dir_fd=staging_fd, dst_dir_fd=parent_fd
     )
   else:
     os.unlink(final_name, dir_fd=parent_fd)
+  return True
 
 
 def write_rows_to_temp_csv(
