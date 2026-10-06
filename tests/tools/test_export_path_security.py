@@ -3,6 +3,7 @@
 # pylint: disable=protected-access
 
 from pathlib import Path
+import stat
 from unittest import mock
 
 import pytest
@@ -210,3 +211,78 @@ def test_unsafe_staging_is_refused_without_deleting_untrusted_data(
       output.name: _ORIGINAL.encode(),
       f"{staged_paths[0].name}/export.csv": untrusted_data,
   }
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize("swap_timing", ["before", "after"])
+def test_directory_swap_at_publication_rolls_back_the_export(
+    tmp_path, monkeypatch, overwrite, swap_timing
+):
+  """Publication races cannot leave a new export or replace previous data."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, overwrite)
+  outside_before = _directory_files(outside)
+  publish_method = "replace" if overwrite else "link"
+  original_publish = getattr(api.os, publish_method)
+  retained = []
+
+  def publish(source, destination, *args, **kwargs):
+    is_publication = (
+        destination == output.name
+        and kwargs.get("dst_dir_fd") is not None
+        and not retained
+    )
+    if is_publication and swap_timing == "before":
+      retained.append(_swap_directory(parent, outside))
+    result = original_publish(source, destination, *args, **kwargs)
+    if is_publication and swap_timing == "after":
+      retained.append(_swap_directory(parent, outside))
+    return result
+
+  with (
+      mock.patch.object(api.os, publish_method, side_effect=publish),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError),
+  ):
+    _export(output, overwrite)
+
+  assert len(retained) == 1
+  assert _directory_files(outside) == outside_before
+  expected = {output.name: _ORIGINAL.encode()} if overwrite else {}
+  assert _directory_files(retained[0]) == expected
+  assert {path.name for path in retained[0].iterdir()} == set(expected)
+
+
+def test_failed_restoration_preserves_the_previous_csv_in_private_staging(
+    tmp_path, monkeypatch
+):
+  """A rollback failure keeps recoverable previous data and reports failure."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  output.chmod(0o600)
+  outside_before = _directory_files(outside)
+  original_replace = api.os.replace
+  retained = []
+
+  def publish_or_restore(source, destination, *args, **kwargs):
+    if source == "previous.csv":
+      raise OSError("synthetic restoration failure")
+    result = original_replace(source, destination, *args, **kwargs)
+    if destination == output.name and not retained:
+      retained.append(_swap_directory(parent, outside))
+    return result
+
+  with (
+      mock.patch.object(api.os, "replace", side_effect=publish_or_restore),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError, match="previous CSV is retained"),
+  ):
+    _export(output, True)
+
+  assert len(retained) == 1
+  assert _directory_files(outside) == outside_before
+  previous_paths = list(retained[0].glob("*/previous.csv"))
+  assert len(previous_paths) == 1
+  previous = previous_paths[0]
+  assert previous.read_bytes() == _ORIGINAL.encode()
+  assert stat.S_IMODE(previous.stat().st_mode) == 0o600
+  assert stat.S_IMODE(previous.parent.stat().st_mode) == 0o700
+  assert {path.name for path in previous.parent.iterdir()} == {"previous.csv"}

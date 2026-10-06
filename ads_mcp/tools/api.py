@@ -2563,6 +2563,7 @@ def _write_csv_rows(
   """Writes GAQL rows to CSV and returns the path, columns, and size."""
   with contextlib.ExitStack() as temp_cleanup:
     existing_mode = None
+    existing_identity = None
     if resolved_output_path:
       final_path = resolved_output_path
       final_name = os.path.basename(final_path)
@@ -2575,9 +2576,11 @@ def _write_csv_rows(
           if not stat.S_ISREG(target_stat.st_mode):
             raise ToolError("output_path must name a regular file.")
           existing_mode = stat.S_IMODE(target_stat.st_mode)
+          existing_identity = (target_stat.st_dev, target_stat.st_ino)
         except FileNotFoundError:
           pass
       staging_fd = temp_cleanup.enter_context(_open_export_staging(parent_fd))
+      backup_cleanup = temp_cleanup.enter_context(contextlib.ExitStack())
       working_path = "export.csv"
       file_descriptor = os.open(
           working_path,
@@ -2614,32 +2617,76 @@ def _write_csv_rows(
               [_csv_cell_value(row.get(column)) for column in columns]
           )
       csv_file.flush()
-      bytes_written = os.fstat(csv_file.fileno()).st_size
+      written_stat = os.fstat(csv_file.fileno())
+      bytes_written = written_stat.st_size
+      written_identity = (written_stat.st_dev, written_stat.st_ino)
       if existing_mode is not None:
         os.fchmod(csv_file.fileno(), existing_mode)
+      if final_path:
+        # Keep the published inode alive until verification and rollback finish.
+        temp_cleanup.callback(os.close, os.dup(csv_file.fileno()))
 
     if final_path:
       _verify_export_parent(final_path, parent_fd)
       try:
-        if overwrite:
-          with _MANAGED_TEMP_ARTIFACT_CONDITION:
+        with _MANAGED_TEMP_ARTIFACT_CONDITION:
+          if existing_identity is not None:
+            os.link(
+                final_name,
+                "previous.csv",
+                src_dir_fd=parent_fd,
+                dst_dir_fd=staging_fd,
+                follow_symlinks=False,
+            )
+            backup_cleanup.callback(
+                _remove_export_file, "previous.csv", dir_fd=staging_fd
+            )
+            previous_stat = os.stat(
+                "previous.csv", dir_fd=staging_fd, follow_symlinks=False
+            )
+            if (
+                previous_stat.st_dev,
+                previous_stat.st_ino,
+            ) != existing_identity:
+              raise ToolError("output_path changed before export publication.")
+          if overwrite:
             os.replace(
                 working_path,
                 final_name,
                 src_dir_fd=staging_fd,
                 dst_dir_fd=parent_fd,
             )
+          else:
+            os.link(
+                working_path,
+                final_name,
+                src_dir_fd=staging_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+          try:
+            _verify_export_parent(final_path, parent_fd)
+          except ToolError:
+            try:
+              _undo_export_publication(
+                  parent_fd,
+                  staging_fd,
+                  final_name,
+                  written_identity,
+                  existing_identity is not None,
+              )
+            except OSError as exc:
+              backup_cleanup.pop_all()
+              raise ToolError(
+                  "The export path changed and cleanup could not finish. "
+                  "Any previous CSV is retained in private export staging."
+              ) from exc
+            raise
+          if overwrite:
             _MANAGED_TEMP_ARTIFACTS.pop(final_path, None)
             _MANAGED_TEMP_ARTIFACT_CONDITION.notify_all()
-        else:
-          os.link(
-              working_path,
-              final_name,
-              src_dir_fd=staging_fd,
-              dst_dir_fd=parent_fd,
-              follow_symlinks=False,
-          )
-          _remove_export_file(working_path, dir_fd=staging_fd)
+          else:
+            _remove_export_file(working_path, dir_fd=staging_fd)
       except FileExistsError as exc:
         raise ToolError(
             "output_path already exists; pass overwrite=True to replace it."
@@ -2651,6 +2698,28 @@ def _write_csv_rows(
       output_path = working_path
       temp_cleanup.pop_all()
     return output_path, columns, bytes_written
+
+
+def _undo_export_publication(
+    parent_fd: int,
+    staging_fd: int,
+    final_name: str,
+    written_identity: tuple[int, int],
+    has_previous: bool,
+) -> None:
+  """Removes or restores a failed publication only while it is our file."""
+  try:
+    current = os.stat(final_name, dir_fd=parent_fd, follow_symlinks=False)
+  except FileNotFoundError:
+    return
+  if (current.st_dev, current.st_ino) != written_identity:
+    return
+  if has_previous:
+    os.replace(
+        "previous.csv", final_name, src_dir_fd=staging_fd, dst_dir_fd=parent_fd
+    )
+  else:
+    os.unlink(final_name, dir_fd=parent_fd)
 
 
 def write_rows_to_temp_csv(
