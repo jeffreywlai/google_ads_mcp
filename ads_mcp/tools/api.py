@@ -2522,11 +2522,34 @@ def _open_export_staging(parent_fd: int) -> Iterator[int]:
     yield staging_fd
   finally:
     if staging_fd is not None:
-      if private_staging:
-        _remove_export_file("export.csv", dir_fd=staging_fd)
-      os.close(staging_fd)
-    with contextlib.suppress(OSError):
-      os.rmdir(staging_name, dir_fd=parent_fd)
+      try:
+        if private_staging:
+          _remove_export_file("export.csv", dir_fd=staging_fd)
+        _remove_empty_export_staging(parent_fd, staging_fd, staging_name)
+      finally:
+        os.close(staging_fd)
+
+
+def _remove_empty_export_staging(
+    parent_fd: int, staging_fd: int, staging_name: str
+) -> None:
+  """Removes staging only inside an owner-controlled parent namespace."""
+  with contextlib.suppress(OSError, ToolError):
+    parent = os.fstat(parent_fd)
+    if (
+        parent.st_uid != os.geteuid()
+        or parent.st_mode & 0o022
+        or _export_staging_has_acl(parent_fd)
+    ):
+      return
+    expected = os.fstat(staging_fd)
+    current = os.stat(staging_name, dir_fd=parent_fd, follow_symlinks=False)
+    if expected.st_uid != os.geteuid() or (
+        expected.st_dev,
+        expected.st_ino,
+    ) != (current.st_dev, current.st_ino):
+      return
+    os.rmdir(staging_name, dir_fd=parent_fd)
 
 
 def _export_staging_has_acl(staging_fd: int) -> bool:
@@ -2735,12 +2758,8 @@ def _write_csv_rows(
                     previous_stat.st_dev,
                     previous_stat.st_ino,
                 ) != existing_identity:
-                  os.link(
-                      "previous.csv",
-                      final_name,
-                      src_dir_fd=staging_fd,
-                      dst_dir_fd=parent_fd,
-                      follow_symlinks=False,
+                  _put_back_export_entry(
+                      staging_fd, "previous.csv", parent_fd, final_name
                   )
                   raise ToolError(
                       "output_path changed before export publication."
@@ -2811,8 +2830,59 @@ def _export_recovery_error() -> ToolError:
   return ToolError(
       "The export destination changed and cleanup could not finish. "
       "Any previous CSV is retained in private export staging, "
-      "along with any file that cleanup could not put back."
+      "along with any file or folder that cleanup could not put back."
   )
+
+
+def _put_back_export_entry(
+    staging_fd: int, staged_name: str, parent_fd: int, final_name: str
+) -> None:
+  """Restores an unexpected private entry without replacing another writer."""
+  captured = os.stat(staged_name, dir_fd=staging_fd, follow_symlinks=False)
+  if not stat.S_ISDIR(captured.st_mode):
+    os.link(
+        staged_name,
+        final_name,
+        src_dir_fd=staging_fd,
+        dst_dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+    os.unlink(staged_name, dir_fd=staging_fd)
+    return
+  # Directories cannot be hard-linked. Never use a replacing rename to recover.
+  try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+      rename = libc.renameatx_np
+      flags = 0x4  # Darwin RENAME_EXCL.
+    elif sys.platform == "linux":
+      rename = libc.renameat2
+      flags = 1  # Linux RENAME_NOREPLACE.
+    else:
+      raise AttributeError("No exclusive directory rename is available.")
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+  except (AttributeError, OSError) as exc:
+    raise OSError(
+        errno.ENOTSUP, "Exclusive folder restoration is unavailable."
+    ) from exc
+  ctypes.set_errno(0)
+  result = rename(
+      staging_fd,
+      os.fsencode(staged_name),
+      parent_fd,
+      os.fsencode(final_name),
+      flags,
+  )
+  if result != 0:
+    error = ctypes.get_errno() or errno.EIO
+    raise OSError(error, os.strerror(error))
 
 
 def _undo_export_publication(
@@ -2836,14 +2906,7 @@ def _undo_export_publication(
   current = os.stat(captured_name, dir_fd=staging_fd, follow_symlinks=False)
   if (current.st_dev, current.st_ino) != written_identity:
     # A different writer owns this entry. Put it back only if the name is free.
-    os.link(
-        captured_name,
-        final_name,
-        src_dir_fd=staging_fd,
-        dst_dir_fd=parent_fd,
-        follow_symlinks=False,
-    )
-    os.unlink(captured_name, dir_fd=staging_fd)
+    _put_back_export_entry(staging_fd, captured_name, parent_fd, final_name)
     return False
   try:
     if has_previous:

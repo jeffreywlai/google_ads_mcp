@@ -643,7 +643,13 @@ def test_inherited_macos_acl_cannot_make_export_staging_shared(
     subprocess.run(["/bin/chmod", "-N", str(parent)], check=True)
 
   assert _directory_files(parent) == {output.name: _ORIGINAL.encode()}
-  assert {path.name for path in parent.iterdir()} == {output.name}
+  retained_staging = list(parent.glob(".google_ads_mcp_*.tmp"))
+  assert len(retained_staging) == 1
+  assert not list(retained_staging[0].iterdir())
+  assert {path.name for path in parent.iterdir()} == {
+      output.name,
+      retained_staging[0].name,
+  }
   assert _directory_files(outside) == outside_before
 
 
@@ -716,3 +722,176 @@ def test_nonempty_pristine_staging_is_refused_without_deleting_existing_csv(
       output.name: _ORIGINAL.encode(),
       f"{staging_paths[0].name}/export.csv": planted_data,
   }
+
+
+def test_staging_cleanup_preserves_a_replacement_directory(
+    tmp_path, monkeypatch
+):
+  """Cleanup must not remove a directory replacing our open staging name."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, False)
+  outside_before = _directory_files(outside)
+  original_cleanup = api._remove_empty_export_staging
+  swapped = []
+  retained = parent / "retained-stage"
+
+  def cleanup(parent_fd, staging_fd, staging_name):
+    staging = parent / staging_name
+    staging.rename(retained)
+    staging.mkdir(mode=0o700)
+    swapped.append(staging)
+    return original_cleanup(parent_fd, staging_fd, staging_name)
+
+  with (
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      mock.patch.object(
+          api, "_remove_empty_export_staging", side_effect=cleanup
+      ),
+  ):
+    result = _export(output, False)
+
+  assert len(swapped) == 1
+  assert swapped[0].is_dir()
+  assert not list(swapped[0].iterdir())
+  assert not list(retained.iterdir())
+  exported = b"campaign.id\r\n1\r\n"
+  assert result["file_path"] == str(output)
+  assert result["bytes_written"] == len(exported)
+  assert output.read_bytes() == exported
+  assert _directory_files(outside) == outside_before
+
+
+def test_shared_parent_retains_empty_staging_without_removing_directories(
+    tmp_path, monkeypatch
+):
+  """An unrestricted shared parent cannot supply a trusted cleanup name."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, False)
+  outside_before = _directory_files(outside)
+  parent.chmod(0o777)
+
+  with (
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      mock.patch.object(api.os, "rmdir") as remove_directory,
+  ):
+    result = _export(output, False)
+
+  remove_directory.assert_not_called()
+  retained_staging = list(parent.glob(".google_ads_mcp_*.tmp"))
+  assert len(retained_staging) == 1
+  assert not list(retained_staging[0].iterdir())
+  exported = b"campaign.id\r\n1\r\n"
+  assert result["file_path"] == str(output)
+  assert result["bytes_written"] == len(exported)
+  assert output.read_bytes() == exported
+  assert _directory_files(parent) == {output.name: exported}
+  assert {path.name for path in parent.iterdir()} == {
+      output.name,
+      retained_staging[0].name,
+  }
+  assert _directory_files(outside) == outside_before
+
+
+def test_directory_substituted_before_previous_capture_is_put_back(
+    tmp_path, monkeypatch
+):
+  """A captured directory is restored without losing its child files."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  outside_before = _directory_files(outside)
+  native_rename = api.os.rename
+  child_data = b"another writer's directory contents\n"
+  captures = []
+
+  def capture(source, destination, *args, **kwargs):
+    is_capture = (
+        source == output.name
+        and destination == "previous.csv"
+        and kwargs.get("src_dir_fd") is not None
+    )
+    if is_capture:
+      native_rename(output, parent / "retained-original.csv")
+      output.mkdir()
+      (output / "child.txt").write_bytes(child_data)
+      captures.append(True)
+    return native_rename(source, destination, *args, **kwargs)
+
+  with (
+      mock.patch.object(api.os, "rename", side_effect=capture),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError),
+  ):
+    _export(output, True)
+
+  assert len(captures) == 1
+  assert output.is_dir()
+  assert (output / "child.txt").read_bytes() == child_data
+  assert _directory_files(parent) == {
+      "retained-original.csv": _ORIGINAL.encode(),
+      f"{output.name}/child.txt": child_data,
+  }
+  assert _directory_files(outside) == outside_before
+
+
+@pytest.mark.parametrize("block_put_back", [False, True])
+def test_directory_captured_during_rollback_keeps_all_writers_data(
+    tmp_path, monkeypatch, block_put_back
+):
+  """Rollback restores directories or retains them when another writer wins."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  outside_before = _directory_files(outside)
+  native_link = api.os.link
+  native_rename = api.os.rename
+  child_data = b"another writer's rollback directory contents\n"
+  substitutions = []
+  captures = []
+
+  def publish(source, destination, *args, **kwargs):
+    result = native_link(source, destination, *args, **kwargs)
+    if source == "export.csv" and destination == output.name:
+      output.unlink()
+      output.mkdir()
+      (output / "child.txt").write_bytes(child_data)
+      substitutions.append(True)
+    return result
+
+  def capture(source, destination, *args, **kwargs):
+    result = native_rename(source, destination, *args, **kwargs)
+    if (
+        source == output.name
+        and destination == "published.csv"
+        and kwargs.get("src_dir_fd") is not None
+    ):
+      captures.append(True)
+      if block_put_back:
+        output.write_bytes(_LATER_WRITER)
+    return result
+
+  with (
+      mock.patch.object(api.os, "link", side_effect=publish),
+      mock.patch.object(api.os, "rename", side_effect=capture),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError, match="previous CSV is retained"),
+  ):
+    _export(output, True)
+
+  assert len(substitutions) == 1
+  assert len(captures) == 1
+  previous_paths = list(parent.glob("*/previous.csv"))
+  assert len(previous_paths) == 1
+  previous = previous_paths[0]
+  assert previous.read_bytes() == _ORIGINAL.encode()
+  assert stat.S_IMODE(previous.parent.stat().st_mode) == 0o700
+  captured_paths = list(parent.glob("*/published.csv"))
+  if block_put_back:
+    assert output.read_bytes() == _LATER_WRITER
+    assert len(captured_paths) == 1
+    assert captured_paths[0].is_dir()
+    assert (captured_paths[0] / "child.txt").read_bytes() == child_data
+    child_path = str(captured_paths[0].relative_to(parent) / "child.txt")
+    expected = {output.name: _LATER_WRITER, child_path: child_data}
+  else:
+    assert output.is_dir()
+    assert (output / "child.txt").read_bytes() == child_data
+    assert not captured_paths
+    expected = {f"{output.name}/child.txt": child_data}
+  expected[str(previous.relative_to(parent))] = _ORIGINAL.encode()
+  assert _directory_files(parent) == expected
+  assert _directory_files(outside) == outside_before

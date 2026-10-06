@@ -432,10 +432,17 @@ On macOS, staging directories with inherited ACL entries are rejected because
 mode bits alone cannot establish privacy. Use an export directory without
 inherited ACL entries, or omit `output_path` for an automatically generated
 temporary file.
+Empty staging folders are retained when their parent permits other users to
+change directory entries; cleanup removes them only in an owner-controlled
+parent. As with private staging itself, this permission boundary trusts
+processes running as the same operating-system user.
 An overwrite briefly moves the existing CSV into private staging before
 publishing the new file, so its destination may be absent during that step.
 If another writer occupies the destination, the export fails without replacing
 that writer's file and retains any CSV it cannot restore in private staging.
+If a concurrent writer substitutes a folder, recovery restores it with an
+exclusive rename. An occupied destination or unsupported filesystem keeps
+that folder and its contents in private staging for recovery.
 
 For either transport, set `GOOGLE_ADS_MCP_DIAGNOSTICS=1` to record startup
 package versions/build fingerprint, tool timing, exception class, and result
