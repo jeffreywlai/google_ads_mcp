@@ -45,7 +45,6 @@ from fastmcp.server.transforms.visibility import enable_components
 from fastmcp.server.transforms.visibility import get_visibility_rules
 from pydantic import StrictInt
 
-
 _TEXT_FILE_CACHE: dict[str, tuple[float, str]] = {}
 _YAML_FILE_CACHE: dict[str, tuple[float, Any]] = {}
 _CACHED_FIELDS: dict[str, Any] = {}

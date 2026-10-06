@@ -25,7 +25,6 @@ from fastmcp.exceptions import ToolError
 import pytest
 import yaml
 
-
 CUSTOMER_ID = "123"
 
 

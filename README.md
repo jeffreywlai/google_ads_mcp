@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP 3.2+](https://img.shields.io/badge/FastMCP-3.2+-green.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP 3.4.8+](https://img.shields.io/badge/FastMCP-3.4.8+-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v25.2](https://img.shields.io/badge/Google%20Ads%20API-v25.2-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
 **A powerful MCP server that bridges LLMs with the Google Ads API — 143 tools for querying, managing, and optimizing your ad accounts through natural language.**
@@ -391,6 +391,22 @@ uv run -m ads_mcp.server
 
 Use `run-mcp-server-http` to launch the streamable-HTTP server. The
 `run-mcp-server` script is reserved for stdio clients.
+
+The runtime uses FastMCP 3.4.x (3.4.8 or newer) and MCP 1.x (1.30 or newer).
+These bounds preserve per-client mutation unlocking. FastMCP 4 / MCP 2's
+modern protocol changes session state; adopting them requires migrating and
+testing that workflow (see the [migration guide](https://gofastmcp.com/getting-started/upgrading/from-fastmcp-3)).
+Black and pydantic-core follow Pyink's and Pydantic's exact dependency pins.
+Cryptography uses the 48.x series on Windows and Intel Macs to preserve
+platform support removed in 49; other platforms use 50.x or newer.
+
+Authenticated HTTP sessions are bound to the identity that created them.
+Idle HTTP sessions expire after 30 minutes; an open GET stream keeps a session
+active. After expiry, the next request returns 404 and the client must initialize
+a new session.
+The server accepts at most 10,000 simultaneous sessions and returns 503 for
+new sessions while that limit is reached. HTTP request bodies are limited to
+4 MiB; larger requests return 413 and should be split into smaller batches.
 
 When running the HTTP server with Google OAuth enabled, these optional env vars
 control the new hardening and resumability behavior:

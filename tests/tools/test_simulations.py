@@ -19,7 +19,6 @@ from unittest import mock
 from ads_mcp.tools import simulations
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 
 

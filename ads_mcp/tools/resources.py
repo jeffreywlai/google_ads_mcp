@@ -21,7 +21,6 @@ from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import INLINE_PAGE_BYTE_LIMIT
 
-
 # Fixed resource families cover the release additions without arbitrary RPCs.
 _COLLECTIONS = {
     "ad_operation": "ads",

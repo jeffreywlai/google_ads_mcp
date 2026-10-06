@@ -24,7 +24,6 @@ from ads_mcp.tooling import ads_mutation_tool
 from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import get_ads_client
 
-
 label_tool = ads_mutation_tool(mcp, tags={"labels"})
 destructive_label_tool = ads_mutation_tool(
     mcp,

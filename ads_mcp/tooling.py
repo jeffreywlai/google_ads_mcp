@@ -23,7 +23,6 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 
-
 READ_TAG = "read"
 MUTATE_TAG = "mutate"
 WRITE_TAG = "write"

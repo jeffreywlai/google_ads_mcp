@@ -47,7 +47,6 @@ from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import run_gaql_query_page
 from ads_mcp.tools.api import run_gaql_query_snapshot
 
-
 audience_read_tool = ads_read_tool(mcp, tags={"audiences", "discovery"})
 audience_tool = ads_mutation_tool(mcp, tags={"audiences"})
 

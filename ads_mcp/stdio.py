@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """The server for the Google Ads API MCP."""
+
 from ads_mcp.coordinator import mcp_server
 from ads_mcp.registry import TOOL_MODULES
 from ads_mcp.tools import api

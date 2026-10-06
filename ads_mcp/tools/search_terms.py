@@ -36,7 +36,6 @@ from ads_mcp.tools.api import finalize_bounded_response
 from ads_mcp.tools.api import run_gaql_query_page
 from ads_mcp.tools.api import run_gaql_query_snapshot
 
-
 search_term_tool = ads_read_tool(mcp, tags={"search_terms"})
 
 _SEARCH_TERM_COMPARE_METRICS = [

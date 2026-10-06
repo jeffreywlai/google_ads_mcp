@@ -20,7 +20,6 @@ from ads_mcp.tools import ad_groups
 from fastmcp.exceptions import ToolError
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 AD_GROUP_ID = "111"
 CRITERION_ID = "222"

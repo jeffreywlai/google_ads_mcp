@@ -43,7 +43,6 @@ from ads_mcp.tools import campaigns
 from ads_mcp.tools import docs
 from ads_mcp.tools._gaql import preprocess_gaql_query
 
-
 CUSTOMER_ID = "1234567890"
 CAMPAIGN_ID = "222"
 

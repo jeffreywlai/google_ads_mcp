@@ -19,7 +19,6 @@ from ads_mcp.tools import _gaql
 from ads_mcp.tools import api
 from ads_mcp.tools import audiences
 
-
 LIST_FIELD = (
     "offline_user_data_job.customer_match_user_list_metadata.user_list"
 )

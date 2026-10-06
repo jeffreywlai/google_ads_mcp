@@ -16,7 +16,6 @@ from ads_mcp.tools import api
 from ads_mcp.tools import changes
 from ads_mcp.coordinator import mcp_server
 
-
 SHOPPING_QUERY = (
     "SELECT segments.product_item_id, metrics.cost_micros, metrics.clicks "
     "FROM shopping_performance_view WHERE campaign.id = 123 "

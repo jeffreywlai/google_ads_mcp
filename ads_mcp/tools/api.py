@@ -70,7 +70,6 @@ from ads_mcp.tools._gaql import preprocess_gaql_query
 from ads_mcp.utils import MODULE_DIR
 from ads_mcp.utils import ROOT_DIR
 
-
 _ADS_CLIENTS: OrderedDict[str | None, GoogleAdsClient] = OrderedDict()
 _ADS_CLIENT_BUILDS: dict[str | None, futures.Future] = {}
 _ADS_CLIENTS_LOCK = threading.Lock()

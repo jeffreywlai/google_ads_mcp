@@ -15,7 +15,6 @@ from google.ads.googleads.v25.resources.types.change_event import ChangeEvent
 from google.protobuf.field_mask_pb2 import FieldMask
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 TODAY = date.today()
 START = (TODAY - timedelta(days=6)).isoformat()

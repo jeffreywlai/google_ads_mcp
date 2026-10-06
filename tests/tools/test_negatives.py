@@ -22,7 +22,6 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 SHARED_SET_ID = "111"
 CAMPAIGN_ID = "222"

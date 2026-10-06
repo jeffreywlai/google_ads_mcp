@@ -28,7 +28,6 @@ from ads_mcp.tools._gaql import validate_limit
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import run_gaql_query_page
 
-
 performance_max_tool = ads_read_tool(mcp, tags={"performance_max"})
 
 

@@ -28,7 +28,6 @@ from fastmcp.exceptions import ToolError
 from ads_mcp.tools._gaql import date_range_bounds
 from ads_mcp.tools._gaql import normalize_list_arg
 
-
 PERFORMANCE_FIELDS = {
     "cost_micros": "metrics.cost_micros",
     "impressions": "metrics.impressions",

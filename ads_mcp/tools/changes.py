@@ -54,7 +54,6 @@ from ads_mcp.tools.api import (
     write_rows_to_intermediate_csv as write_rows_to_temp_csv,
 )
 
-
 _CHANGE_STATUS_MAX_LOOKBACK_DAYS = 90
 _CHANGE_EVENT_MAX_LOOKBACK_DAYS = _history.CHANGE_EVENT_LOOKBACK_DAYS
 _CHANGE_HISTORY_RESULT_CAP = 10_000

@@ -26,7 +26,6 @@ from fastmcp.exceptions import ToolError
 import pytest
 import yaml
 
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
 _RESOLVED_LIVE_CUSTOMER_ID: str | None = None
 _CONFIGURED_LOGIN_CUSTOMER_ID: str | None = None

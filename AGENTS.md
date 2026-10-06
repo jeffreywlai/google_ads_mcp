@@ -2,7 +2,12 @@
 
 Python MCP server for Google Ads API release 25.2. Minor releases use the
 `v25` namespace. Python 3.12, uv, google-ads>=33.0.0,<34.0.0, and
-FastMCP>=3.2.2,<3.3 (private coordinator APIs; upgrade deliberately).
+FastMCP>=3.4.8,<3.5 (private coordinator APIs; upgrade deliberately).
+
+Keep FastMCP 3.4 / MCP 1 bounds until per-client mutation unlocking is
+migrated and tested with modern protocol sessions. Black and pydantic-core
+follow their parents' exact pins. Cryptography's platform markers preserve
+Windows and Intel Mac support; retain those markers when updating it.
 
 ## Commands
 

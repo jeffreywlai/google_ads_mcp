@@ -12,7 +12,6 @@ from ads_mcp.tools import changes
 from ads_mcp.tools import _gaql
 from ads_mcp.tools import _history
 
-
 TODAY = date(2026, 8, 13)
 FIELD = "change_event.change_date_time"
 

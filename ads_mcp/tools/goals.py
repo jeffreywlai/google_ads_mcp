@@ -35,7 +35,6 @@ from ads_mcp.tools.api import get_ads_client
 from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import INLINE_PAGE_BYTE_LIMIT
 
-
 goal_mutation_tool = ads_mutation_tool(mcp, tags={"goals"})
 _GOAL_SETTINGS = {
     "retention_goal_settings",

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """The server for the Google Ads API MCP."""
+
 import os
 from urllib.parse import urlparse
 
@@ -30,7 +31,6 @@ from fastmcp.server.auth.providers.google import GoogleTokenVerifier
 from fastmcp.server.event_store import EventStore
 from fastmcp.server.middleware.ping import PingMiddleware
 import uvicorn
-
 
 dotenv.load_dotenv()
 

@@ -30,7 +30,6 @@ from ads_mcp.routing.intents import Operation
 from ads_mcp.routing.intents import resolve_intent
 from ads_mcp.routing.intents import TOOL_CAPABILITIES
 
-
 LOCATION_MUTATIONS = {
     "add_campaign_location_targets",
     "remove_campaign_location_targets",

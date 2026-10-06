@@ -24,7 +24,6 @@ from ads_mcp.tools import search_terms
 from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
 
-
 TOOL_MODULES = [
     account_services,
     ad_groups,

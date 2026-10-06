@@ -22,7 +22,6 @@ from google.ads.googleads.errors import GoogleAdsException
 from google.api_core import exceptions as google_exceptions
 import pytest
 
-
 CUSTOMER_ID = "1234567890"
 
 
