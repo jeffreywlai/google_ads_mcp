@@ -426,6 +426,12 @@ Explicit CSV paths use private staging and directory-relative file operations
 to prevent symlink redirection during saving. This requires the directory
 descriptor support available on macOS and Linux; on other platforms, omit
 `output_path` to export to an automatically generated temporary file.
+The filesystem must permit hard links, including to the existing CSV when
+overwriting it; permission restrictions cause the export to fail safely.
+An overwrite briefly moves the existing CSV into private staging before
+publishing the new file, so its destination may be absent during that step.
+If another writer occupies the destination, the export fails without replacing
+that writer's file and retains any CSV it cannot restore in private staging.
 
 For either transport, set `GOOGLE_ADS_MCP_DIAGNOSTICS=1` to record startup
 package versions/build fingerprint, tool timing, exception class, and result

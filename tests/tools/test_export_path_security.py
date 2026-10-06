@@ -2,6 +2,8 @@
 
 # pylint: disable=protected-access
 
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 import stat
 from unittest import mock
@@ -13,6 +15,8 @@ from ads_mcp.tools import api
 _ROWS = [{"campaign.id": "1"}]
 _ORIGINAL = "original destination\n"
 _OUTSIDE = "outside destination\n"
+_LATER_WRITER = b"later writer's CSV\n"
+_LAST_WRITER = b"last writer's CSV\n"
 
 
 def _export_paths(tmp_path, monkeypatch, overwrite):
@@ -53,6 +57,76 @@ def _export(output, overwrite):
       output_path=str(output),
       overwrite=overwrite,
   )
+
+
+def _install_other_csv(directory, name, data, replace):
+  replacement = directory / "writer.csv"
+  replacement.write_bytes(data)
+  replace(replacement, directory / name)
+
+
+@contextmanager
+def _interfere_during_rollback(parent, outside, output, interference):
+  """Injects another writer at either rollback implementation's boundary."""
+  native = {
+      name: getattr(api.os, name)
+      for name in ("link", "replace", "rename", "stat")
+  }
+  retained = []
+  injected = []
+
+  def install(data):
+    _install_other_csv(retained[0], output.name, data, native["replace"])
+    injected.append(data)
+
+  def publish(method, source, destination, *args, **kwargs):
+    result = native[method](source, destination, *args, **kwargs)
+    if (
+        destination == output.name
+        and kwargs.get("dst_dir_fd") is not None
+        and not retained
+    ):
+      retained.append(_swap_directory(parent, outside))
+    return result
+
+  def observe_stat(path, *args, **kwargs):
+    result = native["stat"](path, *args, **kwargs)
+    if (
+        interference == "before_capture"
+        and path == output.name
+        and kwargs.get("dir_fd") is not None
+        and retained
+        and not injected
+    ):
+      # The former rollback returned this now-stale identity to its caller.
+      install(_LATER_WRITER)
+    return result
+
+  def capture(source, destination, *args, **kwargs):
+    is_capture = (
+        source == output.name
+        and destination == "published.csv"
+        and kwargs.get("src_dir_fd") is not None
+        and retained
+    )
+    if is_capture and interference in ("before_capture", "blocked_putback"):
+      install(_LATER_WRITER)
+    result = native["rename"](source, destination, *args, **kwargs)
+    if is_capture and interference in ("after_capture", "blocked_putback"):
+      install(
+          _LAST_WRITER if interference == "blocked_putback" else _LATER_WRITER
+      )
+    return result
+
+  with (
+      mock.patch.object(api.os, "link", side_effect=partial(publish, "link")),
+      mock.patch.object(
+          api.os, "replace", side_effect=partial(publish, "replace")
+      ),
+      mock.patch.object(api.os, "rename", side_effect=capture),
+      mock.patch.object(api.os, "stat", side_effect=observe_stat),
+  ):
+    yield retained, injected
 
 
 @pytest.mark.parametrize("overwrite", [False, True])
@@ -221,7 +295,7 @@ def test_directory_swap_at_publication_rolls_back_the_export(
   """Publication races cannot leave a new export or replace previous data."""
   _, parent, outside, output = _export_paths(tmp_path, monkeypatch, overwrite)
   outside_before = _directory_files(outside)
-  publish_method = "replace" if overwrite else "link"
+  publish_method = "link"
   original_publish = getattr(api.os, publish_method)
   retained = []
 
@@ -259,19 +333,19 @@ def test_failed_restoration_preserves_the_previous_csv_in_private_staging(
   _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
   output.chmod(0o600)
   outside_before = _directory_files(outside)
-  original_replace = api.os.replace
+  original_link = api.os.link
   retained = []
 
   def publish_or_restore(source, destination, *args, **kwargs):
     if source == "previous.csv":
       raise OSError("synthetic restoration failure")
-    result = original_replace(source, destination, *args, **kwargs)
+    result = original_link(source, destination, *args, **kwargs)
     if destination == output.name and not retained:
       retained.append(_swap_directory(parent, outside))
     return result
 
   with (
-      mock.patch.object(api.os, "replace", side_effect=publish_or_restore),
+      mock.patch.object(api.os, "link", side_effect=publish_or_restore),
       mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
       pytest.raises(api.ToolError, match="previous CSV is retained"),
   ):
@@ -296,12 +370,12 @@ def test_changed_published_file_is_not_touched_and_previous_csv_is_retained(
   _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
   output.chmod(0o600)
   outside_before = _directory_files(outside)
-  original_replace = api.os.replace
+  native = {"link": api.os.link, "replace": api.os.replace}
   retained = []
   other_data = b"another writer's CSV\n"
 
   def publish(source, destination, *args, **kwargs):
-    result = original_replace(source, destination, *args, **kwargs)
+    result = native["link"](source, destination, *args, **kwargs)
     if (
         destination == output.name
         and kwargs.get("dst_dir_fd") is not None
@@ -314,11 +388,11 @@ def test_changed_published_file_is_not_touched_and_previous_csv_is_retained(
       else:
         replacement = retained[0] / "replacement.csv"
         replacement.write_bytes(other_data)
-        original_replace(replacement, published)
+        native["replace"](replacement, published)
     return result
 
   with (
-      mock.patch.object(api.os, "replace", side_effect=publish),
+      mock.patch.object(api.os, "link", side_effect=publish),
       mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
       pytest.raises(api.ToolError, match="previous CSV is retained"),
   ):
@@ -335,3 +409,186 @@ def test_changed_published_file_is_not_touched_and_previous_csv_is_retained(
   assert _directory_files(retained[0]) == expected
   assert stat.S_IMODE(previous.stat().st_mode) == 0o600
   assert stat.S_IMODE(previous.parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize(
+    ("overwrite", "interference"),
+    [
+        (False, "before_capture"),
+        (True, "before_capture"),
+        (True, "after_capture"),
+        (True, "blocked_putback"),
+    ],
+)
+def test_rollback_interference_preserves_every_other_writers_csv(
+    tmp_path, monkeypatch, overwrite, interference
+):
+  """Rollback never deletes or overwrites a later writer's destination."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, overwrite)
+  if overwrite:
+    output.chmod(0o600)
+  outside_before = _directory_files(outside)
+
+  with (
+      _interfere_during_rollback(parent, outside, output, interference) as (
+          retained,
+          injected,
+      ),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError),
+  ):
+    _export(output, overwrite)
+
+  assert len(retained) == 1
+  assert len(injected) == (2 if interference == "blocked_putback" else 1)
+  assert _directory_files(outside) == outside_before
+  assert (retained[0] / output.name).read_bytes() == injected[-1]
+  expected = {output.name: injected[-1]}
+  previous_paths = list(retained[0].glob("*/previous.csv"))
+  assert len(previous_paths) == int(overwrite)
+  if overwrite:
+    expected[str(previous_paths[0].relative_to(retained[0]))] = (
+        _ORIGINAL.encode()
+    )
+    assert stat.S_IMODE(previous_paths[0].parent.stat().st_mode) == 0o700
+  captured_paths = list(retained[0].glob("*/published.csv"))
+  assert len(captured_paths) == int(interference == "blocked_putback")
+  if captured_paths:
+    expected[str(captured_paths[0].relative_to(retained[0]))] = _LATER_WRITER
+  assert _directory_files(retained[0]) == expected
+  assert {path.name for path in retained[0].iterdir()} == {
+      name.split("/")[0] for name in expected
+  }
+
+
+@pytest.mark.parametrize("writer_timing", ["before_capture", "after_capture"])
+def test_overwrite_preserves_a_writer_arriving_at_previous_file_capture(
+    tmp_path, monkeypatch, writer_timing
+):
+  """Overwrite publication and recovery both respect another writer's file."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  output.chmod(0o600)
+  outside_before = _directory_files(outside)
+  native = {"rename": api.os.rename, "replace": api.os.replace}
+  captured = []
+
+  def capture_previous(source, destination, *args, **kwargs):
+    is_capture = (
+        source == output.name
+        and destination == "previous.csv"
+        and kwargs.get("src_dir_fd") is not None
+    )
+    if is_capture and writer_timing == "before_capture":
+      native["rename"](output, parent / "retained-original.csv")
+      _install_other_csv(parent, output.name, _LATER_WRITER, native["replace"])
+    result = native["rename"](source, destination, *args, **kwargs)
+    if is_capture:
+      captured.append(True)
+      if writer_timing == "after_capture":
+        _install_other_csv(
+            parent, output.name, _LATER_WRITER, native["replace"]
+        )
+    return result
+
+  with (
+      mock.patch.object(api.os, "rename", side_effect=capture_previous),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError),
+  ):
+    _export(output, True)
+
+  assert len(captured) == 1
+  assert _directory_files(outside) == outside_before
+  expected = {output.name: _LATER_WRITER}
+  previous_paths = list(parent.glob("*/previous.csv"))
+  if writer_timing == "before_capture":
+    expected["retained-original.csv"] = _ORIGINAL.encode()
+    assert not previous_paths
+  else:
+    assert len(previous_paths) == 1
+    expected[str(previous_paths[0].relative_to(parent))] = _ORIGINAL.encode()
+    assert stat.S_IMODE(previous_paths[0].parent.stat().st_mode) == 0o700
+  assert _directory_files(parent) == expected
+  assert {path.name for path in parent.iterdir()} == {
+      name.split("/")[0] for name in expected
+  }
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize("leaf_change", ["replaced", "deleted", "symlink"])
+def test_changed_published_leaf_is_refused_even_when_parent_is_unchanged(
+    tmp_path, monkeypatch, overwrite, leaf_change
+):
+  """Successful export paths must still identify the CSV that was written."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, overwrite)
+  if overwrite:
+    output.chmod(0o600)
+  outside_before = _directory_files(outside)
+  native = {"link": api.os.link, "replace": api.os.replace}
+  changed = []
+
+  def publish(source, destination, *args, **kwargs):
+    result = native["link"](source, destination, *args, **kwargs)
+    if source == "export.csv" and destination == output.name and not changed:
+      changed.append(True)
+      if leaf_change == "replaced":
+        _install_other_csv(
+            parent, output.name, _LATER_WRITER, native["replace"]
+        )
+      else:
+        output.unlink()
+        if leaf_change == "symlink":
+          output.symlink_to(outside / "victim.txt")
+    return result
+
+  with (
+      mock.patch.object(api.os, "link", side_effect=publish),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError),
+  ):
+    _export(output, overwrite)
+
+  assert len(changed) == 1
+  assert _directory_files(outside) == outside_before
+  expected = {}
+  if leaf_change == "deleted":
+    assert not output.exists()
+    assert not output.is_symlink()
+  else:
+    expected[output.name] = (
+        _LATER_WRITER if leaf_change == "replaced" else _OUTSIDE.encode()
+    )
+    if leaf_change == "symlink":
+      assert output.is_symlink()
+      assert output.readlink() == outside / "victim.txt"
+  previous_paths = list(parent.glob("*/previous.csv"))
+  assert len(previous_paths) == int(overwrite)
+  if previous_paths:
+    expected[str(previous_paths[0].relative_to(parent))] = _ORIGINAL.encode()
+    assert stat.S_IMODE(previous_paths[0].parent.stat().st_mode) == 0o700
+  assert _directory_files(parent) == expected
+  assert {path.name for path in parent.iterdir()} == {
+      name.split("/")[0] for name in expected
+  }
+
+
+@pytest.mark.parametrize("mode", [0o200, 0o000])
+def test_overwrite_preserves_owned_output_without_read_permission(
+    tmp_path, monkeypatch, mode
+):
+  """Safe overwrite does not require reading an existing owned CSV."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  outside_before = _directory_files(outside)
+  output.chmod(mode)
+
+  try:
+    with mock.patch.object(api, "run_gaql_query", return_value=_ROWS):
+      result = _export(output, True)
+    assert result["file_path"] == str(output)
+    assert stat.S_IMODE(output.stat().st_mode) == mode
+  finally:
+    output.chmod(0o600)
+
+  assert output.read_bytes() == b"campaign.id\r\n1\r\n"
+  assert _directory_files(outside) == outside_before
+  assert {path.name for path in parent.iterdir()} == {output.name}
