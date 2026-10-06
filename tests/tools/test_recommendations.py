@@ -21,6 +21,8 @@ from unittest import mock
 from ads_mcp.tools import api
 from ads_mcp.tools import recommendations
 from fastmcp.exceptions import ToolError
+from google.ads.googleads.errors import GoogleAdsException
+from google.api_core import exceptions as google_exceptions
 import pytest
 
 CUSTOMER_ID = "1234567890"
@@ -459,3 +461,50 @@ def test_set_recommendation_subscription_status_updates_mask(mock_ads_client):
   )
   assert mock_operation.update.status == "ENABLED_ENUM"
   assert mock_operation.update_mask.paths == ["status"]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("create_recommendation_subscription", ("KEYWORD",)),
+        (
+            "set_recommendation_subscription_status",
+            (
+                "customers/1234567890/recommendationSubscriptions/KEYWORD",
+                "ENABLED",
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("error_kind", ["transport", "google_ads"])
+def test_subscription_service_errors_preserve_cause_and_do_not_retry(
+    request, tool_name, arguments, error_kind
+):
+  client = request.getfixturevalue("mock_ads_client")
+  service = client.get_service.return_value
+  service_call = service.mutate_recommendation_subscription
+  if error_kind == "transport":
+    exception = google_exceptions.ServiceUnavailable("transport unavailable")
+  else:
+    error = mock.Mock()
+    error.__str__ = lambda self: "USER_PERMISSION_DENIED"
+    exception = GoogleAdsException(
+        error=mock.Mock(),
+        failure=mock.Mock(errors=[error]),
+        call=mock.Mock(),
+        request_id="test",
+    )
+  service_call.side_effect = exception
+
+  with pytest.raises(ToolError) as caught:
+    getattr(recommendations, tool_name)(CUSTOMER_ID, *arguments)
+
+  assert caught.value.__cause__ is exception
+  service_call.assert_called_once()
+  if error_kind == "transport":
+    assert str(caught.value) == str(exception)
+  else:
+    assert "USER_PERMISSION_DENIED" in str(caught.value)
+    assert "Hints:" in str(caught.value)
+    assert "list_accessible_accounts" in str(caught.value)
+    assert "login_customer_id" in str(caught.value)

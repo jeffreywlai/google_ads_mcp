@@ -17,7 +17,6 @@
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.v25.enums.types.recommendation_type import RecommendationTypeEnum
 from google.ads.googleads.v25.services.types.recommendation_service import (
     ApplyRecommendationOperation,
@@ -553,12 +552,10 @@ def create_recommendation_subscription(
       "status",
   )
 
-  try:
+  with handle_google_ads_errors():
     response = subscription_service.mutate_recommendation_subscription(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -596,11 +593,9 @@ def set_recommendation_subscription_status(
   )
   operation.update_mask.paths.append("status")
 
-  try:
+  with handle_google_ads_errors():
     response = subscription_service.mutate_recommendation_subscription(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}

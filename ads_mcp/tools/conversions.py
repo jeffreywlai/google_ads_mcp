@@ -17,7 +17,6 @@
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.v25.services.types.conversion_upload_service import (
     CallConversion,
     ClickConversion,
@@ -37,6 +36,7 @@ from ads_mcp.tools.api import build_bounded_mutation_response
 from ads_mcp.tools.api import build_paginated_list_response
 from ads_mcp.tools.api import format_value
 from ads_mcp.tools.api import get_ads_client
+from ads_mcp.tools.api import handle_google_ads_errors
 from ads_mcp.tools.api import run_gaql_query_page
 
 
@@ -320,12 +320,10 @@ def upload_click_conversions(
   if job_id is not None:
     request.job_id = job_id
 
-  try:
+  with handle_google_ads_errors():
     response = conversion_upload_service.upload_click_conversions(
         request=request
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   result = {
       "results": _format_results(response.results),
@@ -377,12 +375,10 @@ def upload_call_conversions(
       validate_only=validate_only,
   )
 
-  try:
+  with handle_google_ads_errors():
     response = conversion_upload_service.upload_call_conversions(
         request=request
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   result = {
       "results": _format_results(response.results),

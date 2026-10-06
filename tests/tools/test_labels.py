@@ -19,6 +19,8 @@ from unittest import mock
 from ads_mcp.tools import labels
 from fastmcp.exceptions import ToolError
 from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.api_core import exceptions as google_exceptions
 import pytest
 
 CUSTOMER_ID = "1234567890"
@@ -206,3 +208,84 @@ class TestManageAdGroupLabels:
     assert result == {
         "resource_names": ["customers/123/adGroupLabels/333~111"]
     }
+
+
+# Pytest injects fixtures using their declared names.
+# pylint: disable=redefined-outer-name
+
+
+@pytest.fixture(params=["transport", "google_ads"])
+def api_failure(request):
+  """Provides transport errors and native Google Ads hint-bearing failures."""
+  if request.param == "transport":
+    return google_exceptions.ServiceUnavailable("transport unavailable")
+  return GoogleAdsException(
+      error=mock.Mock(),
+      failure=GoogleAdsFailure(errors=[{"message": "USER_PERMISSION_DENIED"}]),
+      call=mock.Mock(),
+      request_id="test",
+  )
+
+
+def _assert_api_failure(raised, original):
+  assert raised.__cause__ is original
+  if isinstance(original, GoogleAdsException):
+    assert "USER_PERMISSION_DENIED" in str(raised)
+    assert "Hints:\n- Call list_accessible_accounts" in str(raised)
+  else:
+    assert str(raised) == str(original)
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "method"),
+    [
+        pytest.param(
+            labels.create_label,
+            (CUSTOMER_ID, "Test Label"),
+            "mutate_labels",
+            id="create",
+        ),
+        pytest.param(
+            labels.delete_label,
+            (CUSTOMER_ID, LABEL_ID),
+            "mutate_labels",
+            id="delete",
+        ),
+        pytest.param(
+            labels.manage_campaign_labels,
+            (CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID], "APPLY"),
+            "mutate_campaign_labels",
+            id="apply_campaign",
+        ),
+        pytest.param(
+            labels.manage_campaign_labels,
+            (CUSTOMER_ID, LABEL_ID, [CAMPAIGN_ID], "REMOVE"),
+            "mutate_campaign_labels",
+            id="remove_campaign",
+        ),
+        pytest.param(
+            labels.manage_ad_group_labels,
+            (CUSTOMER_ID, LABEL_ID, [AD_GROUP_ID], "APPLY"),
+            "mutate_ad_group_labels",
+            id="apply_ad_group",
+        ),
+        pytest.param(
+            labels.manage_ad_group_labels,
+            (CUSTOMER_ID, LABEL_ID, [AD_GROUP_ID], "REMOVE"),
+            "mutate_ad_group_labels",
+            id="remove_ad_group",
+        ),
+    ],
+)
+def test_label_mutation_handles_api_failure_once(
+    mock_ads_client, api_failure, tool, args, method
+):
+  mutation = getattr(mock_ads_client.get_service.return_value, method)
+  mutation.side_effect = api_failure
+
+  with pytest.raises(ToolError) as caught:
+    tool(*args)
+
+  _assert_api_failure(caught.value, api_failure)
+  mutation.assert_called_once()
+  assert len(mutation.call_args.kwargs["operations"]) == 1

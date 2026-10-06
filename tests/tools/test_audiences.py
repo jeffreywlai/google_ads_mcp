@@ -17,6 +17,11 @@
 from unittest import mock
 
 from fastmcp.exceptions import ToolError
+from google.api_core import exceptions as google_exceptions
+from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsError
+from google.ads.googleads.v25.errors.types.errors import GoogleAdsFailure
+from google.ads.googleads.v25.services.types.audience_service import AudienceOperation
 from google.ads.googleads.v25.enums.types.audience_scope import (
     AudienceScopeEnum,
 )
@@ -284,3 +289,79 @@ def test_create_audience_sets_login_customer_id(mock_ads_client):
   )
 
   mock_ads_client.get_ads_client_mock.assert_called_with("999")
+
+
+@pytest.fixture(
+    name="legacy_api_error", params=["permission", "unavailable", "google_ads"]
+)
+def _legacy_api_error_fixture(request):
+  """Exercises both transport failures and native Google Ads hint formatting."""
+  if request.param == "permission":
+    return google_exceptions.PermissionDenied("synthetic permission failure")
+  if request.param == "unavailable":
+    return google_exceptions.ServiceUnavailable("synthetic service failure")
+  return GoogleAdsException(
+      error=mock.Mock(),
+      call=mock.Mock(),
+      request_id="offline-request",
+      failure=GoogleAdsFailure(
+          errors=[
+              GoogleAdsError(
+                  error_code={"authorization_error": "USER_PERMISSION_DENIED"},
+                  message="synthetic Google Ads permission failure",
+              )
+          ]
+      ),
+  )
+
+
+def _assert_legacy_tool_error(error, api_error):
+  assert error.__cause__ is api_error
+  if isinstance(api_error, GoogleAdsException):
+    assert str(api_error.failure.errors[0]) in str(error)
+    assert "Hints:" in str(error)
+    assert "list_accessible_accounts" in str(error)
+  else:
+    assert str(error) == str(api_error)
+
+
+@pytest.mark.parametrize("with_exclusion", [False, True])
+def test_legacy_audience_creation_failure_is_normalized_without_retry(
+    mock_ads_client, legacy_api_error, with_exclusion
+):
+  service = mock_ads_client.get_service.return_value
+  operation = AudienceOperation()
+  mock_ads_client.get_type.return_value = operation
+  service.mutate_audiences.side_effect = legacy_api_error
+  exclusion = [
+      {
+          "type": "USER_LIST",
+          "resource_name": f"customers/{CUSTOMER_ID}/userLists/9",
+      }
+  ]
+
+  with pytest.raises(ToolError) as caught:
+    audiences.create_audience(
+        customer_id=CUSTOMER_ID,
+        name="Offline audience",
+        include_dimensions=[
+            {
+                "segments": [
+                    {
+                        "type": "USER_LIST",
+                        "resource_name": f"customers/{CUSTOMER_ID}/userLists/1",
+                    }
+                ]
+            }
+        ],
+        exclude_segments=exclusion if with_exclusion else None,
+    )
+
+  _assert_legacy_tool_error(caught.value, legacy_api_error)
+  service.mutate_audiences.assert_called_once_with(
+      customer_id=CUSTOMER_ID, operations=[operation]
+  )
+  service.parse_audience_path.assert_not_called()
+  assert len(operation.create.exclusion_dimension.exclusions) == (
+      int(with_exclusion)
+  )

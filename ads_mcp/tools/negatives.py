@@ -17,7 +17,6 @@
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tooling import ads_mutation_tool
@@ -336,9 +335,9 @@ def list_shared_sets(
         AND shared_set.status = 'ENABLED'
   """
 
-  try:
+  results = []
+  with handle_google_ads_errors():
     response = _search_stream(ads_service, query, customer_id)
-    results = []
     for batch in response:
       for row in batch.results:
         results.append(
@@ -348,8 +347,6 @@ def list_shared_sets(
                 "member_count": row.shared_set.member_count,
             }
         )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"shared_sets": results}
 
@@ -369,12 +366,10 @@ def create_shared_set(
   shared_set.name = name
   shared_set.type_ = ads_client.enums.SharedSetTypeEnum.NEGATIVE_KEYWORDS
 
-  try:
+  with handle_google_ads_errors():
     response = shared_set_service.mutate_shared_sets(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -550,12 +545,10 @@ def add_shared_set_keywords(
 
     operations.append(operation)
 
-  try:
+  with handle_google_ads_errors():
     response = shared_criterion_service.mutate_shared_criteria(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {
@@ -592,12 +585,10 @@ def remove_shared_set_keywords(
     operation.remove = resource_name
     operations.append(operation)
 
-  try:
+  with handle_google_ads_errors():
     response = shared_criterion_service.mutate_shared_criteria(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {
@@ -710,12 +701,10 @@ def attach_shared_set_to_campaign(
       customer_id, shared_set_id
   )
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_shared_set_service.mutate_campaign_shared_sets(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -740,12 +729,10 @@ def detach_shared_set_from_campaign(
   operation = ads_client.get_type("CampaignSharedSetOperation")
   operation.remove = resource_name
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_shared_set_service.mutate_campaign_shared_sets(
         customer_id=customer_id, operations=[operation]
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"resource_name": response.results[0].resource_name}
 
@@ -854,12 +841,10 @@ def add_campaign_negative_keywords(
 
     operations.append(operation)
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_criterion_service.mutate_campaign_criteria(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {
@@ -898,12 +883,10 @@ def remove_campaign_negative_keywords(
     operation.remove = resource_name
     operations.append(operation)
 
-  try:
+  with handle_google_ads_errors():
     response = campaign_criterion_service.mutate_campaign_criteria(
         customer_id=customer_id, operations=operations
     )
-  except GoogleAdsException as e:
-    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return build_bounded_mutation_response(
       {
