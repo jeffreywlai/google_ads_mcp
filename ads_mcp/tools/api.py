@@ -2681,7 +2681,6 @@ def _write_csv_rows(
           existing_identity = (target_stat.st_dev, target_stat.st_ino)
         except FileNotFoundError:
           pass
-      backup_cleanup = temp_cleanup.enter_context(contextlib.ExitStack())
       working_path = "export.csv"
       file_descriptor = os.open(
           working_path,
@@ -2747,9 +2746,8 @@ def _write_csv_rows(
                 ) from None
             else:
               has_previous = True
-              backup_cleanup.callback(
-                  _remove_export_file, "previous.csv", dir_fd=staging_fd
-              )
+              # Retain captured user data until publication or restoration is
+              # confirmed, including when an unexpected exception interrupts.
               try:
                 previous_stat = os.stat(
                     "previous.csv", dir_fd=staging_fd, follow_symlinks=False
@@ -2765,7 +2763,6 @@ def _write_csv_rows(
                       "output_path changed before export publication."
                   )
               except OSError as exc:
-                backup_cleanup.pop_all()
                 raise _export_recovery_error() from exc
           try:
             os.link(
@@ -2786,8 +2783,8 @@ def _write_csv_rows(
                     follow_symlinks=False,
                 )
               except OSError as exc:
-                backup_cleanup.pop_all()
                 raise _export_recovery_error() from exc
+              _remove_export_file("previous.csv", dir_fd=staging_fd)
             raise
           try:
             _verify_export_parent(final_path, parent_fd, written_identity)
@@ -2805,12 +2802,15 @@ def _write_csv_rows(
                     "The published destination changed during cleanup."
                 )
             except OSError as exc:
-              backup_cleanup.pop_all()
               raise _export_recovery_error() from exc
+            if has_previous:
+              _remove_export_file("previous.csv", dir_fd=staging_fd)
             raise
           if overwrite:
             _MANAGED_TEMP_ARTIFACTS.pop(final_path, None)
             _MANAGED_TEMP_ARTIFACT_CONDITION.notify_all()
+          if has_previous:
+            _remove_export_file("previous.csv", dir_fd=staging_fd)
           _remove_export_file(working_path, dir_fd=staging_fd)
       except FileExistsError as exc:
         raise ToolError(

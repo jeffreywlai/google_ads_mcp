@@ -895,3 +895,75 @@ def test_directory_captured_during_rollback_keeps_all_writers_data(
   expected[str(previous.relative_to(parent))] = _ORIGINAL.encode()
   assert _directory_files(parent) == expected
   assert _directory_files(outside) == outside_before
+
+
+@pytest.mark.parametrize(
+    "exception_type", [KeyboardInterrupt, SystemExit, RuntimeError]
+)
+@pytest.mark.parametrize(
+    "phase", ["validation", "publication", "verification"]
+)
+def test_unexpected_unwinding_retains_the_captured_previous_csv(
+    tmp_path, monkeypatch, exception_type, phase
+):
+  """Interruptions propagate without deleting a captured user's destination."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  outside_before = _directory_files(outside)
+  native_link = api.os.link
+  native_stat = api.os.stat
+  original_verify = api._verify_export_parent
+  interruption = exception_type("synthetic export interruption")
+  injections = []
+
+  def publish(source, destination, *args, **kwargs):
+    if (
+        phase == "publication"
+        and source == "export.csv"
+        and destination == output.name
+    ):
+      injections.append(True)
+      raise interruption
+    return native_link(source, destination, *args, **kwargs)
+
+  def verify(path, parent_fd, published_identity=None):
+    if phase == "verification" and published_identity is not None:
+      injections.append(True)
+      raise interruption
+    return original_verify(path, parent_fd, published_identity)
+
+  def validate(path, *args, **kwargs):
+    if (
+        phase == "validation"
+        and path == "previous.csv"
+        and kwargs.get("dir_fd") is not None
+    ):
+      injections.append(True)
+      raise interruption
+    return native_stat(path, *args, **kwargs)
+
+  with (
+      mock.patch.object(api.os, "link", side_effect=publish),
+      mock.patch.object(api.os, "stat", side_effect=validate),
+      mock.patch.object(api, "_verify_export_parent", side_effect=verify),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(exception_type) as caught,
+  ):
+    _export(output, True)
+
+  assert caught.value is interruption
+  assert len(injections) == 1
+  previous_paths = list(parent.glob("*/previous.csv"))
+  assert len(previous_paths) == 1
+  previous = previous_paths[0]
+  assert previous.read_bytes() == _ORIGINAL.encode()
+  assert stat.S_IMODE(previous.parent.stat().st_mode) == 0o700
+  assert {path.name for path in previous.parent.iterdir()} == {"previous.csv"}
+  expected = {str(previous.relative_to(parent)): _ORIGINAL.encode()}
+  if phase in ("validation", "publication"):
+    assert not output.exists()
+  else:
+    exported = b"campaign.id\r\n1\r\n"
+    assert output.read_bytes() == exported
+    expected[output.name] = exported
+  assert _directory_files(parent) == expected
+  assert _directory_files(outside) == outside_before

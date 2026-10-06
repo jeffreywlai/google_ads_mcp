@@ -440,6 +440,8 @@ An overwrite briefly moves the existing CSV into private staging before
 publishing the new file, so its destination may be absent during that step.
 If another writer occupies the destination, the export fails without replacing
 that writer's file and retains any CSV it cannot restore in private staging.
+Unexpected exceptions or interruptions also retain the captured CSV until
+publication or restoration is confirmed.
 If a concurrent writer substitutes a folder, recovery restores it with an
 exclusive rename. An occupied destination or unsupported filesystem keeps
 that folder and its contents in private staging for recovery.
