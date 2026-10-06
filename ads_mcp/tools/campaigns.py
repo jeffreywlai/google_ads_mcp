@@ -141,13 +141,14 @@ def _validate_target_restrictions(
       )
 
     normalized_dimension = targeting_dimension.upper()
-    try:
-      getattr(TargetingDimensionEnum.TargetingDimension, normalized_dimension)
-    except AttributeError as exc:
+    if (
+        normalized_dimension
+        not in TargetingDimensionEnum.TargetingDimension.__members__
+    ):
       raise ToolError(
           "Invalid target_restrictions"
           f"[{index}].targeting_dimension: {targeting_dimension}"
-      ) from exc
+      )
 
     if normalized_dimension in seen_dimensions:
       raise ToolError(

@@ -218,6 +218,52 @@ class TestUpdateCampaignTargetingSetting:
           ],
       )
 
+  @pytest.mark.parametrize(
+      "targeting_dimension", ["name", "value", "__members__", "bit_length"]
+  )
+  def test_rejects_enum_nonmembers_before_client(
+      self, mock_ads_client, targeting_dimension
+  ):
+    with pytest.raises(ToolError) as error:
+      campaigns.update_campaign_targeting_setting(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          [{"targeting_dimension": targeting_dimension, "bid_only": True}],
+      )
+
+    assert str(error.value) == (
+        "Invalid target_restrictions[0].targeting_dimension: "
+        f"{targeting_dimension}"
+    )
+    mock_ads_client._mock_get.assert_not_called()
+
+  @pytest.mark.parametrize(
+      "targeting_dimension", ["HELPER", "helper", "hElPeR"]
+  )
+  def test_rejects_enum_helper_attribute_before_client(
+      self, mock_ads_client, targeting_dimension
+  ):
+    with (
+        mock.patch.object(
+            TargetingDimensionEnum.TargetingDimension,
+            "HELPER",
+            lambda: None,
+            create=True,
+        ),
+        pytest.raises(ToolError) as error,
+    ):
+      campaigns.update_campaign_targeting_setting(
+          CUSTOMER_ID,
+          CAMPAIGN_ID,
+          [{"targeting_dimension": targeting_dimension, "bid_only": True}],
+      )
+
+    assert str(error.value) == (
+        "Invalid target_restrictions[0].targeting_dimension: "
+        f"{targeting_dimension}"
+    )
+    mock_ads_client._mock_get.assert_not_called()
+
   def test_rejects_non_numeric_campaign_id_for_targeting_read(
       self, mock_ads_client
   ):
@@ -230,8 +276,16 @@ class TestUpdateCampaignTargetingSetting:
           [{"targeting_dimension": "AUDIENCE", "bid_only": False}],
       )
 
+  @pytest.mark.parametrize(
+      "targeting_dimension",
+      [
+          dimension.lower()
+          for dimension in TargetingDimensionEnum.TargetingDimension.__members__
+      ]
+      + ["aUdIeNcE"],
+  )
   def test_skips_current_restrictions_read_when_warning_is_not_possible(
-      self, mock_ads_client
+      self, mock_ads_client, targeting_dimension
   ):
     campaign_service = mock.Mock()
     google_ads_service = mock.Mock()
@@ -251,15 +305,23 @@ class TestUpdateCampaignTargetingSetting:
     result = campaigns.update_campaign_targeting_setting(
         CUSTOMER_ID,
         CAMPAIGN_ID,
-        [{"targeting_dimension": "KEYWORD", "bid_only": True}],
+        [{"targeting_dimension": targeting_dimension, "bid_only": True}],
     )
 
     assert result == {
         "campaign_resource_name": "customers/123/campaigns/111",
         "updated_restrictions": [
-            {"targeting_dimension": "KEYWORD", "bid_only": True}
+            {
+                "targeting_dimension": targeting_dimension.upper(),
+                "bid_only": True,
+            }
         ],
     }
+    updated = operation.update.targeting_setting.target_restrictions
+    assert len(updated) == 1
+    assert updated[0].targeting_dimension == (
+        TargetingDimensionEnum.TargetingDimension[targeting_dimension.upper()]
+    )
     google_ads_service.search_stream.assert_not_called()
 
 

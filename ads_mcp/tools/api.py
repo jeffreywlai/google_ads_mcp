@@ -22,10 +22,12 @@ from concurrent import futures
 import contextlib
 from contextvars import ContextVar
 import csv
+import ctypes
 from copy import deepcopy
 from datetime import date
 from datetime import datetime
 import difflib
+import errno
 import functools
 import hashlib
 import importlib.metadata
@@ -35,6 +37,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -77,6 +80,14 @@ _ADS_CLIENTS_MAX_ENTRIES = 8
 _ADS_CLIENTS_CREDENTIALS_MTIME: float | None = None
 _ADS_CLIENTS_CREDENTIALS_PATH: str | None = None
 _ADS_CONFIG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SECURE_EXPORT_PATHS_SUPPORTED = (
+    hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and {os.open, os.mkdir, os.stat, os.link, os.rename, os.unlink, os.rmdir}
+    <= os.supports_dir_fd
+    and os.stat in os.supports_follow_symlinks
+    and os.link in os.supports_follow_symlinks
+)
 _PAGED_QUERY_CACHE_TTL_SECONDS = 15 * 60.0
 _PAGED_QUERY_CACHE_MAX_ENTRIES_PER_SCOPE = 8
 _PAGED_QUERY_CACHE_MAX_ENTRIES = 16
@@ -2419,6 +2430,7 @@ def _resolve_export_path(
   if not output_path:
     return None
 
+  _require_secure_export_paths()
   allowed_bases = _allowed_export_bases()
   resolved_path = os.path.realpath(output_path)
   for allowed_base in allowed_bases:
@@ -2442,13 +2454,183 @@ def _resolve_export_path(
   return resolved_path
 
 
+def _require_secure_export_paths() -> None:
+  """Rejects explicit paths if the platform cannot pin their directories."""
+  if not _SECURE_EXPORT_PATHS_SUPPORTED:
+    raise ToolError(
+        "Secure output_path exports require directory-descriptor support. "
+        "Omit output_path to use an automatically generated temp file."
+    )
+
+
+@contextlib.contextmanager
+def _open_export_parent(
+    resolved_path: str, *, create: bool = True
+) -> Iterator[int]:
+  """Pins a canonical export parent without following any symlink component."""
+  _require_secure_export_paths()
+  flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+  flags |= getattr(os, "O_CLOEXEC", 0)
+  parent_fd = None
+  try:
+    parent_fd = os.open(os.path.sep, flags)
+    for component in os.path.dirname(resolved_path).split(os.path.sep):
+      if not component:
+        continue
+      try:
+        child_fd = os.open(component, flags, dir_fd=parent_fd)
+      except FileNotFoundError:
+        if not create:
+          raise
+        try:
+          os.mkdir(component, dir_fd=parent_fd)
+        except FileExistsError:
+          pass
+        child_fd = os.open(component, flags, dir_fd=parent_fd)
+      os.close(parent_fd)
+      parent_fd = child_fd
+    yield parent_fd
+  except OSError as exc:
+    raise ToolError(f"Unable to write output_path: {exc}") from exc
+  finally:
+    if parent_fd is not None:
+      os.close(parent_fd)
+
+
+@contextlib.contextmanager
+def _open_export_staging(parent_fd: int) -> Iterator[int]:
+  """Keeps staging private even when the export parent is shared."""
+  staging_name = f".google_ads_mcp_{uuid.uuid4().hex}.tmp"
+  os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
+  staging_fd = None
+  private_staging = False
+  try:
+    staging_fd = os.open(
+        staging_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    staging_stat = os.fstat(staging_fd)
+    if (
+        staging_stat.st_uid != os.geteuid()
+        or staging_stat.st_mode & 0o077
+        or _export_staging_has_acl(staging_fd)
+        or os.listdir(staging_fd)
+    ):
+      raise ToolError("Unable to create a private export staging directory.")
+    private_staging = True
+    yield staging_fd
+  finally:
+    if staging_fd is not None:
+      try:
+        if private_staging:
+          _remove_export_file("export.csv", dir_fd=staging_fd)
+        _remove_empty_export_staging(parent_fd, staging_fd, staging_name)
+      finally:
+        os.close(staging_fd)
+
+
+def _remove_empty_export_staging(
+    parent_fd: int, staging_fd: int, staging_name: str
+) -> None:
+  """Removes staging only inside an owner-controlled parent namespace."""
+  with contextlib.suppress(OSError, ToolError):
+    parent = os.fstat(parent_fd)
+    if (
+        parent.st_uid != os.geteuid()
+        or parent.st_mode & 0o022
+        or _export_staging_has_acl(parent_fd)
+    ):
+      return
+    expected = os.fstat(staging_fd)
+    current = os.stat(staging_name, dir_fd=parent_fd, follow_symlinks=False)
+    if expected.st_uid != os.geteuid() or (
+        expected.st_dev,
+        expected.st_ino,
+    ) != (current.st_dev, current.st_ino):
+      return
+    os.rmdir(staging_name, dir_fd=parent_fd)
+
+
+def _export_staging_has_acl(staging_fd: int) -> bool:
+  """Checks Darwin's ACLs, which can grant access beyond BSD mode bits."""
+  if sys.platform != "darwin":
+    return False
+  try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    get_acl = libc.acl_get_fd_np
+    get_acl.argtypes = [ctypes.c_int, ctypes.c_int]
+    get_acl.restype = ctypes.c_void_p
+    get_entry = libc.acl_get_entry
+    get_entry.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    get_entry.restype = ctypes.c_int
+    free_acl = libc.acl_free
+    free_acl.argtypes = [ctypes.c_void_p]
+    free_acl.restype = ctypes.c_int
+  except (AttributeError, OSError) as exc:
+    raise ToolError("Unable to inspect export staging permissions.") from exc
+  ctypes.set_errno(0)
+  acl = get_acl(staging_fd, 0x100)  # Darwin ACL_TYPE_EXTENDED.
+  if not acl:
+    error = ctypes.get_errno() or errno.EIO
+    if error == errno.ENOENT:
+      return False  # Darwin reports an absent filesystem ACL as ENOENT.
+    raise OSError(error, os.strerror(error))
+  try:
+    entry = ctypes.c_void_p()
+    ctypes.set_errno(0)
+    result = get_entry(acl, 0, ctypes.byref(entry))  # Darwin ACL_FIRST_ENTRY.
+    if result == 0:
+      return True
+    error = ctypes.get_errno()
+    # Darwin reports an empty valid ACL as -1/EINVAL, unlike Linux's 0.
+    if result == -1 and error == errno.EINVAL:
+      return False
+    error = error or errno.EIO
+    raise OSError(error, os.strerror(error))
+  finally:
+    free_acl(acl)
+
+
+def _verify_export_parent(
+    resolved_path: str,
+    parent_fd: int,
+    published_identity: tuple[int, int] | None = None,
+) -> None:
+  """Refuses a changed parent or a published path naming a different file."""
+  with _open_export_parent(resolved_path, create=False) as current_fd:
+    expected = os.fstat(parent_fd)
+    current = os.fstat(current_fd)
+    if (expected.st_dev, expected.st_ino) != (current.st_dev, current.st_ino):
+      raise ToolError("The output_path directory changed during export.")
+    if published_identity is not None:
+      try:
+        published = os.stat(
+            os.path.basename(resolved_path),
+            dir_fd=current_fd,
+            follow_symlinks=False,
+        )
+      except OSError as exc:
+        raise ToolError("output_path changed during export.") from exc
+      if (published.st_dev, published.st_ino) != published_identity:
+        raise ToolError("output_path changed during export.")
+
+
 def _open_export_file(resolved_path: str, overwrite: bool) -> Any:
-  """Opens an export target without following final-component symlinks."""
+  """Opens an export target without following any symlink component."""
   open_flags = os.O_WRONLY | os.O_CREAT
   open_flags |= os.O_TRUNC if overwrite else os.O_EXCL
-  open_flags |= getattr(os, "O_NOFOLLOW", 0)
+  _require_secure_export_paths()
+  open_flags |= os.O_NOFOLLOW
   try:
-    file_descriptor = os.open(resolved_path, open_flags, 0o644)
+    with _open_export_parent(resolved_path) as parent_fd:
+      file_descriptor = os.open(
+          os.path.basename(resolved_path), open_flags, 0o600, dir_fd=parent_fd
+      )
   except FileExistsError as exc:
     raise ToolError(
         "output_path already exists; pass overwrite=True to replace it."
@@ -2471,27 +2653,47 @@ def _write_csv_rows(
   """Writes GAQL rows to CSV and returns the path, columns, and size."""
   with contextlib.ExitStack() as temp_cleanup:
     existing_mode = None
+    existing_identity = None
     if resolved_output_path:
       final_path = resolved_output_path
-      parent_dir = os.path.dirname(final_path)
-      if parent_dir:
-        os.makedirs(parent_dir, exist_ok=True)
+      final_name = os.path.basename(final_path)
+      parent_fd = temp_cleanup.enter_context(_open_export_parent(final_path))
+      staging_fd = temp_cleanup.enter_context(_open_export_staging(parent_fd))
       if overwrite:
         try:
-          existing_mode = stat.S_IMODE(os.stat(final_path).st_mode)
+          os.link(
+              final_name,
+              "expected.csv",
+              src_dir_fd=parent_fd,
+              dst_dir_fd=staging_fd,
+              follow_symlinks=False,
+          )
+          # A private hard link pins the inode without requiring file access.
+          temp_cleanup.callback(
+              _remove_export_file, "expected.csv", dir_fd=staging_fd
+          )
+          target_stat = os.stat(
+              "expected.csv", dir_fd=staging_fd, follow_symlinks=False
+          )
+          if not stat.S_ISREG(target_stat.st_mode):
+            raise ToolError("output_path must name a regular file.")
+          existing_mode = stat.S_IMODE(target_stat.st_mode)
+          existing_identity = (target_stat.st_dev, target_stat.st_ino)
         except FileNotFoundError:
           pass
-      file_descriptor, working_path = tempfile.mkstemp(
-          prefix=".google_ads_mcp_",
-          suffix=".tmp",
-          dir=parent_dir or ".",
+      working_path = "export.csv"
+      file_descriptor = os.open(
+          working_path,
+          os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+          0o600,
+          dir_fd=staging_fd,
       )
-      temp_cleanup.callback(_remove_export_file, working_path)
     else:
       final_path = None
       file_descriptor, working_path = tempfile.mkstemp(
           prefix="google_ads_mcp_",
           suffix=".csv",
+          dir=os.path.realpath(tempfile.gettempdir()),
       )
       temp_cleanup.callback(_remove_export_file, working_path)
     try:
@@ -2514,20 +2716,102 @@ def _write_csv_rows(
           writer.writerow(
               [_csv_cell_value(row.get(column)) for column in columns]
           )
+      csv_file.flush()
+      written_stat = os.fstat(csv_file.fileno())
+      bytes_written = written_stat.st_size
+      written_identity = (written_stat.st_dev, written_stat.st_ino)
+      if existing_mode is not None:
+        os.fchmod(csv_file.fileno(), existing_mode)
+      if final_path:
+        # Keep the published inode alive until verification and rollback finish.
+        temp_cleanup.callback(os.close, os.dup(csv_file.fileno()))
 
-    bytes_written = os.path.getsize(working_path)
     if final_path:
+      _verify_export_parent(final_path, parent_fd)
       try:
-        if existing_mode is not None:
-          os.chmod(working_path, existing_mode)
-        if overwrite:
-          with _MANAGED_TEMP_ARTIFACT_CONDITION:
-            os.replace(working_path, final_path)
+        with _MANAGED_TEMP_ARTIFACT_CONDITION:
+          has_previous = False
+          if overwrite:
+            try:
+              os.rename(
+                  final_name,
+                  "previous.csv",
+                  src_dir_fd=parent_fd,
+                  dst_dir_fd=staging_fd,
+              )
+            except FileNotFoundError:
+              if existing_identity is not None:
+                raise ToolError(
+                    "output_path changed before export publication."
+                ) from None
+            else:
+              has_previous = True
+              # Retain captured user data until publication or restoration is
+              # confirmed, including when an unexpected exception interrupts.
+              try:
+                previous_stat = os.stat(
+                    "previous.csv", dir_fd=staging_fd, follow_symlinks=False
+                )
+                if (
+                    previous_stat.st_dev,
+                    previous_stat.st_ino,
+                ) != existing_identity:
+                  _put_back_export_entry(
+                      staging_fd, "previous.csv", parent_fd, final_name
+                  )
+                  raise ToolError(
+                      "output_path changed before export publication."
+                  )
+              except OSError as exc:
+                raise _export_recovery_error() from exc
+          try:
+            os.link(
+                working_path,
+                final_name,
+                src_dir_fd=staging_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+          except OSError:
+            if has_previous:
+              try:
+                os.link(
+                    "previous.csv",
+                    final_name,
+                    src_dir_fd=staging_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+              except OSError as exc:
+                raise _export_recovery_error() from exc
+              _remove_export_file("previous.csv", dir_fd=staging_fd)
+            raise
+          try:
+            _verify_export_parent(final_path, parent_fd, written_identity)
+          except ToolError:
+            try:
+              undone = _undo_export_publication(
+                  parent_fd,
+                  staging_fd,
+                  final_name,
+                  written_identity,
+                  has_previous,
+              )
+              if not undone:
+                raise OSError(
+                    "The published destination changed during cleanup."
+                )
+            except OSError as exc:
+              raise _export_recovery_error() from exc
+            if has_previous:
+              _remove_export_file("previous.csv", dir_fd=staging_fd)
+            raise
+          if overwrite:
             _MANAGED_TEMP_ARTIFACTS.pop(final_path, None)
             _MANAGED_TEMP_ARTIFACT_CONDITION.notify_all()
-        else:
-          os.link(working_path, final_path)
-          _remove_export_file(working_path)
+          if has_previous:
+            _remove_export_file("previous.csv", dir_fd=staging_fd)
+          _remove_export_file(working_path, dir_fd=staging_fd)
       except FileExistsError as exc:
         raise ToolError(
             "output_path already exists; pass overwrite=True to replace it."
@@ -2539,6 +2823,103 @@ def _write_csv_rows(
       output_path = working_path
       temp_cleanup.pop_all()
     return output_path, columns, bytes_written
+
+
+def _export_recovery_error() -> ToolError:
+  """Explains how files are retained when no-overwrite recovery cannot finish."""
+  return ToolError(
+      "The export destination changed and cleanup could not finish. "
+      "Any previous CSV is retained in private export staging, "
+      "along with any file or folder that cleanup could not put back."
+  )
+
+
+def _put_back_export_entry(
+    staging_fd: int, staged_name: str, parent_fd: int, final_name: str
+) -> None:
+  """Restores an unexpected private entry without replacing another writer."""
+  captured = os.stat(staged_name, dir_fd=staging_fd, follow_symlinks=False)
+  if not stat.S_ISDIR(captured.st_mode):
+    os.link(
+        staged_name,
+        final_name,
+        src_dir_fd=staging_fd,
+        dst_dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+    os.unlink(staged_name, dir_fd=staging_fd)
+    return
+  # Directories cannot be hard-linked. Never use a replacing rename to recover.
+  try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+      rename = libc.renameatx_np
+      flags = 0x4  # Darwin RENAME_EXCL.
+    elif sys.platform == "linux":
+      rename = libc.renameat2
+      flags = 1  # Linux RENAME_NOREPLACE.
+    else:
+      raise AttributeError("No exclusive directory rename is available.")
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+  except (AttributeError, OSError) as exc:
+    raise OSError(
+        errno.ENOTSUP, "Exclusive folder restoration is unavailable."
+    ) from exc
+  ctypes.set_errno(0)
+  result = rename(
+      staging_fd,
+      os.fsencode(staged_name),
+      parent_fd,
+      os.fsencode(final_name),
+      flags,
+  )
+  if result != 0:
+    error = ctypes.get_errno() or errno.EIO
+    raise OSError(error, os.strerror(error))
+
+
+def _undo_export_publication(
+    parent_fd: int,
+    staging_fd: int,
+    final_name: str,
+    written_identity: tuple[int, int],
+    has_previous: bool,
+) -> bool:
+  """Captures failed output privately before deciding what can be removed."""
+  captured_name = "published.csv"
+  try:
+    os.rename(
+        final_name,
+        captured_name,
+        src_dir_fd=parent_fd,
+        dst_dir_fd=staging_fd,
+    )
+  except FileNotFoundError:
+    return False
+  current = os.stat(captured_name, dir_fd=staging_fd, follow_symlinks=False)
+  if (current.st_dev, current.st_ino) != written_identity:
+    # A different writer owns this entry. Put it back only if the name is free.
+    _put_back_export_entry(staging_fd, captured_name, parent_fd, final_name)
+    return False
+  try:
+    if has_previous:
+      os.link(
+          "previous.csv",
+          final_name,
+          src_dir_fd=staging_fd,
+          dst_dir_fd=parent_fd,
+          follow_symlinks=False,
+      )
+  finally:
+    os.unlink(captured_name, dir_fd=staging_fd)
+  return True
 
 
 def write_rows_to_temp_csv(
@@ -2733,8 +3114,12 @@ def remove_temp_csv_file(file_path: str) -> None:
   _remove_export_file(file_path)
 
 
-def _remove_export_file(file_path: str) -> None:
+def _remove_export_file(file_path: str, *, dir_fd: int | None = None) -> None:
   """Removes an export file if it still exists."""
+  if dir_fd is not None:
+    with contextlib.suppress(OSError):
+      os.unlink(file_path, dir_fd=dir_fd)
+    return
   with _MANAGED_TEMP_ARTIFACT_CONDITION:
     _MANAGED_TEMP_ARTIFACTS.pop(file_path, None)
     _MANAGED_TEMP_ARTIFACT_CONDITION.notify_all()
