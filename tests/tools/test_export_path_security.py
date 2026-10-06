@@ -3,9 +3,12 @@
 # pylint: disable=protected-access
 
 from contextlib import contextmanager
+import errno
 from functools import partial
 from pathlib import Path
 import stat
+import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -63,6 +66,21 @@ def _install_other_csv(directory, name, data, replace):
   replacement = directory / "writer.csv"
   replacement.write_bytes(data)
   replace(replacement, directory / name)
+
+
+@contextmanager
+def _plant_untrusted_staging_csv(parent, data):
+  """Plants data immediately after the writer creates a new staging folder."""
+  original_mkdir = api.os.mkdir
+  staging_paths = []
+
+  def create_staging(name, *args, **kwargs):
+    original_mkdir(name, *args, **kwargs)
+    staging_paths.append(parent / name)
+    (staging_paths[-1] / "export.csv").write_bytes(data)
+
+  with mock.patch.object(api.os, "mkdir", side_effect=create_staging):
+    yield staging_paths
 
 
 @contextmanager
@@ -592,3 +610,109 @@ def test_overwrite_preserves_owned_output_without_read_permission(
   assert output.read_bytes() == b"campaign.id\r\n1\r\n"
   assert _directory_files(outside) == outside_before
   assert {path.name for path in parent.iterdir()} == {output.name}
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="Native macOS ACL required"
+)
+def test_inherited_macos_acl_cannot_make_export_staging_shared(
+    tmp_path, monkeypatch
+):
+  """Inherited access remains unsafe even with a staging mode of 0700."""
+  _, parent, outside, output = _export_paths(tmp_path, monkeypatch, True)
+  outside_before = _directory_files(outside)
+  subprocess.run(
+      [
+          "/bin/chmod",
+          "+a",
+          "everyone allow list,search,add_file,delete_child,"
+          "directory_inherit,file_inherit",
+          str(parent),
+      ],
+      check=True,
+      capture_output=True,
+  )
+
+  try:
+    with (
+        mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+        pytest.raises(api.ToolError, match="private export staging"),
+    ):
+      _export(output, True)
+  finally:
+    subprocess.run(["/bin/chmod", "-N", str(parent)], check=True)
+
+  assert _directory_files(parent) == {output.name: _ORIGINAL.encode()}
+  assert {path.name for path in parent.iterdir()} == {output.name}
+  assert _directory_files(outside) == outside_before
+
+
+def test_nonempty_staging_acl_refuses_to_delete_planted_data(
+    tmp_path, monkeypatch
+):
+  """ACL-protected checks happen before any cleanup can trust stage entries."""
+  _, parent, _, output = _export_paths(tmp_path, monkeypatch, True)
+  planted_data = b"untrusted ACL-stage CSV\n"
+
+  with (
+      _plant_untrusted_staging_csv(parent, planted_data) as staging_paths,
+      mock.patch.object(api, "_export_staging_has_acl", return_value=True),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError, match="private export staging"),
+  ):
+    _export(output, True)
+
+  assert len(staging_paths) == 1
+  assert stat.S_IMODE(staging_paths[0].stat().st_mode) == 0o700
+  assert _directory_files(parent) == {
+      output.name: _ORIGINAL.encode(),
+      f"{staging_paths[0].name}/export.csv": planted_data,
+  }
+
+
+def test_staging_acl_inspection_error_fails_closed(tmp_path, monkeypatch):
+  """ACL inspection failures neither publish CSV data nor trust its cleanup."""
+  _, parent, _, output = _export_paths(tmp_path, monkeypatch, True)
+  planted_data = b"untrusted uninspected-stage CSV\n"
+
+  with (
+      _plant_untrusted_staging_csv(parent, planted_data) as staging_paths,
+      mock.patch.object(
+          api,
+          "_export_staging_has_acl",
+          side_effect=OSError(errno.EIO, "synthetic ACL inspection failure"),
+      ),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError),
+  ):
+    _export(output, True)
+
+  assert len(staging_paths) == 1
+  assert _directory_files(parent) == {
+      output.name: _ORIGINAL.encode(),
+      f"{staging_paths[0].name}/export.csv": planted_data,
+  }
+
+
+def test_nonempty_pristine_staging_is_refused_without_deleting_existing_csv(
+    tmp_path, monkeypatch
+):
+  """Owned mode-0700 staging must also start empty before it becomes trusted."""
+  _, parent, _, output = _export_paths(tmp_path, monkeypatch, True)
+  planted_data = b"untrusted preexisting-stage CSV\n"
+
+  with (
+      _plant_untrusted_staging_csv(parent, planted_data) as staging_paths,
+      mock.patch.object(api, "_export_staging_has_acl", return_value=False),
+      mock.patch.object(api, "run_gaql_query", return_value=_ROWS),
+      pytest.raises(api.ToolError, match="private export staging"),
+  ):
+    _export(output, True)
+
+  assert len(staging_paths) == 1
+  assert stat.S_IMODE(staging_paths[0].stat().st_mode) == 0o700
+  assert staging_paths[0].stat().st_uid == api.os.geteuid()
+  assert _directory_files(parent) == {
+      output.name: _ORIGINAL.encode(),
+      f"{staging_paths[0].name}/export.csv": planted_data,
+  }

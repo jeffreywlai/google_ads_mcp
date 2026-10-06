@@ -428,6 +428,10 @@ descriptor support available on macOS and Linux; on other platforms, omit
 `output_path` to export to an automatically generated temporary file.
 The filesystem must permit hard links, including to the existing CSV when
 overwriting it; permission restrictions cause the export to fail safely.
+On macOS, staging directories with inherited ACL entries are rejected because
+mode bits alone cannot establish privacy. Use an export directory without
+inherited ACL entries, or omit `output_path` for an automatically generated
+temporary file.
 An overwrite briefly moves the existing CSV into private staging before
 publishing the new file, so its destination may be absent during that step.
 If another writer occupies the destination, the export fails without replacing

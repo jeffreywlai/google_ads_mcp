@@ -22,10 +22,12 @@ from concurrent import futures
 import contextlib
 from contextvars import ContextVar
 import csv
+import ctypes
 from copy import deepcopy
 from datetime import date
 from datetime import datetime
 import difflib
+import errno
 import functools
 import hashlib
 import importlib.metadata
@@ -35,6 +37,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -2508,7 +2511,12 @@ def _open_export_staging(parent_fd: int) -> Iterator[int]:
         dir_fd=parent_fd,
     )
     staging_stat = os.fstat(staging_fd)
-    if staging_stat.st_uid != os.geteuid() or staging_stat.st_mode & 0o077:
+    if (
+        staging_stat.st_uid != os.geteuid()
+        or staging_stat.st_mode & 0o077
+        or _export_staging_has_acl(staging_fd)
+        or os.listdir(staging_fd)
+    ):
       raise ToolError("Unable to create a private export staging directory.")
     private_staging = True
     yield staging_fd
@@ -2519,6 +2527,50 @@ def _open_export_staging(parent_fd: int) -> Iterator[int]:
       os.close(staging_fd)
     with contextlib.suppress(OSError):
       os.rmdir(staging_name, dir_fd=parent_fd)
+
+
+def _export_staging_has_acl(staging_fd: int) -> bool:
+  """Checks Darwin's ACLs, which can grant access beyond BSD mode bits."""
+  if sys.platform != "darwin":
+    return False
+  try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    get_acl = libc.acl_get_fd_np
+    get_acl.argtypes = [ctypes.c_int, ctypes.c_int]
+    get_acl.restype = ctypes.c_void_p
+    get_entry = libc.acl_get_entry
+    get_entry.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    get_entry.restype = ctypes.c_int
+    free_acl = libc.acl_free
+    free_acl.argtypes = [ctypes.c_void_p]
+    free_acl.restype = ctypes.c_int
+  except (AttributeError, OSError) as exc:
+    raise ToolError("Unable to inspect export staging permissions.") from exc
+  ctypes.set_errno(0)
+  acl = get_acl(staging_fd, 0x100)  # Darwin ACL_TYPE_EXTENDED.
+  if not acl:
+    error = ctypes.get_errno() or errno.EIO
+    if error == errno.ENOENT:
+      return False  # Darwin reports an absent filesystem ACL as ENOENT.
+    raise OSError(error, os.strerror(error))
+  try:
+    entry = ctypes.c_void_p()
+    ctypes.set_errno(0)
+    result = get_entry(acl, 0, ctypes.byref(entry))  # Darwin ACL_FIRST_ENTRY.
+    if result == 0:
+      return True
+    error = ctypes.get_errno()
+    # Darwin reports an empty valid ACL as -1/EINVAL, unlike Linux's 0.
+    if result == -1 and error == errno.EINVAL:
+      return False
+    error = error or errno.EIO
+    raise OSError(error, os.strerror(error))
+  finally:
+    free_acl(acl)
 
 
 def _verify_export_parent(
