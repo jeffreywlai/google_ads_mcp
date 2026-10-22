@@ -74,28 +74,45 @@ during uploads; this change does not alter global logging configuration.
 
 ## Review and local validation
 
-Three GPT-6.1-Sol agents with maximum reasoning implemented and cross-reviewed
+GPT-6.1-Sol agents with maximum reasoning implemented and independently reviewed
 the changes. Review regressions cover authorization and scoped visibility rules,
 ambiguous upload/read routing, strict MCP snapshot offsets, refreshed-token
 redaction, processing deadlines and PMax asset requirements. The full suite
 also exercises direct MCP calls and the `call_tool` proxy with mutations locked.
 
-PR review identified three additional discovery errors: asset-link requests
-selected group totals, label creation selected unsupported native operations,
-and exports of video-upload records selected the upload mutation. Routing now
-uses the requested resource and action, preserves dedicated workflows, and
-separates the Performance Max channel name from a performance request. Regression
-coverage includes quantity/context clauses and requests to upload a video and
-then read or export its status. An independent review verified 36 phrases in
-both lock states (72 MCP search rankings), direct/proxy locks, client isolation and advisory
-guards without creating an Ads client.
+PR review identified discovery errors involving asset-level reads, dedicated
+creation tools, upload-record exports, asset-group clone/move requests and
+explicit history. Regression coverage checks the selected tool, exclusions,
+mutation visibility and actual MCP results in both lock states. It also covers
+neighboring requests involving asset-group audience signals, individual asset
+metrics, campaign names, budget amounts and mixed configuration/performance
+history. Direct/proxy locks, component authorization, client isolation and
+advisory guards remain part of the verification; discovery never creates an
+Ads client.
+
+The follow-up regression file checks 113 requests in both lock states, including
+inferred history without the word "history", reordered date context and genuine
+current instructions that refer to past performance. It also covers date-free
+record exports, planned changes, recommendation subjects versus attribution,
+and current write instructions combined with exports, including ordinary search
+fallbacks. Field lists containing words such as "bid" and "label" remain reads;
+explicit instructions to bid or label retain their mutation tools. Existing
+order-independent CPC/CPA history tests remain unchanged and pass alongside
+target-ROAS history and separately requested performance metrics.
+
+Repeated fixes and independent reviews ended with two GPT-6.1-Sol maximum
+reasoning reviews finding no remaining actionable issues in the reviewed scope
+on the same frozen source. The semantic review passed 155 independent decisions
+and 318 MCP searches; the integration review passed 254 MCP searches and nine
+access-focused tests, plus scoped authorization, direct/proxy execution guards,
+client isolation and relocking checks. All checks were offline.
 
 | Check | Result |
 | --- | --- |
 | `uv sync --locked` | Passed using the unchanged lockfile. |
-| `uv run --locked pyink --check .` | Passed; 107 files unchanged. |
+| `uv run --locked pyink --check .` | Passed; 108 files unchanged. |
 | `uv run --locked pylint ads_mcp tests --fail-under=9.5` | Passed; 9.88/10. Existing warnings remain. |
-| `uv run --locked pytest -q --tb=short` | 3,132 passed, 17 skipped; one upstream Authlib deprecation warning. |
+| `uv run --locked pytest -q --tb=short` | 3,245 passed, 17 skipped; one upstream Authlib deprecation warning. |
 | `git diff --check` | Passed. |
 
 These are local offline results. GitHub CI remains the deployment gate, and
