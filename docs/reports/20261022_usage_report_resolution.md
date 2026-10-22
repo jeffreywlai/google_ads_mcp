@@ -80,12 +80,22 @@ ambiguous upload/read routing, strict MCP snapshot offsets, refreshed-token
 redaction, processing deadlines and PMax asset requirements. The full suite
 also exercises direct MCP calls and the `call_tool` proxy with mutations locked.
 
+PR review identified three additional discovery errors: asset-link requests
+selected group totals, label creation selected unsupported native operations,
+and exports of video-upload records selected the upload mutation. Routing now
+uses the requested resource and action, preserves dedicated workflows, and
+separates the Performance Max channel name from a performance request. Regression
+coverage includes quantity/context clauses and requests to upload a video and
+then read or export its status. An independent review verified 36 phrases in
+both lock states (72 MCP search rankings), direct/proxy locks, client isolation and advisory
+guards without creating an Ads client.
+
 | Check | Result |
 | --- | --- |
 | `uv sync --locked` | Passed using the unchanged lockfile. |
 | `uv run --locked pyink --check .` | Passed; 107 files unchanged. |
 | `uv run --locked pylint ads_mcp tests --fail-under=9.5` | Passed; 9.88/10. Existing warnings remain. |
-| `uv run --locked pytest -q --tb=short` | 3,052 passed, 17 skipped; one upstream Authlib deprecation warning. |
+| `uv run --locked pytest -q --tb=short` | 3,132 passed, 17 skipped; one upstream Authlib deprecation warning. |
 | `git diff --check` | Passed. |
 
 These are local offline results. GitHub CI remains the deployment gate, and

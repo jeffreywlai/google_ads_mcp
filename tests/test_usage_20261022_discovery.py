@@ -363,3 +363,178 @@ def test_visibility_profile_ignores_scoped_mutation_rules(scope):
     result = asyncio.run(docs.get_tool_visibility_profile(mock.Mock()))
   assert result["mutation_tools_unlocked"] is True
   assert result["session_rules"] == rules
+
+
+_REQUESTED_SUBJECT_CASES = [
+    (
+        "show asset group assets conversion performance",
+        "list_asset_group_assets",
+        "read",
+    ),
+    ("export all asset group assets", "list_asset_group_assets", "read"),
+    (
+        "export all Performance Max asset group assets",
+        "list_asset_group_assets",
+        "read",
+    ),
+    (
+        "show conversion performance of assets in an asset group",
+        "list_asset_group_assets",
+        "read",
+    ),
+    (
+        "export all assets for Performance Max asset groups",
+        "list_asset_group_assets",
+        "read",
+    ),
+    (
+        "show asset groups assets conversion performance",
+        "list_asset_group_assets",
+        "read",
+    ),
+    (
+        "show assetgroup assets conversion performance",
+        "list_asset_group_assets",
+        "read",
+    ),
+    (
+        "show asset group 123 assets conversion performance",
+        "list_asset_group_assets",
+        "read",
+    ),
+    (
+        "show asset group conversion performance",
+        "get_asset_group_performance",
+        "read",
+    ),
+    (
+        "show asset group conversion performance with linked assets",
+        "get_asset_group_performance",
+        "read",
+    ),
+    (
+        "export Performance Max asset group conversion performance",
+        "get_asset_group_performance",
+        "read",
+    ),
+    ("create a campaign label", "create_label", "mutate"),
+    ("create an ad group label", "create_label", "mutate"),
+    ("create a label for a campaign", "create_label", "mutate"),
+    ("create labels for an asset group", "create_label", "mutate"),
+    ("create an audience for campaign 123", "create_audience", "mutate"),
+    ("create a campaign audience", "create_audience", "mutate"),
+    ("create audiences for a campaign", "create_audience", "mutate"),
+    ("create a campaign", "mutate_ads_resources", "mutate"),
+    (
+        "create a daily campaign budget of 50 USD per day",
+        "mutate_ads_resources",
+        "mutate",
+    ),
+    (
+        "create a daily campaign budget at 50 USD per day",
+        "mutate_ads_resources",
+        "mutate",
+    ),
+    (
+        "create campaign budget asset group mutate",
+        "mutate_ads_resources",
+        "mutate",
+    ),
+    ("create a campaign with a label", "mutate_ads_resources", "mutate"),
+    ("create a campaign with an audience", "mutate_ads_resources", "mutate"),
+    ("create an asset for a campaign", "mutate_ads_resources", "mutate"),
+    ("create an ad group for a campaign", "mutate_ads_resources", "mutate"),
+    ("set campaign status to PAUSED", "set_campaign_status", "mutate"),
+    ("update campaign budget", "update_campaign_budget", "mutate"),
+    ("export YouTube video uploads to CSV", "export_gaql_csv", "write"),
+    ("download video uploads to a file", "export_gaql_csv", "write"),
+    (
+        "export all processed YouTube video uploads to CSV",
+        "export_gaql_csv",
+        "write",
+    ),
+    ("download video upload status to a file", "export_gaql_csv", "write"),
+    (
+        "upload this video and export its processing status to CSV",
+        "upload_youtube_video",
+        "mutate",
+    ),
+    (
+        "I need to upload a video and export its processing status to CSV",
+        "upload_youtube_video",
+        "mutate",
+    ),
+    (
+        "upload this mp4 and show its processing status",
+        "upload_youtube_video",
+        "mutate",
+    ),
+    (
+        "upload a video, showing its processing status",
+        "upload_youtube_video",
+        "mutate",
+    ),
+    (
+        "upload a video but show its processing status",
+        "upload_youtube_video",
+        "mutate",
+    ),
+    (
+        "export processing status to CSV and upload this video",
+        "upload_youtube_video",
+        "mutate",
+    ),
+]
+
+
+@pytest.mark.parametrize("query,expected,mode", _REQUESTED_SUBJECT_CASES)
+def test_requested_subject_preserves_grain_and_effect(query, expected, mode):
+  decision = resolve_intent(query)
+  assert decision.target == expected
+  assert decision.exclude_remote_mutations is (mode != "mutate")
+  assert decision.requires_mutation_visibility is (mode == "mutate")
+
+
+@pytest.mark.parametrize("query,expected,mode", _REQUESTED_SUBJECT_CASES)
+def test_search_preserves_requested_subject_while_locked_and_unlocked(
+    query, expected, mode
+):
+  async def check():
+    async with Client(mcp_server) as client:
+      for unlocked in (False, True):
+        if unlocked:
+          await client.call_tool("unlock_mutation_tools", {})
+        result = await client.call_tool("search_tools", {"query": query})
+        items = result.structured_content["result"]
+        assert items[0]["name"] == expected
+        assert items[0]["mode"] == mode
+        if mode == "mutate":
+          assert items[0]["locked"] is not unlocked
+        else:
+          assert all(item["mode"] != "mutate" for item in items)
+        if mode == "mutate" and "export" in query:
+          assert "export_gaql_csv" in {item["name"] for item in items}
+
+  asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "do not create a campaign label",
+        "how do I create an audience for a campaign",
+        "should we upload this video and export its status to CSV",
+        "show me how to upload a video and export its status",
+    ],
+)
+def test_requested_subject_routing_keeps_advisory_and_negated_guards(query):
+  async def check():
+    async with Client(mcp_server) as client:
+      await client.call_tool("unlock_mutation_tools", {})
+      result = await client.call_tool("search_tools", {"query": query})
+      assert all(
+          item["mode"] != "mutate"
+          for item in result.structured_content["result"]
+      )
+
+  asyncio.run(check())
