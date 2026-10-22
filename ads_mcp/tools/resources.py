@@ -30,10 +30,14 @@ _COLLECTIONS = {
     "asset_operation": "assets",
     "asset_group_operation": "assetGroups",
     "asset_group_asset_operation": "assetGroupAssets",
+    "asset_group_listing_group_filter_operation": (
+        "assetGroupListingGroupFilters"
+    ),
     "asset_group_signal_operation": "assetGroupSignals",
     "asset_set_operation": "assetSets",
     "asset_set_asset_operation": "assetSetAssets",
     "campaign_operation": "campaigns",
+    "campaign_budget_operation": "campaignBudgets",
     "customer_operation": "customers",
     "conversion_action_operation": "conversionActions",
     "conversion_value_rule_operation": "conversionValueRules",
@@ -109,11 +113,18 @@ def mutate_ads_resources(
       operations: Native MutateOperation objects or a JSON array. Each has
           one allowed *_operation containing create, update, or remove.
           Supports ads, ad groups/criteria, assets and their associations,
-          asset groups/signals/sets, campaigns, customer settings, conversion
-          actions/value rules, and experiments/arms. Get exact nested fields
+          asset groups/listing filters/signals/sets, campaigns and budgets,
+          customer settings, conversion actions/value rules, and
+          experiments/arms. Get exact nested fields
           from get_resource_mutation_schema. Updates require resource_name
           and a nonempty native update_mask. Lifecycle goals use mutate_goals
           and mutate_campaign_goal_configs instead.
+          Campaign geo_target_type_setting and target ROAS updates, asset
+          group clones, YouTube video assets, and Demand Gen video ads use
+          this tool. A clone recreates the group and its listing-filter tree,
+          asset links and signals with temporary IDs; campaign is immutable.
+          Create referenced resources first and keep asset-link operations
+          together. Performance Max budgets must not be shared.
       validate_only: True validates without applying any account changes.
           Google checks mutable fields, eligibility and business rules.
       partial_failure: Native partial-failure flag. Errors and empty indexed

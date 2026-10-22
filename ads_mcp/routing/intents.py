@@ -1587,6 +1587,82 @@ def _resolve_intent(query: str) -> RoutingDecision:
         reason="retrospective_action",
     )
 
+  tokens = features.token_set
+  asset_groups = bool(tokens & {"assetgroup", "assetgroups"}) or (
+      "asset" in tokens and bool(tokens & {"group", "groups"})
+  )
+  if (
+      asset_groups
+      and (features.performance_requested or features.metric_subject)
+      and not tokens & {"copy", "clone", "move", "create", "build", "launch"}
+  ):
+    return RoutingDecision(
+        target="get_asset_group_performance",
+        exclude_remote_mutations=True,
+        reason="asset_group_performance",
+    )
+  native_write = (
+      (asset_groups and bool(tokens & {"copy", "clone", "move", "create"}))
+      or (
+          bool(tokens & {"create", "build", "launch"})
+          and bool(
+              tokens & {"campaign", "budget", "asset", "assets", "ad", "ads"}
+          )
+      )
+      or (
+          bool(tokens & {"set", "update", "change"})
+          and (
+              bool(tokens & {"troas", "roas"})
+              or (
+                  "geo" in tokens
+                  and (
+                      bool(tokens & {"type", "presence"})
+                      or (
+                          bool(tokens & {"target", "targeting"})
+                          and bool(tokens & {"setting", "settings"})
+                      )
+                  )
+              )
+          )
+      )
+  )
+  if native_write and not features.read_cue:
+    return RoutingDecision(
+        target="mutate_ads_resources",
+        preferred_targets=(
+            "mutate_ads_resources",
+            "get_resource_mutation_schema",
+        ),
+        excluded_tools=_HISTORY_AND_PRESSURE_TOOLS,
+        requires_mutation_visibility=True,
+        reason="native_resource_write",
+    )
+
+  video = bool(tokens & {"video", "videos", "youtube", "mp4"})
+  upload = bool(tokens & {"upload", "uploads", "uploading"})
+  processing = bool(tokens & {"processing", "processed", "poll"})
+  upload_with_wait = (
+      upload and bool(tokens & {"wait", "until"}) and not features.read_cue
+  )
+  if (
+      video
+      and (upload or processing)
+      and tokens
+      & {"status", "state", "processing", "processed", "poll", "details"}
+      and not upload_with_wait
+  ):
+    return RoutingDecision(
+        target="get_youtube_video_upload",
+        exclude_remote_mutations=True,
+        reason="video_upload_status",
+    )
+  if video and upload and not features.read_cue:
+    return RoutingDecision(
+        target="upload_youtube_video",
+        requires_mutation_visibility=True,
+        reason="video_upload",
+    )
+
   mutation_targets = _mutation_targets(features)
   if len(mutation_targets) > 1:
     return RoutingDecision(
@@ -1922,6 +1998,8 @@ def resolve_intent(query: str) -> RoutingDecision:
         decision,
         excluded_tools=decision.excluded_tools | _LOCATION_MUTATION_TOOLS,
     )
+  if features.explicit_history:
+    decision = replace(decision, exclude_remote_mutations=True)
   if not features.remote_mutation_guarded:
     return decision
   reason = decision.reason

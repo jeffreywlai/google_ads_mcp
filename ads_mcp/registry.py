@@ -23,6 +23,7 @@ from ads_mcp.tools import resources
 from ads_mcp.tools import search_terms
 from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
+from ads_mcp.tools import videos
 
 TOOL_MODULES = [
     account_services,
@@ -48,4 +49,5 @@ TOOL_MODULES = [
     search_terms,
     simulations,
     smart_campaigns,
+    videos,
 ]

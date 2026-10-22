@@ -28,6 +28,7 @@ from typing import Literal
 
 from fastmcp.exceptions import ToolError
 from pydantic import BeforeValidator
+from pydantic import WithJsonSchema
 from pydantic import StrictInt
 from pydantic.json_schema import SkipJsonSchema
 
@@ -95,8 +96,14 @@ _ChangeEventResourceTypeLiteral = Literal[
     "UNSPECIFIED",
 ]
 ChangeEventResourceType = Annotated[
-    _ChangeEventResourceTypeLiteral,
+    str,
     BeforeValidator(_uppercase_resource_type),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "enum": list(get_args(_ChangeEventResourceTypeLiteral)),
+        }
+    ),
 ]
 
 

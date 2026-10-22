@@ -20,8 +20,11 @@ from typing import Annotated
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
 from fastmcp.server.context import _current_context
+from fastmcp.server.server import _is_backend_tool
 from fastmcp.server.transforms.search import BM25SearchTransform
-from fastmcp.server.transforms.visibility import get_visibility_rules
+from fastmcp.server.transforms.visibility import get_session_transforms
+from fastmcp.server.transforms.visibility import is_enabled
+from fastmcp.server.transforms.visibility import Visibility
 from fastmcp.tools.tool import Tool
 
 from ads_mcp.routing import resolve_intent
@@ -37,6 +40,8 @@ _SEARCH_RESULT_ITEM_SCHEMA = {
         "summary": {"type": "string"},
         "required_args": {"type": "array", "items": {"type": "string"}},
         "optional_args": {"type": "array", "items": {"type": "string"}},
+        "locked": {"type": "boolean"},
+        "required_action": {"type": "string"},
     },
     "required": ["name", "mode", "workflow", "summary"],
     "additionalProperties": False,
@@ -78,18 +83,28 @@ async def _mutation_tools_unlocked() -> bool:
     return False
 
   try:
-    rules = await get_visibility_rules(current_ctx)
+    rules = await get_session_transforms(current_ctx)
   except RuntimeError:
     return False
 
   mutation_tools_unlocked = False
   for rule in rules:
-    if set(rule.get("tags", [])) == {MUTATE_TAG} and set(
-        rule.get("components", [])
-    ) == {"tool"}:
-      mutation_tools_unlocked = bool(rule.get("enabled"))
+    if _is_mutation_lock_rule(rule):
+      mutation_tools_unlocked = rule._enabled  # pylint: disable=protected-access
 
   return mutation_tools_unlocked
+
+
+def _is_mutation_lock_rule(rule: Visibility) -> bool:
+  """Matches only the project's tag-wide session mutation lock controls."""
+  return (
+      rule.tags == {MUTATE_TAG}
+      and rule.components == {"tool"}
+      and rule.names is None
+      and rule.keys is None
+      and rule.version is None
+      and not rule.match_all
+  )
 
 
 class NonMutationVisibleSearchTransform(BM25SearchTransform):
@@ -106,10 +121,16 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
       visible_tools = await transform._get_visible_tools(  # pylint: disable=protected-access
           ctx
       )
+      decision = resolve_intent(query)
+      if decision.exclude_remote_mutations:
+        visible_tools = [
+            tool
+            for tool in visible_tools
+            if MUTATE_TAG not in set(tool.tags or [])
+        ]
       results = await transform._search(  # pylint: disable=protected-access
           visible_tools, query
       )
-      decision = resolve_intent(query)
       preferred_targets = decision.preferred_targets or (
           (decision.target,) if decision.target else ()
       )
@@ -134,9 +155,16 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
         results = [
             tool for tool in results if MUTATE_TAG not in set(tool.tags or [])
         ]
-      return await transform._render_results(  # pylint: disable=protected-access
+      rendered = await transform._render_results(  # pylint: disable=protected-access
           results
       )
+      unlocked = await _mutation_tools_unlocked()
+      for item in rendered:
+        if item["mode"] == "mutate":
+          item["locked"] = not unlocked
+          if not unlocked:
+            item["required_action"] = "Call unlock_mutation_tools before use."
+      return rendered
 
     return Tool.from_function(
         fn=search_tools,
@@ -156,8 +184,40 @@ class NonMutationVisibleSearchTransform(BM25SearchTransform):
     return [*visible_tools, self._make_search_tool(), self._make_call_tool()]
 
   async def _get_visible_tools(self, ctx) -> Sequence[Tool]:
-    """Searches the full enabled catalog, including directly visible tools."""
-    return await self.get_tool_catalog(ctx)
+    """Adds authorized local mutation descriptions without unlocking calls."""
+    catalog = list(await self.get_tool_catalog(ctx))
+    names = {tool.name for tool in catalog}
+    # These are public schema descriptions, not callable registrations.
+    # Keep authorization checks while looking past the session mutation lock.
+    # FastMCP's private provider APIs are pinned and covered by access tests.
+    descriptors = []
+    local_tools = await ctx.fastmcp._local_provider.list_tools()  # pylint: disable=protected-access
+    for tool in local_tools:
+      if tool.name in names or MUTATE_TAG not in set(tool.tags or []):
+        continue
+      authorized = await ctx.fastmcp._get_tool(tool.name)  # pylint: disable=protected-access
+      if authorized is not None:
+        descriptors.append(authorized)
+    # _get_tool retains auth but skips server/session visibility. Replay all
+    # explicit visibility rules except the exact tag-wide mutation lock so
+    # search cannot reveal tools separately disabled by name, key, or tag.
+    visibility = [
+        transform
+        for transform in ctx.fastmcp.transforms
+        if isinstance(transform, Visibility)
+    ]
+    visibility.extend(await get_session_transforms(ctx))
+    for rule in visibility:
+      if not _is_mutation_lock_rule(rule):
+        descriptors = list(await rule.list_tools(descriptors))
+    return [
+        *catalog,
+        *[
+            tool
+            for tool in descriptors
+            if is_enabled(tool) and not _is_backend_tool(tool)
+        ],
+    ]
 
 
 mcp_server = FastMCP(
@@ -183,7 +243,10 @@ mcp_server = FastMCP(
         " previews; numeric IDs do not prove time recency. For scoped change"
         " history, pass campaign_id or ad_group_id and include_values for"
         " compact field diffs. Incomplete execute_gaql previews provide an"
-        " exact bulk_export_call; max_rows limits only inline rows. Use"
+        " exact bulk_export_call and next_inline_call. Follow next_inline_call"
+        " through get_gaql_snapshot_page to read the remaining captured rows"
+        " before making claims about all results; max_rows limits only inline"
+        " rows. Use"
         " export_gaql_csv instead of execute_gaql when a bulk extract"
         " would be too large for normal JSON tool output. Keep"
         " the user's requested date range for change-history questions."
@@ -199,7 +262,17 @@ mcp_server = FastMCP(
         " returned_count, total_count,"
         " total_page_count, truncated, or next_page_token, use that"
         " metadata to decide whether more pages are needed. Mutation tools"
-        " stay hidden until unlock_mutation_tools. Location additions require"
+        " appear in search with a locked marker; direct calls require"
+        " unlock_mutation_tools. Use get_resource_mutation_schema then"
+        " mutate_ads_resources (validate_only=True by default) for campaign"
+        " geo_target_type_setting, target ROAS and status changes, campaign"
+        " and budget creation, asset-group cloning with listing filters,"
+        " asset links and signals, and YouTube assets or Demand Gen video ads."
+        " An asset group's campaign is immutable: clone into the destination"
+        " then pause the source only when requested. Use upload_youtube_video"
+        " for local video files and get_youtube_video_upload for processing"
+        " status. Use get_asset_group_performance for explicit date windows."
+        " Location additions require"
         " explicit negative; removals use campaign criterion_ids from"
         " get_campaign_settings, not geo IDs."
         " Requires a configured google-ads.yaml credentials file."

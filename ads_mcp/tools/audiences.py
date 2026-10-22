@@ -146,7 +146,7 @@ def search_user_interests(
       page_token=page_token,
       login_customer_id=login_customer_id,
   )
-  return build_paginated_list_response(
+  result = build_paginated_list_response(
       "user_interests",
       page["rows"],
       total_count=page["total_results_count"],
@@ -154,6 +154,14 @@ def search_user_interests(
       next_page_token=page["next_page_token"],
       snapshot_token=page.get("snapshot_token"),
   )
+  if not page["total_results_count"]:
+    result["search_hint"] = (
+        "No taxonomy names matched these filters. This is a literal name "
+        "substring search, not a semantic product search. Try a broader "
+        "category word (for example apparel), omit query to browse, or "
+        "remove taxonomy_types to search both affinity and in-market nodes."
+    )
+  return result
 
 
 def _customer_match_positive_id(value: Any, field_name: str) -> str:

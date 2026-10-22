@@ -17,6 +17,7 @@
 from collections import Counter
 from datetime import date
 from datetime import timedelta
+import json
 import re
 from typing import Any
 
@@ -1166,6 +1167,82 @@ def get_campaign_performance(
   result["omitted_metrics"] = (
       [] if original_value_available else ["metrics.original_conversion_value"]
   )
+  return result
+
+
+@reporting_tool
+def get_asset_group_performance(
+    customer_id: str,
+    date_range: str | dict[str, str],
+    campaign_ids: list[str] | str | None = None,
+    asset_group_ids: list[str] | str | None = None,
+    limit: int = 25,
+    page_token: str | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Lists asset-group performance for an explicit, inclusive date window.
+
+  Returns Google Ads conversion value and cost for each asset group. These
+  observations can be joined to an external margin model; this tool does not
+  calculate a business-specific bidding target.
+
+  Args:
+      customer_id: Google Ads customer ID.
+      date_range: Required {start_date, end_date} with YYYY-MM-DD dates.
+          Named relative ranges and ALL_TIME are not accepted.
+      campaign_ids: Optional campaign IDs to filter to.
+      asset_group_ids: Optional asset group IDs to filter to.
+      limit: Requested page size. The token-safe default is 25.
+      page_token: Token for the next page of the same captured result.
+      login_customer_id: Optional manager account ID.
+
+  Returns:
+      Asset-group rows, explicit date bounds, stable continuation, and an
+      exact snapshot CSV export call for all returned source rows.
+  """
+  validate_limit(limit)
+  customer_id = _report_customer_id(customer_id)
+  if not isinstance(date_range, dict):
+    raise ToolError(
+        "date_range must be an explicit {start_date, end_date} window "
+        "with YYYY-MM-DD dates for get_asset_group_performance."
+    )
+  date_condition = segments_date_condition(date_range)
+  where_conditions = [date_condition]
+  _append_int_list_filter(
+      where_conditions, "campaign.id", campaign_ids, "campaign_ids"
+  )
+  _append_int_list_filter(
+      where_conditions, "asset_group.id", asset_group_ids, "asset_group_ids"
+  )
+  query = f"""
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.status,
+        asset_group.id,
+        asset_group.name,
+        asset_group.status,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value,
+        metrics.conversions_value_per_cost
+      FROM asset_group
+      {build_where_clause(where_conditions)}
+      ORDER BY metrics.cost_micros DESC, campaign.id, asset_group.id
+  """
+  with handle_google_ads_errors():
+    result = _page_delivery(
+        "asset_group_performance",
+        query,
+        customer_id,
+        limit,
+        page_token,
+        login_customer_id,
+    )
+  result["date_range"] = dict(date_range)
   return result
 
 
@@ -4543,11 +4620,163 @@ def _settings_custom_goals(
   return goals
 
 
+_CAMPAIGN_SETTINGS_CORE_FIELDS = (
+    "campaign.resource_name",
+    "campaign.id",
+    "campaign.name",
+    "campaign.status",
+    "campaign.advertising_channel_type",
+    "campaign.bidding_strategy_type",
+    "campaign.bidding_strategy",
+    "campaign.accessible_bidding_strategy",
+    "campaign.target_roas.target_roas",
+    "campaign.target_cpa.target_cpa_micros",
+    "campaign.maximize_conversion_value.target_roas",
+    "campaign.maximize_conversions.target_cpa_micros",
+    "campaign.start_date_time",
+    "campaign.end_date_time",
+    "campaign.geo_target_type_setting.positive_geo_target_type",
+    "campaign.geo_target_type_setting.negative_geo_target_type",
+    *[
+        field
+        for field in _CAMPAIGN_SETTINGS_FIELDS
+        if field.startswith("campaign_budget.")
+    ],
+    "portfolio_bidding_strategy",
+)
+
+
+def _settings_json_size(value: Any) -> int:
+  return len(
+      json.dumps(
+          value, ensure_ascii=False, separators=(",", ":"), default=str
+      ).encode("utf-8")
+  )
+
+
+def _compact_campaign_goal_config(row: dict[str, Any]) -> dict[str, Any]:
+  """Folds repeated field prefixes into objects without dropping values."""
+  compact: dict[str, Any] = {}
+  prefix = "campaign_goal_config."
+  for field, value in row.items():
+    path = field.removeprefix(prefix).split(".")
+    target = compact
+    for component in path[:-1]:
+      target = target.setdefault(component, {})
+    target[path[-1]] = value
+  return compact
+
+
+def _campaign_settings_core(campaign: dict[str, Any]) -> dict[str, Any]:
+  """Retains comparable settings before admitting variable-size children."""
+  conversion_goals = campaign["conversion_goals"]
+  return {
+      **{
+          field: campaign[field]
+          for field in _CAMPAIGN_SETTINGS_CORE_FIELDS
+          if field in campaign
+      },
+      "conversion_goals": {
+          "config": conversion_goals["config"],
+          "standard_count": len(conversion_goals["standard"]),
+          "custom_present": conversion_goals["custom"] is not None,
+      },
+      "campaign_goal_configs": [
+          _compact_campaign_goal_config(config)
+          for config in campaign["campaign_goal_configs"]
+      ],
+      "detail_counts": {
+          "location_targets": len(campaign["location_targets"]),
+          "shared_sets": len(campaign["shared_sets"]),
+      },
+      "full_detail_inline": False,
+  }
+
+
+def _finalize_campaign_settings(result: dict[str, Any]) -> dict[str, Any]:
+  """Prioritizes every campaign core and keeps exact full records exportable."""
+  campaigns = result["campaigns"]
+  result = {
+      **result,
+      "requested_campaign_count": len(result["requested_campaign_ids"]),
+      "found_campaign_count": len(campaigns),
+      "missing_campaign_count": len(result["missing_campaign_ids"]),
+      "settings_view": "full",
+      "core_settings_complete_inline": True,
+      "full_settings_complete_inline": True,
+  }
+  section_keys = (
+      "campaigns",
+      "account_goals",
+      "requested_campaign_ids",
+      "missing_campaign_ids",
+  )
+  full_delivery = bound_inline_sections(
+      {
+          key: [{"value": value} for value in result[key]]
+          for key in section_keys
+      },
+      max_bytes=INLINE_PAGE_BYTE_LIMIT - 8 * 1024,
+  )
+  if not full_delivery["limited"] and (
+      _settings_json_size(result) <= INLINE_PAGE_BYTE_LIMIT
+  ):
+    return finalize_bounded_response(
+        result, section_keys, max_bytes=INLINE_PAGE_BYTE_LIMIT
+    )
+
+  compact_result = {
+      **result,
+      "settings_view": "compact_core",
+      "campaigns": [_campaign_settings_core(row) for row in campaigns],
+      "campaign_details": sorted(campaigns, key=_settings_json_size),
+      "core_settings_complete_inline": False,
+      "full_settings_complete_inline": False,
+      "settings_delivery_note": (
+          "campaigns contains compact cores; campaign_goal_configs folds "
+          "dotted field paths into nested objects and preserves all values. "
+          "campaign_details contains full original campaign records, with "
+          "smaller records admitted first after the cores. Its counts are "
+          "separate from core campaign counts. Export "
+          "full_materialized_response_export for every full record and all "
+          "account goals. snapshot_complete describes source reads, not "
+          "inline detail completeness; missing_campaign_ids describes only "
+          "IDs absent from the campaign source read."
+      ),
+  }
+  bounded = finalize_bounded_response(
+      compact_result,
+      (
+          "campaigns",
+          "requested_campaign_ids",
+          "missing_campaign_ids",
+          "campaign_details",
+          "account_goals",
+      ),
+      max_bytes=INLINE_PAGE_BYTE_LIMIT,
+  )
+  detail_ids = {str(row["campaign.id"]) for row in bounded["campaign_details"]}
+  for core in bounded["campaigns"]:
+    core["full_detail_inline"] = str(core["campaign.id"]) in detail_ids
+  bounded["core_settings_complete_inline"] = len(bounded["campaigns"]) == len(
+      campaigns
+  )
+  bounded["full_settings_complete_inline"] = (
+      len(bounded["campaign_details"]) == len(campaigns)
+      and len(bounded["account_goals"]) == len(result["account_goals"])
+      and not bounded.get("shared_inline_delivery", {}).get(
+          "metadata_omitted_field_count", 0
+      )
+  )
+  return bounded
+
+
 @reporting_tool
 def get_campaign_settings(
     customer_id: str,
-    campaign_ids: list[str] | str,
+    campaign_ids: list[str] | str | None = None,
     login_customer_id: str | None = None,
+    campaign_id: str | None = None,
 ) -> dict[str, Any]:
   """Returns a complete current settings snapshot for requested campaigns.
 
@@ -4561,15 +4790,27 @@ def get_campaign_settings(
 
   Args:
       customer_id: Google Ads customer ID.
-      campaign_ids: Required IDs; accepts an array or JSON array string.
+      campaign_ids: IDs as an array or JSON array string. Provide this or
+          campaign_id, never both.
       login_customer_id: Optional manager account ID.
+      campaign_id: Alias for one campaign ID. Cannot be combined with
+          campaign_ids, even when both identify the same campaign.
 
   Returns:
       Campaign snapshots, account time zone/currency, missing IDs, and an exact
       materialized export call if the assembled response exceeds inline limits.
+      Oversized responses prioritize compact cores for every found campaign,
+      then full campaign_details as space permits. Separate core and detail
+      counts and completeness flags describe the inline presentation.
       Missing source rows are null or empty, rather than invented zero settings.
       account_goals_read is false when no requested campaign was returned.
   """
+  if campaign_id is not None and campaign_ids is not None:
+    raise ToolError("Provide either campaign_id or campaign_ids, never both.")
+  if campaign_id is not None:
+    campaign_ids = [_positive_report_id(campaign_id, "campaign_id")]
+  elif campaign_ids is None:
+    raise ToolError("Provide campaign_id or campaign_ids with campaign IDs.")
   customer_id = _report_customer_id(customer_id)
   ids = list(
       dict.fromkeys(
@@ -4638,16 +4879,7 @@ def get_campaign_settings(
       "campaigns": [],
   }
   if not campaigns:
-    return finalize_bounded_response(
-        result,
-        (
-            "campaigns",
-            "account_goals",
-            "requested_campaign_ids",
-            "missing_campaign_ids",
-        ),
-        max_bytes=INLINE_PAGE_BYTE_LIMIT,
-    )
+    return _finalize_campaign_settings(result)
 
   configs = _settings_rows(
       customer_id,
@@ -4810,16 +5042,7 @@ def get_campaign_settings(
             ),
         }
     )
-  return finalize_bounded_response(
-      result,
-      (
-          "campaigns",
-          "account_goals",
-          "requested_campaign_ids",
-          "missing_campaign_ids",
-      ),
-      max_bytes=INLINE_PAGE_BYTE_LIMIT,
-  )
+  return _finalize_campaign_settings(result)
 
 
 def _resolve_country_ids(

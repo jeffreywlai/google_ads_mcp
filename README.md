@@ -5,7 +5,7 @@
 [![FastMCP 3.4.x](https://img.shields.io/badge/FastMCP-3.4.x-green.svg)](https://github.com/jlowin/fastmcp)
 [![Google Ads API v25.2](https://img.shields.io/badge/Google%20Ads%20API-v25.2-red.svg)](https://developers.google.com/google-ads/api/docs/start)
 
-**A powerful MCP server that bridges LLMs with the Google Ads API — 143 tools for querying, managing, and optimizing your ad accounts through natural language.**
+**A powerful MCP server that bridges LLMs with the Google Ads API — 147 tools for querying, managing, and optimizing your ad accounts through natural language.**
 
 Targets Google Ads API **25.2** using the `v25` endpoint and Python SDK 33.
 New fields and enums use the existing query tools and strict native resource
@@ -21,11 +21,11 @@ for breaking changes, validation, and the upstream `vertical_ads_item_bid` gap.
 ## ✨ Features
 
 - 📊 **Full GAQL Support** — Run any Google Ads Query Language query with automatic field formatting
-- 🔧 **143 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
+- 🔧 **147 Tools** — Read, write, and manage campaigns, ad groups, ads, keywords, labels, budgets, audiences, and more
 - 📖 **Built-in Docs** — GAQL syntax reference, reporting field docs, resource metadata, and a tool guide available as tools
 - 🌐 **Live Release Notes** — Access current Google Ads API release notes as an MCP resource
 - 🔍 **Smart Tool Search** — BM25-powered tool discovery surfaces relevant tools automatically
-- 🔒 **Mutation Safety** — Mutation tools are hidden by default; unlock them per-session when needed
+- 🔒 **Mutation Safety** — Search describes locked mutation tools; unlock them per-session before calling them
 - 📊 **Curated Reporting** — Device, geographic, impression share, quality scores, conversion goals, search terms, Shopping/cart data, landing pages, audience expansion, video, and placement diagnostics
 - 📄 **Complete, Token-Safe Delivery** — Variable-size reads use stable
   snapshot pagination or exact CSV artifacts; 100-row previews reserve
@@ -47,13 +47,14 @@ for breaking changes, validation, and the upstream `vertical_ads_item_bid` gap.
 - 🩺 **Offline Upload Diagnostics** — Monitor account- and conversion-action-level upload health, alerts, daily summaries, and job summaries
 - 🖥️ **Works Everywhere** — Claude Code, Claude Desktop, Gemini CLI, or any MCP client
 
-## 📋 Available Tools (143)
+## 📋 Available Tools (147)
 
 ### API 25.2 workflows
 
 | Tools | Purpose |
 | --- | --- |
 | `mutate_ads_resources`, `get_resource_mutation_schema` | Strict native resource changes, including new conversion types, conversion value rules, Demand Gen automation and attribution partners; validates by default |
+| `upload_youtube_video`, `get_youtube_video_upload` | Upload a local video file and read processing state; use its processed video ID to create a YouTube asset |
 | `mutate_goals`, `mutate_campaign_goal_configs` | Unified new-customer, retention and loyalty goals; validates by default |
 | `update_asset_group_url_options`, `update_campaign_video_crawl_settings` | PMax URL and crawl settings; validates by default |
 | `update_ad_synthetic_content_info`, `update_asset_synthetic_content_info` | Advertiser attestations; validates by default |
@@ -70,11 +71,44 @@ for breaking changes, validation, and the upstream `vertical_ads_item_bid` gap.
 resources cannot be used in v25. Incompatible reporting combinations state
 `omitted_metrics`; unavailable benchmark metrics are left absent.
 
+`get_campaign_settings` accepts either `campaign_ids` or singular `campaign_id`.
+When full settings would omit campaigns, `settings_view=compact_core` prioritizes
+each campaign's status, bidding targets, budget, geo types and goal configuration.
+`campaign_details` carries full records that fit; the exact materialized export
+retains every full record. Check `core_settings_complete_inline` separately from
+`full_settings_complete_inline` and do not interpret compact cores as full detail.
+
+For campaign geo type, target ROAS, status or budget changes, and PMax cloning,
+search for the workflow even while mutations are locked. Then inspect
+`get_resource_mutation_schema`, unlock, and call `mutate_ads_resources` with
+`validate_only=true`. It supports `campaign_budget_operation` and
+`asset_group_listing_group_filter_operation` as well as asset groups, links and
+signals. To clone, read the source and build native operations with new temporary
+IDs for the group and its filter tree, preserving its assets and signals. The
+server validates and dispatches those operations; the caller builds the clone.
+The original group's campaign is immutable. Pause the source only when intended.
+Google still checks eligibility, required assets and the PMax shared-budget
+restriction. See Google's [request structure guide](https://developers.google.com/google-ads/api/performance-max/structure-requests).
+
+For Demand Gen video launches, `upload_youtube_video` accepts a local file path,
+title and optional channel, and can wait for processing. Uploading is a real
+mutation with no validate-only API. It sends each request once; an uncertain
+failure includes recovery guidance. `get_youtube_video_upload` reports when the
+video is `PROCESSED` with a usable `video_id`. Use that ID in a native
+`asset_operation` and `ad_group_ad_operation`, validating first and creating ads
+as `PAUSED` when staging a launch. URL downloads are not supported.
+
+Upload results redact credentials and resumable session URLs. Opt-in DEBUG
+logging in Google Auth or HTTP libraries can still record sensitive headers or
+session URLs; leave DEBUG logging disabled for those dependencies during uploads.
+
 ### 🔍 Query & Discovery
 
 | Tool | Description |
 |------|-------------|
 | `execute_gaql` | Run GAQL with required-SELECT repairs, actionable errors, and explicit change-event retention policy |
+| `get_gaql_snapshot_page` | Follow `next_inline_call` for the remaining captured JSON rows without rerunning Google queries |
+| `get_asset_group_performance` | Asset-group performance for explicit inclusive dates, with snapshot pagination and exact export |
 | `export_gaql_csv` | Export GAQL or an exact snapshot to CSV, preserving query adjustments and history coverage |
 | `export_materialized_response_csv` | Explicitly write an exact deferred oversized read response returned by another tool |
 | `list_accessible_accounts` | Page through a short-lived, exact in-memory snapshot of accessible accounts without writing files |
@@ -357,6 +391,14 @@ claude mcp add --transport stdio GoogleAds \
 ```
 
 Type `/mcp` in Claude Code to verify it's connected.
+
+`pipx run` can reuse a cached environment after the Git branch changes. Pin the
+Git spec to the reviewed commit (`git+https://github.com/jeffreywlai/google_ads_mcp.git@COMMIT_SHA`)
+and reconnect the MCP process to test that revision. To refresh an unpinned
+install, use `pipx run --no-cache --spec ... run-mcp-server` for the launch;
+newer pipx also supports `--refresh`. See [pipx run cache](https://pipx.pypa.io/stable/tutorial/run-applications.html#run-cache).
+Confirm that the reconnected tool list includes `get_gaql_snapshot_page`;
+package version alone does not identify a Git commit.
 
 #### Option B: Gemini CLI
 
