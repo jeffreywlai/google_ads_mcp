@@ -314,6 +314,9 @@ def test_settings_large_children_are_bounded_with_exact_logical_export(
       ) as write_csv:
         result = reporting.get_campaign_settings(CUSTOMER_ID, ["111"])
         write_csv.assert_not_called()
+        assert result["campaigns"][0]["campaign.id"] == 111
+        assert result["core_settings_complete_inline"] is True
+        assert result["full_settings_complete_inline"] is False
         assert (
             len(
                 json.dumps(
@@ -340,7 +343,7 @@ def test_settings_large_children_are_bounded_with_exact_logical_export(
       campaign_row = next(
           row
           for row in csv.DictReader(exported)
-          if row["result_type"] == "campaigns"
+          if row["result_type"] == "campaign_details"
       )
   finally:
     csv.field_size_limit(previous_limit)

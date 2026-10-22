@@ -319,7 +319,9 @@ def test_location_search_preserves_visibility_and_advisory_guards():
     async with Client(mcp_server) as client:
       query = "add campaign location targets"
       locked = await client.call_tool("search_tools", {"query": query})
-      assert locked.structured_content["result"] == []
+      item = locked.structured_content["result"][0]
+      assert item["name"] == "add_campaign_location_targets"
+      assert item["locked"] is True
       await client.call_tool("unlock_mutation_tools", {})
       active = await client.call_tool("search_tools", {"query": query})
       assert (

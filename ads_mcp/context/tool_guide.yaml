@@ -18,6 +18,11 @@ principles:
     preserves every retrieved row. Query LIMIT and upstream API restrictions
     still apply to the reported total. A subset without ORDER BY is in API
     order and is not a ranked sample.
+  - Follow execute_gaql.next_inline_call with get_gaql_snapshot_page to read
+    remaining rows from the same snapshot without requerying. Combine every
+    page before whole-result conclusions. A terminal page's complete_inline
+    describes only rows from its row_offset onward. Oversized row placeholders
+    require the exact bulk_export_call for their full values.
   - GAQL preflight adds only required SELECT segments and reports
     query_adjustments. Field alternatives are suggestions, not automatic
     replacements. Empty resource-name predicates require an explicit fix;
@@ -62,6 +67,10 @@ principles:
     campaign. Several API reads may observe changes between reads. Legacy
     customer_lifecycle_goal and campaign_lifecycle_goal queries need explicit
     migration to goal and campaign_goal_config with their new nested fields.
+  - get_campaign_settings accepts campaign_id or campaign_ids, not both.
+    Oversized results prioritize compact cores in campaigns, with full records
+    in campaign_details and the exact materialized export. Compare
+    core_settings_complete_inline and full_settings_complete_inline separately.
   - Use compare_performance_periods for explicit nonoverlapping inclusive
     date windows. It sums complete daily data before bounding the response.
     segment_by accepts DEVICE or physical-user COUNTRY; country names come
@@ -105,8 +114,16 @@ principles:
     validate_only=true. Apply account changes only with an explicit false.
     apply_incentive and create_product_link_invitation have no validate-only
     API; invoking them applies the operation. Mutation calls are never retried.
-  - Mutation tools are hidden by default. Use unlock_mutation_tools only when
-    you intend to validate or change account state.
+  - Search describes locked mutation tools with required_action guidance;
+    direct and call_tool execution still require unlock_mutation_tools.
+    Use get_resource_mutation_schema and mutate_ads_resources for native
+    campaign geo/ROAS changes, budgets, asset-group clones and Demand Gen ads.
+    References must follow creates; keep asset links together. Cloning does
+    not move the immutable asset_group.campaign, and PMax budgets cannot be shared.
+  - upload_youtube_video uploads a local file once without automatic mutation
+    retries or validate-only. get_youtube_video_upload checks processing;
+    only PROCESSED with a video_id is ready for asset creation. Inspect
+    recovery guidance before repeating an upload with outcome_unknown=true.
 
 categories:
   discovery:
@@ -115,6 +132,7 @@ categories:
       list_accessible_accounts: Page through an exact, short-lived in-memory account snapshot without implicit file writes.
       export_accessible_accounts_csv: Explicitly write the exact accessible-account snapshot to CSV.
       execute_gaql: Custom reporting reads when no dedicated read tool exists.
+      get_gaql_snapshot_page: Fetch the next bounded JSON slice of an existing execute_gaql snapshot using next_inline_call, with no Google requery; combine pages before claims about all rows. Oversized row placeholders require exact CSV export.
       export_gaql_csv: Bulk-export GAQL results to a CSV file when JSON responses would be too large.
       export_materialized_response_csv: Explicitly write the exact deferred oversized read response only when another tool returns this export call.
 
@@ -129,6 +147,7 @@ categories:
       get_competitive_pressure_report: Impression-share pressure, auction insights, and change history in one compact report.
       get_campaign_conversion_goals: Campaign conversion goals, including custom conversion-goal config.
       get_campaign_settings: Current campaign settings, budget, targeting, shared lists, conversion goals, account_goals, and per-campaign campaign_goal_configs without client-side joins.
+      get_asset_group_performance: Asset-group totals for an explicit start_date/end_date window with exact snapshot pagination and export; combine business margin data outside this server.
       compare_performance_periods: Complete campaign metrics across explicit daily date windows, optionally split by DEVICE or physical-user COUNTRY with API names, without inferring goal switches or causality.
       compare_performance_around_changes: Derive daily periods from complete supported retained campaign/budget change evidence, excluding boundary days without claiming causality or goal history.
       list_lift_measurements: Available lift configurations, flights, brand-lift dimensions, or study-level conversion-lift metrics with measured windows and exact exports; availability and statistical significance require inspection.
@@ -331,7 +350,9 @@ categories:
   resources:
     summary: Typed changes to the fixed native resource families.
     tools:
-      mutate_ads_resources: Validate by default, or apply native asset/ad/ad-group/campaign/customer/conversion/experiment operations with masks, account ownership checks, and partial-failure details; unified goals use dedicated tools.
+      mutate_ads_resources: Validate by default, or apply native geo target type, target ROAS and status changes, campaign/budget creation, asset-group clones with listing filters/assets/signals, YouTube assets, and Demand Gen video ads. Get operation schemas first; Performance Max budgets cannot be shared and asset_group.campaign is immutable. Search includes locked writes; unlock_mutation_tools is required to call them.
+      upload_youtube_video: Upload a local video file with a title through Google Ads resumable upload. This is a real mutation with no validate-only mode and no automatic write retry. Optionally wait within a bounded timeout.
+      get_youtube_video_upload: Read processing state, video_id and failures for a video_upload_id; poll this after upload before creating a YouTube asset.
 
   account_services:
     summary: Incentive offers/redemption and product-link invitations.

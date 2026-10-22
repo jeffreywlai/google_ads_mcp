@@ -62,7 +62,13 @@ async def test_locked_mutation_cannot_be_called_through_either_dispatch(
           search = await client.call_tool(
               "search_tools", {"query": "pause campaign 456"}
           )
-          assert not search.structured_content["result"]
+          item = search.structured_content["result"][0]
+          assert item["name"] == _MUTATION
+          assert item["locked"] is True
+          assert "unlock_mutation_tools" in item["required_action"]
+          assert _MUTATION not in {
+              tool.name for tool in await client.list_tools()
+          }
 
   get_client.assert_called_once()
   campaign_service.mutate_campaigns.assert_called_once()

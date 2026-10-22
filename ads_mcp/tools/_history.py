@@ -298,7 +298,7 @@ def _query_parts(query: str) -> tuple[int, tuple[int, int], list[str]]:
         "change_event requires an explicit LIMIT from 1 to 10,000; "
         "the API cap is not a complete-history guarantee."
     )
-  _gaql._validate_or_compatibility(query)  # pylint: disable=protected-access
+  _gaql.validate_gaql_or_compatibility(query)
   span = _gaql._where_body_span(query)  # pylint: disable=protected-access
   if span is None:
     raise _unsupported_interval()

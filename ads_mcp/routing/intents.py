@@ -566,6 +566,7 @@ _PAST_MARKERS = frozenset(
         "already",
         "earlier",
         "last",
+        "previous",
         "previously",
         "recent",
         "since",
@@ -587,6 +588,7 @@ _WEEKDAY_TERMS = frozenset(
 _READ_CUES = frozenset(
     {
         "get",
+        "read",
         "list",
         "show",
         "what",
@@ -670,6 +672,36 @@ _API_METADATA_TERMS = frozenset(
         "versions",
     }
 )
+_CREATION_ACTIONS = frozenset({"create", "build", "launch"})
+_ASSET_GROUP_COPY_ACTIONS = frozenset({"copy", "clone", "move"})
+_RESOURCE_TERMS = frozenset(
+    {
+        "label",
+        "labels",
+        "audience",
+        "audiences",
+        "campaign",
+        "campaigns",
+        "budget",
+        "budgets",
+        "asset",
+        "assets",
+        "ad",
+        "ads",
+        "adgroup",
+        "adgroups",
+        "assetgroup",
+        "assetgroups",
+        "criterion",
+        "criteria",
+        "signal",
+        "signals",
+        "group",
+        "groups",
+        "set",
+        "sets",
+    }
+)
 _GENERIC_MUTATION_ACTIONS = frozenset(
     {
         "accept",
@@ -677,8 +709,6 @@ _GENERIC_MUTATION_ACTIONS = frozenset(
         "adjust",
         "apply",
         "attach",
-        "copy",
-        "create",
         "delete",
         "decrease",
         "detach",
@@ -693,6 +723,8 @@ _GENERIC_MUTATION_ACTIONS = frozenset(
         "set",
         "upload",
         "update",
+        *_CREATION_ACTIONS,
+        *_ASSET_GROUP_COPY_ACTIONS,
         *_STATUS_ACTIONS,
         *_AUDIENCE_REMOVE_ACTIONS,
     }
@@ -716,6 +748,274 @@ def _contains_sequence(
       tokens[index : index + width] == sequence
       for index in range(len(tokens) - width + 1)
   )
+
+
+def _action_object(tokens: tuple[str, ...], index: int) -> tuple[str, ...]:
+  """Returns an action's noun phrase before account or resource context."""
+  end = index + 1
+  while end < len(tokens) and tokens[end] not in {
+      "and",
+      "then",
+      "for",
+      "from",
+      "in",
+      "on",
+      "of",
+      "at",
+      "to",
+      "with",
+      "using",
+      "named",
+      "called",
+      "mutate",
+  }:
+    end += 1
+  return tokens[index + 1 : end]
+
+
+def _has_command_prefix(tokens: tuple[str, ...], index: int) -> bool:
+  """Recognizes a command within its clause, before resource context."""
+  prefix = tokens[:index]
+  for boundary in range(index - 1, -1, -1):
+    if tokens[boundary] in {"and", "then"}:
+      prefix = tokens[boundary + 1 : index]
+      break
+  if set(prefix) & (_FILE_ACTIONS | _READ_CUES):
+    return False
+  return (
+      not prefix
+      or prefix[-1] in {"please", "you", "we", "i", "to"}
+      or (
+          prefix[-1] not in {"a", "an", "the", "this", "that"}
+          and (
+              _contains_sequence(prefix, "based", "on")
+              or bool(set(prefix) & {"using", "given"})
+          )
+      )
+  )
+
+
+def _requested_change_action(tokens: tuple[str, ...]) -> bool:
+  """Recognizes an imperative's object before historical context."""
+  subjects = (
+      _CONFIGURATION_TERMS
+      | _METRIC_TERMS
+      | {
+          "ad",
+          "ads",
+          "campaign",
+          "campaigns",
+          "keyword",
+          "keywords",
+          "strategy",
+          "strategies",
+          "target",
+          "targets",
+          "it",
+          "them",
+      }
+  )
+  for index, token in enumerate(tokens):
+    if token not in {"change", "edit"}:
+      continue
+    command_prefix = _has_command_prefix(tokens, index)
+    object_index = index
+    if tokens[index + 1 : index + 2] == ("to",):
+      if not command_prefix:
+        continue
+      object_index += 1
+    for word in _action_object(tokens, object_index):
+      if word in {
+          "during",
+          "over",
+          "including",
+          "include",
+      } or (not command_prefix and word in _PAST_MARKERS | _WEEKDAY_TERMS):
+        break
+      if word in subjects:
+        return True
+  return False
+
+
+def _has_mutation_object(tokens: tuple[str, ...], index: int) -> bool:
+  """Requires a resource, assigned value, or mutable configuration subject."""
+  subject = set(_action_object(tokens, index))
+  resource_terms = _RESOURCE_TERMS | {
+      "keyword",
+      "keywords",
+      "recommendation",
+      "recommendations",
+      "video",
+      "videos",
+      "file",
+      "files",
+      "it",
+      "them",
+  }
+  if any(word.isdigit() for word in subject) or subject & resource_terms:
+    return True
+  field_action = tokens[index] in {
+      "set",
+      "update",
+      "adjust",
+      "increase",
+      "decrease",
+  }
+  if field_action and bool(
+      subject
+      & (
+          _CONFIGURATION_TERMS
+          | _METRIC_TERMS
+          | {"target", "targets", "strategy", "strategies"}
+      )
+  ):
+    return True
+  if subject and not field_action:
+    return False
+  end = index + 1
+  while end < len(tokens) and tokens[end] not in {"and", "then"}:
+    end += 1
+  clause = tokens[index + 1 : end]
+  return bool(set(clause) & resource_terms) and any(
+      word in {"to", "at"}
+      and position + 1 < len(clause)
+      and not set(clause[position + 1 :]) & _FILE_DESTINATIONS
+      for position, word in enumerate(clause)
+  )
+
+
+def _requested_mutation_action(tokens: tuple[str, ...]) -> bool:
+  """Distinguishes current mutation commands from field/resource nouns."""
+  return _requested_change_action(tokens) or any(
+      token in _GENERIC_MUTATION_ACTIONS
+      and _has_command_prefix(tokens, index)
+      and _has_mutation_object(tokens, index)
+      and not set(tokens[index + 1 : index + 2]) & _CHANGE_NOUNS
+      for index, token in enumerate(tokens)
+  )
+
+
+def _creation_target(tokens: tuple[str, ...]) -> str | None:
+  """Selects creation by its requested resource, rather than its context."""
+  for index, token in enumerate(tokens):
+    if token not in _CREATION_ACTIONS:
+      continue
+    subject = _action_object(tokens, index)
+    if not subject:
+      continue
+    if set(subject) & {
+        "report",
+        "reports",
+        "summary",
+        "summaries",
+        "list",
+        "lists",
+        "keyword",
+        "keywords",
+        "recommendation",
+        "recommendations",
+    }:
+      continue
+    head = next(
+        (word for word in reversed(subject) if word in _RESOURCE_TERMS), None
+    )
+    if head in {"label", "labels"}:
+      return "create_label"
+    if head in {"audience", "audiences"}:
+      return "create_audience"
+    if head in {
+        "campaign",
+        "campaigns",
+        "budget",
+        "budgets",
+        "asset",
+        "assets",
+        "ad",
+        "ads",
+        "adgroup",
+        "adgroups",
+        "assetgroup",
+        "assetgroups",
+        "criterion",
+        "criteria",
+        "signal",
+        "signals",
+    } or (
+        head in {"group", "groups", "set", "sets"}
+        and bool(set(subject) & {"asset", "ad"})
+    ):
+      return "mutate_ads_resources"
+  return None
+
+
+def _asset_group_links_requested(tokens: tuple[str, ...]) -> bool:
+  """Distinguishes asset-link subjects from group totals with asset context."""
+  for index, token in enumerate(tokens):
+    width = (
+        1
+        if token in {"assetgroup", "assetgroups"}
+        else 2
+        if token == "asset"
+        and tokens[index + 1 : index + 2] in {("group",), ("groups",)}
+        else 0
+    )
+    if not width:
+      continue
+    suffix = tokens[index + width :]
+    if suffix and suffix[0].isdigit():
+      suffix = suffix[1:]
+    if suffix and suffix[0] == "linked":
+      suffix = suffix[1:]
+    return (
+        bool(set(tokens[:index]) & {"asset", "assets"})
+        or bool(suffix and suffix[0] in {"asset", "assets", "link", "links"})
+        or any(
+            token in {"by", "per"}
+            and suffix[position + 1 : position + 2]
+            in {("asset",), ("assets",)}
+            and suffix[position + 2 : position + 3]
+            not in {("group",), ("groups",)}
+            for position, token in enumerate(suffix)
+        )
+    )
+  return False
+
+
+def _requested_asset_group_copy(tokens: tuple[str, ...]) -> bool:
+  """Distinguishes the copied group from audience or metric context."""
+  for index, token in enumerate(tokens):
+    if token not in _ASSET_GROUP_COPY_ACTIONS:
+      continue
+    subject = _action_object(tokens, index)
+    if set(subject) & {"assetgroup", "assetgroups"} or any(
+        _contains_sequence(subject, "asset", group)
+        for group in ("group", "groups")
+    ):
+      return True
+  return False
+
+
+def _requested_upload_action(tokens: tuple[str, ...]) -> bool:
+  """Recognizes a request to upload a file, not an upload-record noun."""
+  for index, token in enumerate(tokens):
+    if token != "upload":
+      continue
+    prefix = tokens[:index]
+    for boundary in range(index - 1, -1, -1):
+      if tokens[boundary] in {"and", "then"}:
+        prefix = tokens[boundary + 1 : index]
+        break
+    if set(prefix) & (_READ_CUES | _FILE_ACTIONS):
+      continue
+    if set(_action_object(tokens, index)) & {
+        "video",
+        "videos",
+        "mp4",
+        "file",
+        "files",
+    }:
+      return True
+  return False
 
 
 def _has_change_record_phrase(tokens: tuple[str, ...]) -> bool:
@@ -809,6 +1109,25 @@ def extract_intent_features(query: str) -> IntentFeatures:
   """Extracts order-independent semantic features from a query."""
   normalized_query, tokens = _normalize_query(query)
   token_set = frozenset(tokens)
+  reporting_query = re.sub(r"\bperformance max\b", "", normalized_query)
+  bid_metric_pattern = r"\b(?:(?:max|maximum) cpc|target (?:cpa|roas)|troas)\b"
+  configuration_bid_metric = bool(
+      re.search(bid_metric_pattern, normalized_query)
+  )
+  reporting_words = re.sub(bid_metric_pattern, "", reporting_query).split()
+  for metric, modifiers in (
+      ("cpc", {"max", "maximum"}),
+      ("cpa", {"target"}),
+      ("roas", {"target"}),
+  ):
+    modifier = next(
+        (word for word in reporting_words if word in modifiers), None
+    )
+    if modifier is not None and metric in reporting_words:
+      configuration_bid_metric = True
+      reporting_words.remove(modifier)
+      reporting_words.remove(metric)
+  reporting_tokens = tuple(reporting_words)
 
   has_campaign = bool(token_set & {"campaign", "campaigns"})
   has_audience = bool(token_set & {"audience", "audiences"})
@@ -826,7 +1145,37 @@ def extract_intent_features(query: str) -> IntentFeatures:
       token_set & {"asset", "assets"}
   )
   has_change_noun = bool(token_set & _CHANGE_NOUNS)
-  change_record_phrase = _has_change_record_phrase(tokens)
+  configuration_subject = bool(token_set & _CONFIGURATION_TERMS) or (
+      _contains_sequence(tokens, "bid", "strategy") or configuration_bid_metric
+  )
+  recommendation_export = any(
+      token in _FILE_ACTIONS
+      and bool(
+          set(_action_object(tokens, index))
+          & {"recommendation", "recommendations", "rec", "recs"}
+      )
+      for index, token in enumerate(tokens)
+  )
+  change_record_phrase = _has_change_record_phrase(tokens) or (
+      configuration_subject
+      and not token_set
+      & {
+          "future",
+          "hypothetical",
+          "pending",
+          "planned",
+          "potential",
+          "proposed",
+          "recommended",
+          "scheduled",
+          "suggested",
+          "upcoming",
+      }
+      and not recommendation_export
+      and not _requested_mutation_action(tokens)
+      and bool(token_set & (_FILE_ACTIONS | _FILE_DESTINATIONS))
+      and bool(token_set & (_CHANGE_NOUNS - _COMPLETED_ACTIONS))
+  )
 
   explicit_history = (
       bool(token_set & {"history", "historical", "changelog", "changelogs"})
@@ -839,14 +1188,8 @@ def extract_intent_features(query: str) -> IntentFeatures:
           )
       )
   )
-  configuration_bid_metric = (
-      "cpc" in token_set and bool(token_set & {"max", "maximum"})
-  ) or (token_set.issuperset({"target", "cpa"}))
-  configuration_subject = bool(token_set & _CONFIGURATION_TERMS) or (
-      _contains_sequence(tokens, "bid", "strategy") or configuration_bid_metric
-  )
-  metric_subject = bool(token_set & _METRIC_TERMS) or any(
-      _contains_sequence(tokens, *phrase)
+  metric_subject = bool(set(reporting_tokens) & _METRIC_TERMS) or any(
+      _contains_sequence(reporting_tokens, *phrase)
       for phrase in (
           ("average", "cpc"),
           ("click", "through", "rate"),
@@ -856,9 +1199,6 @@ def extract_intent_features(query: str) -> IntentFeatures:
           ("return", "on", "ad", "spend"),
       )
   )
-  if configuration_bid_metric:
-    metric_subject = False
-
   version_subject = _has_version_subject(tokens)
   account_data_subject = bool(
       token_set
@@ -893,15 +1233,21 @@ def extract_intent_features(query: str) -> IntentFeatures:
   ) or any(re.fullmatch(r"(?:19|20)\d{2}", token) for token in tokens)
   completed = bool(token_set & _COMPLETED_ACTIONS) or (
       has_change_noun
-      and bool(
-          token_set
-          & {
-              "changed",
-              "changes",
-              "edits",
-              "modifications",
-              "revisions",
-          }
+      and (
+          bool(
+              token_set
+              & {
+                  "changed",
+                  "changes",
+                  "edits",
+                  "modifications",
+                  "revisions",
+              }
+          )
+          or (
+              bool(token_set & {"change", "edit"})
+              and not _requested_change_action(tokens)
+          )
       )
       and historical_timeframe
   )
@@ -929,12 +1275,14 @@ def extract_intent_features(query: str) -> IntentFeatures:
           )
       )
       and not read_cue
+      and not recommendation_export
       and not explicit_history
       and not completed
+      and not (metric_subject and not configuration_subject)
   )
 
   exhaustive = (
-      bool(token_set & _FULL_TERMS)
+      bool(set(reporting_tokens) & _FULL_TERMS)
       or (
           bool(token_set & {"available", "possible"})
           and bool(token_set & {"far", "longest", "much", "many", "oldest"})
@@ -981,7 +1329,7 @@ def extract_intent_features(query: str) -> IntentFeatures:
       }
   )
   performance_requested = bool(
-      token_set
+      set(reporting_tokens)
       & {
           "metric",
           "metrics",
@@ -1038,7 +1386,10 @@ def extract_intent_features(query: str) -> IntentFeatures:
       )
   )
   has_audience_copy_action = (
-      has_campaign and has_audience and ("copy" in token_set)
+      has_campaign
+      and has_audience
+      and "copy" in token_set
+      and not _requested_asset_group_copy(tokens)
   )
   has_audience_remove_action = (
       has_campaign
@@ -1082,12 +1433,13 @@ def extract_intent_features(query: str) -> IntentFeatures:
       or has_location_remove_action
       or has_recommendation_action
   )
+  advisory_read_cue = read_cue and not _requested_upload_action(tokens)
   mutation_negated = has_mutation_subject and _has_negated_action(
       tokens, mutation_actions
   )
   mutation_advisory = (
       has_mutation_subject
-      and _is_advisory_speech(tokens, read_cue)
+      and _is_advisory_speech(tokens, advisory_read_cue)
       and not explicit_history
       and not completed
   )
@@ -1098,7 +1450,8 @@ def extract_intent_features(query: str) -> IntentFeatures:
       _contains_sequence(tokens, "don", "t")
   )
   generic_mutation_advisory = (
-      _is_advisory_speech(tokens, read_cue) and not retrospective_speech
+      _is_advisory_speech(tokens, advisory_read_cue)
+      and not retrospective_speech
   )
   remote_mutation_guarded = (
       mutation_negated
@@ -1224,7 +1577,9 @@ def extract_intent_features(query: str) -> IntentFeatures:
 
 
 def _has_change_history_context(features: IntentFeatures) -> bool:
-  if features.external_subject or features.metric_subject:
+  if features.external_subject or (
+      features.metric_subject and not features.configuration_subject
+  ):
     return False
   if features.retrospective_action:
     return True
@@ -1507,6 +1862,7 @@ def _change_period_comparison(features: IntentFeatures) -> bool:
 def _resolve_intent(query: str) -> RoutingDecision:
   """Resolves a natural-language query using explicit semantic precedence."""
   features = extract_intent_features(query)
+  change_history = _has_change_history_context(features)
 
   if features.external_subject:
     return RoutingDecision(
@@ -1606,6 +1962,145 @@ def _resolve_intent(query: str) -> RoutingDecision:
         reason="mutation",
     )
 
+  tokens = features.token_set
+  video = bool(tokens & {"video", "videos", "youtube", "mp4"})
+  upload = bool(tokens & {"upload", "uploads", "uploading"})
+  if features.explicit_history and video and upload:
+    artifact = (
+        features.artifact_requested or features.exhaustive
+    ) and not features.local_write_negated
+    return RoutingDecision(
+        target="export_gaql_csv" if artifact else "execute_gaql",
+        exclude_remote_mutations=True,
+        reason="video_upload_record_history",
+    )
+
+  asset_groups = bool(tokens & {"assetgroup", "assetgroups"}) or (
+      "asset" in tokens and bool(tokens & {"group", "groups"})
+  )
+  if (
+      features.explicit_history
+      and asset_groups
+      and (features.metric_subject or features.performance_requested)
+      and not features.configuration_subject
+      and not features.has_change_noun
+      and not tokens & _GENERIC_MUTATION_ACTIONS
+  ):
+    return RoutingDecision(
+        target=(
+            ROUTE_CATALOG["asset_group_assets"]
+            if _asset_group_links_requested(features.tokens)
+            else "get_asset_group_performance"
+        ),
+        exclude_remote_mutations=True,
+        reason="historical_asset_group_performance",
+    )
+
+  if not features.explicit_history and not change_history:
+    if _asset_group_links_requested(features.tokens) and (
+        features.read_cue or not tokens & _GENERIC_MUTATION_ACTIONS
+    ):
+      return RoutingDecision(
+          target=ROUTE_CATALOG["asset_group_assets"],
+          exclude_remote_mutations=True,
+          reason="asset_group_asset_links",
+      )
+    creation_target = _creation_target(features.tokens)
+    if (
+        creation_target is not None
+        and creation_target != "mutate_ads_resources"
+        and not features.read_cue
+        and not features.remote_mutation_guarded
+    ):
+      return RoutingDecision(
+          target=creation_target,
+          excluded_tools=_HISTORY_AND_PRESSURE_TOOLS,
+          requires_mutation_visibility=True,
+          reason="dedicated_resource_creation",
+      )
+    native_write = (
+        _requested_asset_group_copy(features.tokens)
+        or creation_target == "mutate_ads_resources"
+        or (
+            bool(tokens & {"set", "update", "change"})
+            and (
+                ("troas" in tokens or tokens.issuperset({"target", "roas"}))
+                or (
+                    "geo" in tokens
+                    and (
+                        bool(tokens & {"type", "presence"})
+                        or (
+                            bool(tokens & {"target", "targeting"})
+                            and bool(tokens & {"setting", "settings"})
+                        )
+                    )
+                )
+            )
+        )
+    )
+    if native_write and not features.read_cue:
+      return RoutingDecision(
+          target="mutate_ads_resources",
+          preferred_targets=(
+              "mutate_ads_resources",
+              "get_resource_mutation_schema",
+          ),
+          excluded_tools=_HISTORY_AND_PRESSURE_TOOLS,
+          requires_mutation_visibility=True,
+          reason="native_resource_write",
+      )
+
+    if (
+        asset_groups
+        and (features.performance_requested or features.metric_subject)
+        and not tokens & (_CREATION_ACTIONS | _ASSET_GROUP_COPY_ACTIONS)
+    ):
+      return RoutingDecision(
+          target="get_asset_group_performance",
+          exclude_remote_mutations=True,
+          reason="asset_group_performance",
+      )
+    upload_action = _requested_upload_action(features.tokens)
+    if (
+        video
+        and upload
+        and features.artifact_requested
+        and not features.local_write_negated
+        and not upload_action
+    ):
+      return RoutingDecision(
+          target="export_gaql_csv",
+          exclude_remote_mutations=True,
+          reason="video_upload_records_export",
+      )
+    processing = bool(tokens & {"processing", "processed", "poll"})
+    if video and upload_action:
+      return RoutingDecision(
+          target="upload_youtube_video",
+          preferred_targets=("upload_youtube_video", "export_gaql_csv")
+          if features.artifact_requested
+          else (),
+          requires_mutation_visibility=True,
+          reason="video_upload_with_followup",
+      )
+    if (
+        video
+        and (upload or processing)
+        and tokens
+        & {"status", "state", "processing", "processed", "poll", "details"}
+    ):
+      return RoutingDecision(
+          target="get_youtube_video_upload",
+          exclude_remote_mutations=True,
+          reason="video_upload_status",
+      )
+    if video and upload and not features.read_cue:
+      return RoutingDecision(
+          target="upload_youtube_video",
+          requires_mutation_visibility=True,
+          reason="video_upload",
+      )
+
   if _customer_match_job_read(features):
     return RoutingDecision(
         target=ROUTE_CATALOG["customer_match_jobs"],
@@ -1675,7 +2170,7 @@ def _resolve_intent(query: str) -> RoutingDecision:
 
   mixed_history_metric = (
       features.metric_subject
-      and features.explicit_history
+      and (features.explicit_history or change_history)
       and (
           features.configuration_subject
           or "including" in features.token_set
@@ -1745,10 +2240,10 @@ def _resolve_intent(query: str) -> RoutingDecision:
     return RoutingDecision(
         target=target,
         excluded_tools=_CHANGE_HISTORY_TOOLS,
+        exclude_remote_mutations=True,
         reason="metric_change",
     )
 
-  change_history = _has_change_history_context(features)
   if change_history and features.continuation_requested:
     return RoutingDecision(
         target=_select_capability(
@@ -1921,6 +2416,20 @@ def resolve_intent(query: str) -> RoutingDecision:
     decision = replace(
         decision,
         excluded_tools=decision.excluded_tools | _LOCATION_MUTATION_TOOLS,
+    )
+  if (
+      features.explicit_history
+      or _has_change_history_context(features)
+      or (
+          features.artifact_requested
+          and not decision.requires_mutation_visibility
+          and not _requested_mutation_action(features.tokens)
+      )
+  ):
+    decision = replace(
+        decision,
+        requires_mutation_visibility=False,
+        exclude_remote_mutations=True,
     )
   if not features.remote_mutation_guarded:
     return decision

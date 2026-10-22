@@ -23,12 +23,14 @@ from typing import Any
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
+from ads_mcp.coordinator import _is_mutation_lock_rule
 from ads_mcp.tooling import ads_read_tool
 from ads_mcp.tooling import local_read_tool
 from ads_mcp.tooling import local_write_tool
 from ads_mcp.tooling import session_control_tool
 from ads_mcp.tools._gaql import gaql_quote_string
 from ads_mcp.tools._gaql import normalize_list_arg
+from ads_mcp.tools._gaql import validate_gaql_or_compatibility
 from ads_mcp.tools.api import applied_inline_page_size
 from ads_mcp.tools.api import bound_inline_sections
 from ads_mcp.tools.api import build_paginated_list_response
@@ -41,6 +43,7 @@ from ads_mcp.utils import MODULE_DIR
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.server.transforms.visibility import disable_components
+from fastmcp.server.transforms.visibility import create_visibility_transforms
 from fastmcp.server.transforms.visibility import enable_components
 from fastmcp.server.transforms.visibility import get_visibility_rules
 from pydantic import StrictInt
@@ -550,11 +553,9 @@ async def get_tool_visibility_profile(
   """Gets the current session tool visibility profile."""
   rules = await get_visibility_rules(ctx)
   mutation_tools_unlocked = False
-  for rule in rules:
-    if set(rule.get("tags", [])) == {"mutate"} and set(
-        rule.get("components", [])
-    ) == {"tool"}:
-      mutation_tools_unlocked = bool(rule.get("enabled"))
+  for rule in create_visibility_transforms(rules):
+    if _is_mutation_lock_rule(rule):
+      mutation_tools_unlocked = rule._enabled  # pylint: disable=protected-access
   return {
       "mutation_tools_unlocked": mutation_tools_unlocked,
       "session_rules": rules,
@@ -619,6 +620,7 @@ def search_google_ads_fields(
   if normalized_query and normalized_patterns:
     raise ToolError("Provide query or patterns, not both.")
   if normalized_query:
+    validate_gaql_or_compatibility(normalized_query)
     return _field_search_page_response(
         normalized_query,
         limit,
@@ -694,6 +696,7 @@ def export_google_ads_fields_csv(query: str) -> dict[str, Any]:
   """
   if not query.strip():
     raise ToolError("query must not be empty.")
+  validate_gaql_or_compatibility(query)
   ads_client = get_ads_client()
   field_service = ads_client.get_service("GoogleAdsFieldService")
   with handle_google_ads_errors():

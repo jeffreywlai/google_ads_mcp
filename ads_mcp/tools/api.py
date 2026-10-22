@@ -59,11 +59,13 @@ from google.protobuf.message import Message as ProtobufMessage
 from google.oauth2.credentials import Credentials
 from google.api_core import exceptions as google_exceptions
 import proto
+from pydantic import StrictInt
 import yaml
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.api_version import API_VERSION
 from ads_mcp.tooling import ads_read_tool
+from ads_mcp.tooling import local_read_tool
 from ads_mcp.tooling import local_write_tool
 from ads_mcp.tools import _gaql
 from ads_mcp.tools import _history
@@ -178,6 +180,12 @@ _EXECUTE_GAQL_OUTPUT_SCHEMA = {
         "warning_row_threshold": {"type": "integer"},
         "token_efficiency_warning": {"type": "string"},
         "complete_inline": {"type": "boolean"},
+        "row_offset": {"type": "integer"},
+        "next_row_offset": {"type": ["integer", "null"]},
+        "has_more": {"type": "boolean"},
+        "next_inline_call": {"type": ["object", "null"]},
+        "inline_delivery_scope": {"type": "string"},
+        "inline_omission_note": {"type": "string"},
         "inline_bytes": {"type": "integer"},
         "inline_byte_limit": {"type": "integer"},
         "inline_omitted_row_count": {"type": "integer"},
@@ -3596,11 +3604,15 @@ def _unbounded_gaql_response(
   return result
 
 
-def _finalize_gaql_response(response: dict[str, Any]) -> dict[str, Any]:
+def _finalize_gaql_response(
+    response: dict[str, Any],
+    *,
+    max_bytes: int = INLINE_RESPONSE_BYTE_LIMIT,
+) -> dict[str, Any]:
   """Bounds large raw responses and their preparation metadata together."""
-  if _serialized_json_bytes(response) <= INLINE_RESPONSE_BYTE_LIMIT:
+  if _serialized_json_bytes(response) <= max_bytes:
     return response
-  result = finalize_bounded_response(response, ("data",))
+  result = finalize_bounded_response(response, ("data",), max_bytes=max_bytes)
   result["returned_row_count"] = sum(
       not is_inline_omission(row) for row in result["data"]
   )
@@ -3613,6 +3625,62 @@ def _finalize_gaql_response(response: dict[str, Any]) -> dict[str, Any]:
         is_inline_omission(row) for row in result["data"]
     )
     result["represented_row_count"] = len(result["data"])
+  return result
+
+
+def _finalize_gaql_snapshot_response(
+    response: dict[str, Any],
+    snapshot_token: str,
+    row_offset: int,
+    max_rows: int,
+) -> dict[str, Any]:
+  """Adds navigation using delivered rows after all response bounding."""
+  # Leave room for the fixed-size navigation envelope added after finalizing.
+  result = _finalize_gaql_response(
+      response, max_bytes=INLINE_RESPONSE_BYTE_LIMIT - 1024
+  )
+  represented_count = len(result["data"])
+  omitted_count = sum(is_inline_omission(row) for row in result["data"])
+  next_offset = row_offset + represented_count
+  has_more = next_offset < response["total_row_count"]
+  result.update(
+      {
+          "row_offset": row_offset,
+          "returned_row_count": represented_count - omitted_count,
+          "represented_row_count": represented_count,
+          "complete_inline": not has_more and omitted_count == 0,
+          "truncated": (
+              result.get("truncated", False) or has_more or omitted_count > 0
+          ),
+          "inline_bytes": _serialized_json_bytes(result["data"]),
+          "next_row_offset": next_offset if has_more else None,
+          "has_more": has_more,
+          "next_inline_call": (
+              {
+                  "tool": "get_gaql_snapshot_page",
+                  "arguments": {
+                      "snapshot_token": snapshot_token,
+                      "row_offset": next_offset,
+                      "max_rows": max_rows,
+                  },
+              }
+              if has_more
+              else None
+          ),
+          "inline_delivery_scope": (
+              "complete_inline describes rows from row_offset onward. "
+              "Combine earlier pages and check every page for inline "
+              "omissions before treating the snapshot as complete."
+          ),
+      }
+  )
+  if omitted_count:
+    result["inline_omitted_row_count"] = omitted_count
+    result["inline_omission_note"] = (
+        "An oversized source row is represented by a placeholder and is not "
+        "included in returned_row_count. next_inline_call advances past "
+        "that explicit placeholder. Use bulk_export_call for its full value."
+    )
   return result
 
 
@@ -3672,6 +3740,7 @@ def _bounded_gaql_response(
   metadata_needs_bounding = (
       _serialized_json_bytes(response) > INLINE_RESPONSE_BYTE_LIMIT
   )
+  token = None
   if incomplete_rows or metadata_needs_bounding:
     token = _capture_gaql_response_snapshot(
         rows, query, customer_id, login_customer_id, query_metadata
@@ -3712,10 +3781,17 @@ def _bounded_gaql_response(
     ):
       response["ordering_warning"] = (
           "Inline rows are an incomplete subset in Google Ads API order. "
-          "Use bulk_export_call for all returned rows before account-wide "
-          "analysis, or add ORDER BY for a ranked subset."
+          "Read every next_inline_call page or use bulk_export_call before "
+          "account-wide analysis. Check every page for inline omissions. "
+          "Add ORDER BY when intentionally requesting a ranked subset."
       )
-  result = _finalize_gaql_response(response)
+  result = (
+      _finalize_gaql_snapshot_response(
+          response, token, 0, applied_inline_page_size(max_rows)
+      )
+      if token is not None
+      else _finalize_gaql_response(response)
+  )
   if result.get("returned_row_count", len(rows)) == len(rows):
     result.pop("ordering_warning", None)
   return result
@@ -3746,7 +3822,8 @@ def execute_gaql(
   max_results is accepted as an alias for max_rows. Required segment fields
   are added to SELECT and recorded in query_adjustments. Filters and metrics
   are never silently removed or replaced. Inline rows are bounded to 32 KiB;
-  incomplete responses provide bulk_export_call for every retrieved row.
+  incomplete responses provide next_inline_call to read remaining rows from
+  the same immutable snapshot, plus bulk_export_call for every retrieved row.
   max_rows does not limit that exact export. Query LIMIT and API restrictions
   still apply. Snapshots expire after 15 minutes and may be evicted earlier
   by the credential-scoped bounded cache. Oversized metadata remains available
@@ -3817,6 +3894,88 @@ def execute_gaql(
       login_customer_id,
       query_metadata,
       max_rows,
+  )
+
+
+@local_read_tool(
+    mcp,
+    tags={"gaql", "reporting"},
+    output_schema=_EXECUTE_GAQL_OUTPUT_SCHEMA,
+)
+def get_gaql_snapshot_page(
+    snapshot_token: str,
+    row_offset: StrictInt = 0,
+    max_rows: StrictInt | None = None,
+) -> dict[str, Any]:
+  """Reads the next inline slice of an existing exact GAQL snapshot.
+
+  Use next_inline_call from execute_gaql or a preceding snapshot page. This
+  local read never reruns GAQL, re-resolves dates, changes accounts, or writes
+  an export file. The opaque token binds the original customer, manager,
+  query, and credentials. Pages contain at most 100 represented rows and
+  32 KiB of row data; the complete response is bounded to 48 KiB. Offsets
+  count source rows, including explicit oversized-row placeholders, so
+  following next_inline_call never silently skips an undelivered row.
+  complete_inline refers to rows from the requested offset onward; combine
+  earlier pages and check every page for inline omissions. The exact CSV
+  export remains available for all original rows, including oversized rows.
+  Tokens expire 15 minutes after capture and may be evicted earlier.
+
+  Args:
+      snapshot_token: Exact credential-scoped token from next_inline_call or
+          bulk_export_call. It identifies the original immutable result.
+      row_offset: Zero-based source-row offset from next_inline_call. Zero
+          restarts inline delivery from the same snapshot; the total count
+          returns an empty terminal page. Larger offsets are rejected.
+      max_rows: Optional positive row cap, clamped to 100; defaults to 100.
+
+  Returns:
+      Snapshot rows, source totals, captured query coverage, delivery counts,
+      explicit omissions, and the next inline call or exact full CSV call.
+  """
+  if isinstance(row_offset, bool) or not isinstance(row_offset, int):
+    raise ToolError("row_offset must be an integer.")
+  if row_offset < 0:
+    raise ToolError("row_offset must be greater than or equal to 0.")
+  _validate_optional_positive_int(max_rows, "max_rows")
+  page_size = applied_inline_page_size(max_rows)
+  rows = _get_export_snapshot_rows(snapshot_token)
+  if row_offset > len(rows):
+    raise ToolError(
+        "row_offset exceeds the snapshot row count. Use the exact "
+        "next_inline_call from the preceding response."
+    )
+  # Canonicalize optional list-delivery metadata before advertising the token.
+  snapshot_token = _encode_snapshot_token(
+      _decode_snapshot_token(snapshot_token)
+  )
+  candidates = rows[row_offset : row_offset + page_size]
+  inline_rows = (
+      _inline_page_plan(candidates, page_size, first_page_only=True)[0]["rows"]
+      if candidates
+      else []
+  )
+  for row in inline_rows:
+    if is_inline_omission(row):
+      row[_INLINE_OMISSION_KEY]["row_index"] += row_offset
+  response = {
+      "data": inline_rows,
+      "total_row_count": len(rows),
+      "inline_byte_limit": _MAX_INLINE_PAGE_BYTES,
+      "bulk_export_call": {
+          "tool": "export_gaql_csv",
+          "arguments": {"snapshot_token": snapshot_token},
+      },
+      "export_row_count": len(rows),
+      "export_scope": (
+          "All rows captured by the original GAQL query. Its LIMIT and "
+          "Google Ads API restrictions still apply."
+      ),
+      "snapshot_lifetime": _snapshot_lifetime_metadata(),
+      **rows.query_metadata,
+  }
+  return _finalize_gaql_snapshot_response(
+      response, snapshot_token, row_offset, page_size
   )
 
 

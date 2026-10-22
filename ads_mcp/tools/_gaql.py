@@ -1137,7 +1137,7 @@ def _referenced_filter_and_order_fields(query: str) -> list[str]:
   return fields
 
 
-def _validate_or_compatibility(query: str) -> None:
+def validate_gaql_or_compatibility(query: str) -> None:
   """Rejects OR in WHERE clauses before Google returns a parse error."""
   where_span = _where_body_span(query)
   if where_span is None:
@@ -1238,7 +1238,7 @@ def _preflight_gaql(query: str) -> str:
         "GAQL does not support aggregate functions or GROUP BY. Select raw "
         "rows and aggregate the result client-side."
     )
-  _validate_or_compatibility(query_without_literals)
+  validate_gaql_or_compatibility(query_without_literals)
 
   query = rewrite_gaql_date_ranges(query)
   query, errors = _normalize_gaql_enum_literals(query)

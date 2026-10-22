@@ -60,6 +60,7 @@ from ads_mcp.tools import recommendations
 from ads_mcp.tools import search_terms
 from ads_mcp.tools import simulations
 from ads_mcp.tools import smart_campaigns
+from ads_mcp.tools import videos
 
 
 def _expected_history_retention(today):
@@ -96,6 +97,7 @@ def test_context_schema_marker_is_packaged():
 
 # All tool modules and their expected public tool functions.
 TOOL_MODULES = {
+    videos: ["upload_youtube_video", "get_youtube_video_upload"],
     account_services: [
         "fetch_incentives",
         "apply_incentive",
@@ -126,6 +128,7 @@ TOOL_MODULES = {
     ],
     api: [
         "execute_gaql",
+        "get_gaql_snapshot_page",
         "export_gaql_csv",
         "export_accessible_accounts_csv",
         "export_materialized_response_csv",
@@ -250,6 +253,7 @@ TOOL_MODULES = {
         "get_competitive_pressure_report",
         "get_campaign_conversion_goals",
         "get_campaign_settings",
+        "get_asset_group_performance",
         "compare_performance_periods",
         "compare_performance_around_changes",
         "list_keyword_quality_scores",
@@ -289,9 +293,9 @@ TOOL_MODULES = {
 
 class TestToolRegistration:
 
-  def test_total_tool_count_is_143(self):
+  def test_total_tool_count_is_147(self):
     total = sum(len(fns) for fns in TOOL_MODULES.values())
-    assert total == 143, f"Expected 143 tools, found {total}"
+    assert total == 147, f"Expected 147 tools, found {total}"
 
   @pytest.mark.parametrize(
       "module,func_name",
@@ -422,6 +426,7 @@ class TestToolSignatures:
       "export_google_ads_fields_csv",
       "export_accessible_accounts_csv",
       "export_materialized_response_csv",
+      "get_gaql_snapshot_page",
       "list_accessible_accounts",
       "get_tool_visibility_profile",
       "unlock_mutation_tools",
@@ -456,6 +461,7 @@ class TestToolSignatures:
       "export_google_ads_fields_csv",
       "export_accessible_accounts_csv",
       "export_materialized_response_csv",
+      "get_gaql_snapshot_page",
       "list_accessible_accounts",
       "get_tool_visibility_profile",
       "unlock_mutation_tools",
@@ -482,6 +488,7 @@ class TestToolSignatures:
               "export_google_ads_fields_csv",
               "export_accessible_accounts_csv",
               "export_materialized_response_csv",
+              "get_gaql_snapshot_page",
               "list_accessible_accounts",
               "get_tool_visibility_profile",
               "unlock_mutation_tools",
@@ -778,7 +785,7 @@ class TestFastMcpConfiguration:
         for tool in asyncio.run(mcp_server._local_provider.list_tools())
     }
 
-    assert len(registered_tools) == 143
+    assert len(registered_tools) == 147
     for tool_name in sorted(registered_tools):
       tool = registered_tools[tool_name]
       assert tool.tags, f"{tool_name} should have at least one tag"
@@ -2105,7 +2112,8 @@ class TestFastMcpConfiguration:
             item["name"] for item in locked_result.structured_content["result"]
         }
 
-        assert not locked_names
+        assert expected_tool in locked_names
+        assert locked_result.structured_content["result"][0]["locked"] is True
 
         await client.call_tool("unlock_mutation_tools", {})
         unlocked_result = await client.call_tool(
@@ -2508,7 +2516,10 @@ class TestFastMcpConfiguration:
               item["name"]
               for item in locked_result.structured_content["result"]
           }
-          assert not locked_names
+          assert expected_tool in locked_names
+          assert (
+              locked_result.structured_content["result"][0]["locked"] is True
+          )
 
         await client.call_tool("unlock_mutation_tools", {})
         for query in (canonical_query, paired_query):
